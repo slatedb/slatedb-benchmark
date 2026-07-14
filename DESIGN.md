@@ -73,9 +73,14 @@ state. These fields confirm that every variant began with the same logical data
 and SST layout.
 
 The RocksDB-derived profile is different by design: it runs its ordered
-workloads against the database produced by `bulk-load`. Tests that require an
-empty or custom dataset create their own golden database. A cold read clears
-SlateDB's local caches; the runner cannot clear caches managed inside Tigris.
+workloads against the database produced by `bulk-load`. The database path and
+mutations carry forward, but the runner closes the database between variants.
+Each published variant runs in a fresh worker process with a newly constructed
+cache, matching `db_bench` process isolation; in-memory smoke runs reopen the
+database with a new cache in the parent process because their object store
+cannot cross a process boundary. Tests that require an empty or custom dataset
+create their own golden database. A cold read clears SlateDB's local caches;
+the runner cannot clear caches managed inside Tigris.
 
 ### Object-store baseline
 

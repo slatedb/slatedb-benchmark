@@ -116,6 +116,7 @@ async fn execute_inner(args: &RunArgs) -> Result<()> {
                     &run_root,
                     Arc::clone(&store),
                     object_store.instrumented.metrics(),
+                    !object_store.provider.eq_ignore_ascii_case("memory"),
                     &environment,
                     &baseline,
                     &baseline_histograms,
@@ -440,6 +441,7 @@ async fn run_rocks_profile(
     run_root: &Path,
     store: Arc<dyn ObjectStore>,
     store_metrics: Arc<crate::instrumented_store::StoreMetrics>,
+    fresh_process_variants: bool,
     environment: &crate::model::Environment,
     baseline: &crate::model::ObjectStoreBaseline,
     baseline_histograms: &BTreeMap<String, crate::model::EncodedHistogram>,
@@ -525,7 +527,7 @@ async fn run_rocks_profile(
         .await
         .context("closing bulk-load database")?;
 
-    let db = open_database(
+    let compaction_db = open_database(
         path.clone(),
         Arc::clone(&store),
         profile,
@@ -534,7 +536,7 @@ async fn run_rocks_profile(
         false,
     )
     .await?;
-    wait_for_compaction(&db, &recorder, suite).await?;
+    wait_for_compaction(&compaction_db, &recorder, suite).await?;
     if let (Some(outcome), Some((started, start_store, start_slate, stop_tx, sampler))) =
         (bulk_outcome.as_mut(), compaction_measurement)
     {
@@ -552,6 +554,10 @@ async fn run_rocks_profile(
             elapsed,
         )?;
     }
+    compaction_db
+        .close()
+        .await
+        .context("closing post-bulk compaction database")?;
     let compacted_size = prefix_size(Arc::clone(&store), &path).await?;
     let mut paths = Vec::new();
     if let (Some(variant), Some(mut outcome)) = (selected_bulk, bulk_outcome.take()) {
@@ -574,18 +580,13 @@ async fn run_rocks_profile(
         .filter(|variant| variant.workload.kind != WorkloadKind::BulkLoad)
     {
         let initial_size = prefix_size(Arc::clone(&store), &path).await?;
-        let initial = InitialState {
-            checkpoint_id: None,
-            manifest_id: Some(db.status().current_manifest.id()),
-            lsm_digest_sha256: lsm_digest(&db)?,
-        };
-        let mut outcome = execute_variant(
-            Arc::clone(&db),
+        let (mut outcome, initial) = execute_rocks_variant(
             variant,
+            &path,
+            Arc::clone(&store),
             Arc::clone(&store_metrics),
-            Arc::clone(&recorder),
-            path.clone(),
-            0,
+            fresh_process_variants,
+            args,
         )
         .await?;
         outcome.storage.database_size_bytes = prefix_size(Arc::clone(&store), &path).await?;
@@ -601,11 +602,68 @@ async fn run_rocks_profile(
             args,
         )?);
     }
-    db.close()
-        .await
-        .context("closing RocksDB profile database")?;
     delete_prefix(store, &path).await?;
     Ok(paths)
+}
+
+async fn execute_rocks_variant(
+    variant: &VariantConfig,
+    database_path: &Path,
+    store: Arc<dyn ObjectStore>,
+    store_metrics: Arc<crate::instrumented_store::StoreMetrics>,
+    fresh_process: bool,
+    args: &RunArgs,
+) -> Result<(WorkloadOutcome, InitialState)> {
+    let admin = AdminBuilder::new(database_path.clone(), Arc::clone(&store)).build();
+    let manifest = admin
+        .read_manifest(None)
+        .await
+        .context("reading RocksDB-profile manifest")?
+        .context("RocksDB-profile manifest does not exist")?;
+    let initial = InitialState {
+        checkpoint_id: None,
+        manifest_id: Some(manifest.id()),
+        lsm_digest_sha256: manifest_lsm_digest(&manifest)?,
+    };
+
+    let outcome = if fresh_process {
+        execute_variant_in_fresh_process(
+            variant,
+            database_path,
+            0,
+            &initial.lsm_digest_sha256,
+            args,
+        )
+        .await?
+    } else {
+        let recorder = Arc::new(BenchmarkMetricsRecorder::new());
+        let db = open_database(
+            database_path.clone(),
+            store,
+            &variant.profile,
+            Arc::clone(&recorder),
+            args.smoke,
+            false,
+        )
+        .await?;
+        if lsm_digest(&db)? != initial.lsm_digest_sha256 {
+            bail!("reopened RocksDB-profile database has an unexpected LSM state");
+        }
+        let outcome = execute_variant(
+            Arc::clone(&db),
+            variant,
+            store_metrics,
+            recorder,
+            database_path.clone(),
+            0,
+        )
+        .await;
+        db.close()
+            .await
+            .context("closing RocksDB-profile variant database")?;
+        outcome?
+    };
+    Ok((outcome, initial))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -904,12 +962,20 @@ fn average_database_bytes(
 
 #[cfg(test)]
 mod tests {
-    use super::{average_database_bytes, lsm_digest};
+    use super::{average_database_bytes, execute_rocks_variant, lsm_digest, open_database};
+    use crate::cli::RunArgs;
+    use crate::config::{ProfileConfig, VariantConfig, WorkloadConfig, WorkloadKind};
+    use crate::instrumented_store::InstrumentedStore;
     use crate::model::{TimeseriesFile, TimeseriesSample};
+    use crate::system::BenchmarkMetricsRecorder;
+    use crate::workloads::populate_dataset;
     use anyhow::Result;
     use object_store::memory::InMemory;
+    use object_store::path::Path;
+    use object_store::ObjectStore;
     use slatedb::config::{PutOptions, Settings, WriteOptions};
     use slatedb::Db;
+    use std::path::PathBuf;
     use std::sync::Arc;
 
     #[test]
@@ -987,6 +1053,105 @@ mod tests {
         assert_ne!(empty_digest, sixty_four_record_digest);
         assert_ne!(sixty_four_record_digest, hundred_sixty_record_digest);
         db.close().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn in_memory_rocks_variants_reopen_and_carry_forward_state() -> Result<()> {
+        let overwrite = WorkloadConfig {
+            name: "overwrite".to_string(),
+            kind: WorkloadKind::Overwrite,
+            variants: vec!["clients-1".to_string()],
+            await_durable: false,
+            record_count: None,
+            key_bytes: None,
+            value_bytes: None,
+            warmup_ms: None,
+            measurement_ms: None,
+        };
+        let random_read = WorkloadConfig {
+            name: "random-read".to_string(),
+            kind: WorkloadKind::RandomRead,
+            variants: vec!["clients-1".to_string()],
+            await_durable: false,
+            record_count: None,
+            key_bytes: None,
+            value_bytes: None,
+            warmup_ms: None,
+            measurement_ms: None,
+        };
+        let profile = ProfileConfig {
+            name: "rocksdb".to_string(),
+            record_count: 8,
+            key_bytes: 16,
+            value_bytes: 64,
+            block_cache_bytes: Some(1024 * 1024),
+            metadata_cache_bytes: Some(1024 * 1024),
+            flush_interval_ms: 10,
+            warmup_ms: 0,
+            measurement_ms: 20,
+            compression: None,
+            sst_block_bytes: None,
+            workloads: vec![overwrite.clone(), random_read.clone()],
+        };
+        let variant = |workload| VariantConfig {
+            profile: profile.clone(),
+            workload,
+            variant: "clients-1".to_string(),
+            clients: Some(1),
+            target_rate: None,
+        };
+        let args = RunArgs {
+            profile: None,
+            workload: None,
+            variant: None,
+            output: PathBuf::new(),
+            smoke: true,
+            config_dir: PathBuf::from("config"),
+            schema_dir: PathBuf::from("schema"),
+        };
+        let path = Path::from("rocks-reopen-test");
+        let instrumented = Arc::new(InstrumentedStore::new(Arc::new(InMemory::new())));
+        let store: Arc<dyn ObjectStore> = instrumented.clone();
+        let recorder = Arc::new(BenchmarkMetricsRecorder::new());
+        let db = open_database(
+            path.clone(),
+            Arc::clone(&store),
+            &profile,
+            recorder,
+            true,
+            false,
+        )
+        .await?;
+        populate_dataset(Arc::clone(&db), 8, 16, 64, false).await?;
+        db.close().await?;
+
+        let (first, before_overwrite) = execute_rocks_variant(
+            &variant(overwrite),
+            &path,
+            Arc::clone(&store),
+            instrumented.metrics(),
+            false,
+            &args,
+        )
+        .await?;
+        let (second, before_read) = execute_rocks_variant(
+            &variant(random_read),
+            &path,
+            store,
+            instrumented.metrics(),
+            false,
+            &args,
+        )
+        .await?;
+
+        assert!(first.application.successful_operations > 0);
+        assert!(second.application.successful_operations > 0);
+        assert_eq!(second.application.errors, 0);
+        assert_ne!(
+            before_overwrite.lsm_digest_sha256,
+            before_read.lsm_digest_sha256
+        );
         Ok(())
     }
 }
