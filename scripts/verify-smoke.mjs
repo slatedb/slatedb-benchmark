@@ -17,9 +17,13 @@ if (run.results.length !== catalog.length) {
   throw new Error(`expected ${catalog.length} results, found ${run.results.length}`);
 }
 const expected = new Set(catalog.map((entry) => `${entry.profile}/${entry.workload}/${entry.variant}`));
+const nonEmptyLsmDigests = new Set();
 for (const relative of run.results) {
   const result = JSON.parse(await readFile(path.join(root, relative), 'utf8'));
   expected.delete(`${result.identity.profile}/${result.identity.workload}/${result.identity.variant}`);
+  if (result.configuration.record_count > 0 && result.identity.workload !== 'bulk-load') {
+    nonEmptyLsmDigests.add(result.initial_state.lsm_digest_sha256);
+  }
   const directory = path.dirname(path.join(root, relative));
   const files = await readdir(directory);
   for (const required of ['result.json', 'histograms.json', 'timeseries.json']) {
@@ -57,4 +61,7 @@ for (const relative of run.results) {
   }
 }
 if (expected.size) throw new Error(`missing smoke variants: ${[...expected].join(', ')}`);
+if (nonEmptyLsmDigests.size < 2) {
+  throw new Error('distinct non-empty smoke datasets have the same LSM digest');
+}
 console.log(`verified ${catalog.length} Docker smoke variants`);

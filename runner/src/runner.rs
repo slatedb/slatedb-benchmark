@@ -24,7 +24,7 @@ use slatedb::db_cache::{
     foyer::{FoyerCache, FoyerCacheOptions},
     DbCache, SplitCache,
 };
-use slatedb::{Db, SstBlockSize};
+use slatedb::{Db, SstBlockSize, VersionedManifest};
 use slatedb_common::metrics::{DefaultMetricsRecorder, MetricValue};
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
@@ -388,7 +388,6 @@ impl GoldenManager {
         )
         .await?;
         wait_for_compaction(&db, &recorder, &self.suite).await?;
-        let digest = lsm_digest(&db)?;
         db.close().await.context("closing golden database")?;
 
         let admin = AdminBuilder::new(path.clone(), Arc::clone(&self.store)).build();
@@ -400,6 +399,12 @@ impl GoldenManager {
             })
             .await
             .context("creating golden checkpoint")?;
+        let checkpoint_manifest = admin
+            .read_manifest(Some(checkpoint.manifest_id))
+            .await
+            .context("reading golden checkpoint manifest")?
+            .context("golden checkpoint manifest does not exist")?;
+        let digest = manifest_lsm_digest(&checkpoint_manifest)?;
         let size_bytes = prefix_size(Arc::clone(&self.store), &path).await?;
         let golden = GoldenDatabase {
             path: path.clone(),
@@ -833,13 +838,18 @@ async fn wait_for_compaction(
 }
 
 fn lsm_digest(db: &Db) -> Result<String> {
-    let core = serde_json::to_value(&db.status().current_manifest)?;
-    let mut layout = BTreeMap::new();
-    layout.insert("tree", core.get("tree").cloned().unwrap_or_default());
-    layout.insert(
-        "segments",
-        core.get("segments").cloned().unwrap_or_default(),
-    );
+    let status = db.status();
+    manifest_lsm_digest(&status.current_manifest)
+}
+
+fn manifest_lsm_digest(manifest: &VersionedManifest) -> Result<String> {
+    let layout = serde_json::json!({
+        "last_compacted_l0_sst_view_id": manifest.last_compacted_l0_sst_view_id(),
+        "last_compacted_l0_sst_id": manifest.last_compacted_l0_sst_id(),
+        "l0": manifest.l0(),
+        "compacted": manifest.compacted(),
+        "segments": manifest.segments(),
+    });
     Ok(format!(
         "{:x}",
         Sha256::digest(serde_json::to_vec(&layout)?)
@@ -893,8 +903,13 @@ fn average_database_bytes(
 
 #[cfg(test)]
 mod tests {
-    use super::average_database_bytes;
+    use super::{average_database_bytes, lsm_digest};
     use crate::model::{TimeseriesFile, TimeseriesSample};
+    use anyhow::Result;
+    use object_store::memory::InMemory;
+    use slatedb::config::{PutOptions, Settings, WriteOptions};
+    use slatedb::Db;
+    use std::sync::Arc;
 
     #[test]
     fn database_size_uses_trapezoidal_time_integration() {
@@ -924,5 +939,53 @@ mod tests {
             average_database_bytes(&timeseries, 2_000_000_000, 0, 500),
             300
         );
+    }
+
+    #[tokio::test]
+    async fn lsm_digest_changes_with_persisted_tree() -> Result<()> {
+        let settings = Settings {
+            compactor_options: None,
+            flush_interval: None,
+            wal_enabled: false,
+            ..Default::default()
+        };
+        let db = Db::builder("digest-test", Arc::new(InMemory::new()))
+            .with_settings(settings)
+            .build()
+            .await?;
+        let write_options = WriteOptions {
+            await_durable: false,
+            ..Default::default()
+        };
+        let empty_digest = lsm_digest(&db)?;
+
+        for index in 0..64 {
+            db.put_with_options(
+                format!("key-{index:04}"),
+                b"value",
+                &PutOptions::default(),
+                &write_options,
+            )
+            .await?;
+        }
+        db.flush().await?;
+        let sixty_four_record_digest = lsm_digest(&db)?;
+
+        for index in 64..160 {
+            db.put_with_options(
+                format!("key-{index:04}"),
+                b"value",
+                &PutOptions::default(),
+                &write_options,
+            )
+            .await?;
+        }
+        db.flush().await?;
+        let hundred_sixty_record_digest = lsm_digest(&db)?;
+
+        assert_ne!(empty_digest, sixty_four_record_digest);
+        assert_ne!(sixty_four_record_digest, hundred_sixty_record_digest);
+        db.close().await?;
+        Ok(())
     }
 }
