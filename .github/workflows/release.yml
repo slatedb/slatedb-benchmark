@@ -54,29 +54,46 @@ jobs:
         run: cargo build --release --locked --manifest-path runner/Cargo.toml
       - name: Run complete suite
         run: ./target/release/slatedb-benchmark run --output .runs/release
-      - name: Publish validated result sources
+      - name: Check out current main for publication
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: publish
+          fetch-depth: 0
+      - name: Copy validated result sources into current main
         run: |
-          mkdir -p "results/${{ inputs.slate_version }}"
-          cp -R ".runs/release/results/${{ inputs.slate_version }}/." "results/${{ inputs.slate_version }}/"
+          mkdir -p "publish/results/${{ inputs.slate_version }}"
+          cp -R ".runs/release/results/${{ inputs.slate_version }}/." "publish/results/${{ inputs.slate_version }}/"
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: site/package-lock.json
-      - run: npm ci
-        working-directory: site
-      - run: npm run build
-        working-directory: site
+          cache-dependency-path: publish/site/package-lock.json
       - name: Commit published result sources
+        working-directory: publish
         run: |
           git add "results/${{ inputs.slate_version }}"
           git config user.name "slatedb-benchmark[bot]"
           git config user.email "slatedb-benchmark[bot]@users.noreply.github.com"
           git commit -m "Publish SlateDB ${{ inputs.slate_version }} benchmarks"
-          git push
+      - name: Rebase, validate site, and push current main
+        working-directory: publish
+        run: |
+          for attempt in 1 2 3 4 5; do
+            git fetch origin main
+            git rebase origin/main
+            npm --prefix site ci
+            npm --prefix site run build
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+            echo "::warning::main advanced during publish attempt ${attempt}; retrying"
+          done
+          echo "::error::main advanced during all publish attempts"
+          exit 1
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: site/dist
+          path: publish/site/dist
       - uses: actions/deploy-pages@v4
       - name: Preserve run artifacts
         if: always()

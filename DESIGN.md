@@ -316,6 +316,11 @@ the workload used the expected initial manifest. Secrets, credentials, and
 signed URLs are rejected from result files.
 
 The workflow publishes a version after all required variants pass validation.
-The site contains complete runs; failed and interrupted runs keep their logs as
-CI artifacts. A rerun replaces the unpublished files for that version. The
-published schema omits trial and repetition fields.
+Because a complete run is much longer than a normal commit cycle, publication
+copies the validated output into a fresh checkout of `main`, commits only the
+result sources, and rebases before pushing. A non-fast-forward push refetches,
+rebases, rebuilds the site, and retries instead of pushing from the benchmark's
+original stale checkout. The site contains complete runs; failed and
+interrupted runs keep their logs as CI artifacts. A rerun replaces the
+unpublished files for that version. The published schema omits trial and
+repetition fields.
