@@ -10,13 +10,13 @@ use crate::model::{
     ApplicationPerformance, DurabilityPerformance, HistogramsFile, IngestWindow, MetricSeriesValue,
     MetricValueType, ResourceUse, StoragePerformance, TimeseriesFile,
 };
-use crate::system::{self, ApplicationCounters};
+use crate::system::{self, ApplicationCounters, BenchmarkMetricsRecorder};
 use anyhow::{Context, Result};
 use durability::DurabilityTracker;
 use object_store::path::Path;
 use serde::{Deserialize, Serialize};
 use slatedb::Db;
-use slatedb_common::metrics::{DefaultMetricsRecorder, MetricValue as SlateMetricValue, Metrics};
+use slatedb_common::metrics::{MetricValue as SlateMetricValue, Metrics};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
@@ -47,14 +47,13 @@ struct StorageCounters {
     l0_flush_bytes: u64,
     compacted_bytes: u64,
     logical_write_bytes: u64,
-    backpressure_count: u64,
 }
 
 pub async fn execute_variant(
     db: Arc<Db>,
     variant: &VariantConfig,
     store_metrics: Arc<StoreMetrics>,
-    slate_metrics: Arc<DefaultMetricsRecorder>,
+    slate_metrics: Arc<BenchmarkMetricsRecorder>,
     database_path: Path,
     shared_database_bytes: u64,
 ) -> Result<WorkloadOutcome> {
@@ -175,6 +174,7 @@ pub async fn execute_variant(
         total_elapsed,
         &timeseries,
         variant.workload.kind,
+        stats.backpressure_ns,
     );
     storage.database_size_bytes = 0;
     let resources = system::summarize_resources(&timeseries.samples);
@@ -204,6 +204,7 @@ fn storage_summary(
     elapsed: Duration,
     timeseries: &TimeseriesFile,
     kind: WorkloadKind,
+    backpressure_ns: u64,
 ) -> StoragePerformance {
     let write_amplification = (counters.logical_write_bytes > 0).then_some(
         counters
@@ -226,7 +227,7 @@ fn storage_summary(
         compaction_throughput_bytes_per_second: (counters.compacted_bytes > 0)
             .then_some(counters.compacted_bytes as f64 / elapsed.as_secs_f64().max(f64::EPSILON)),
         write_amplification,
-        backpressure_ns: (counters.backpressure_count == 0).then_some(0),
+        backpressure_ns,
         compaction_backlog_bytes: backlog,
         five_minute_windows: if kind == WorkloadKind::SustainedIngest {
             ingest_windows(timeseries)
@@ -246,7 +247,6 @@ fn storage_counters(start: &Metrics, end: &Metrics) -> StorageCounters {
         l0_flush_bytes: counter_delta(start, end, slatedb::db_stats::L0_FLUSH_BYTES),
         compacted_bytes: counter_delta(start, end, slatedb::compactor::stats::BYTES_COMPACTED),
         logical_write_bytes: counter_delta(start, end, slatedb::db_stats::MEMTABLE_WRITE_BYTES),
-        backpressure_count: counter_delta(start, end, slatedb::db_stats::BACKPRESSURE_COUNT),
     }
 }
 
@@ -275,11 +275,6 @@ pub fn extend_with_compaction_phase(
         .storage_counters
         .logical_write_bytes
         .saturating_add(phase.logical_write_bytes);
-    outcome.storage_counters.backpressure_count = outcome
-        .storage_counters
-        .backpressure_count
-        .saturating_add(phase.backpressure_count);
-
     for (operation, count) in store.requests {
         let current = outcome
             .storage
@@ -326,8 +321,6 @@ pub fn extend_with_compaction_phase(
         slatedb::compactor::stats::TOTAL_BYTES_BEING_COMPACTED,
     )
     .map(|value| value.max(0) as u64);
-    outcome.storage.backpressure_ns =
-        (outcome.storage_counters.backpressure_count == 0).then_some(0);
     Ok(())
 }
 

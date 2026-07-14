@@ -255,9 +255,6 @@ fn validate_invariants(
             bail!("open-loop scheduler p99 delay exceeds its one-second queue bound");
         }
     }
-    if result.storage.backpressure_ns.is_none() {
-        bail!("backpressure occurred but SlateDB did not expose a measurable duration");
-    }
     Ok(())
 }
 

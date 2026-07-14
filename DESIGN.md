@@ -213,11 +213,19 @@ aggregate histograms instead of one record per operation.
 
 ### SlateDB metrics
 
-The runner creates a `DefaultMetricsRecorder` at `MetricLevel::Info` and passes
-it to the DB, compactor, and compaction workers. It snapshots the recorder at
-the start of measurement, every second, and after the durability drain. Counter
-deltas exclude warmup; gauges and histograms become time series. The raw
-snapshots are stored with the result.
+The runner wraps a `DefaultMetricsRecorder`, configures SlateDB at
+`MetricLevel::Info`, and passes the wrapper to the DB, compactor, and compaction
+workers. It snapshots the recorder at the start of measurement, every second,
+and after the durability drain. Counter deltas exclude warmup; gauges and
+histograms become time series. The raw snapshots are stored with the result.
+
+SlateDB exposes a backpressure event counter rather than a duration. For each
+workload operation, the recorder starts a task-local timer when
+`backpressure_count` advances and stops it when `total_mem_size_bytes` is next
+updated, which is the recheck after SlateDB's wait. Repeated waits are summed
+across all workers into `backpressure_ns`; a run without backpressure reports
+zero. Task-local timing keeps concurrent writers from attributing one another's
+waits.
 
 SlateDB metrics supply DB activity, WAL and L0 flush bytes, L0 stalls,
 backpressure, compaction, and internal object-store request counts, errors, and

@@ -5,14 +5,167 @@ use crate::model::{
 };
 use anyhow::{bail, ensure, Result};
 use object_store::path::Path;
-use slatedb_common::metrics::{DefaultMetricsRecorder, MetricValue as SlateMetricValue};
+use slatedb_common::metrics::{
+    CounterFn, DefaultMetricsRecorder, GaugeFn, HistogramFn, MetricValue as SlateMetricValue,
+    Metrics, MetricsRecorder, UpDownCounterFn,
+};
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fs;
+use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use sysinfo::{Disks, Networks, Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 use tokio::sync::watch;
+
+tokio::task_local! {
+    static BACKPRESSURE_MEASUREMENT: RefCell<BackpressureMeasurement>;
+}
+
+#[derive(Default)]
+struct BackpressureMeasurement {
+    started: Option<Instant>,
+    elapsed: Duration,
+}
+
+impl BackpressureMeasurement {
+    fn start(&mut self) {
+        if self.started.is_none() {
+            self.started = Some(Instant::now());
+        }
+    }
+
+    fn finish_interval(&mut self) {
+        if let Some(started) = self.started.take() {
+            self.elapsed = self.elapsed.saturating_add(started.elapsed());
+        }
+    }
+
+    fn finish(mut self) -> Duration {
+        self.finish_interval();
+        self.elapsed
+    }
+}
+
+/// The default SlateDB recorder plus runner-side backpressure timing.
+pub struct BenchmarkMetricsRecorder {
+    inner: DefaultMetricsRecorder,
+}
+
+impl BenchmarkMetricsRecorder {
+    pub fn new() -> Self {
+        Self {
+            inner: DefaultMetricsRecorder::new(),
+        }
+    }
+
+    pub fn snapshot(&self) -> Metrics {
+        self.inner.snapshot()
+    }
+}
+
+impl Default for BenchmarkMetricsRecorder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+struct BackpressureCounter {
+    inner: Arc<dyn CounterFn>,
+}
+
+impl CounterFn for BackpressureCounter {
+    fn increment(&self, value: u64) {
+        self.inner.increment(value);
+        if value > 0 {
+            let _ = BACKPRESSURE_MEASUREMENT.try_with(|measurement| {
+                measurement.borrow_mut().start();
+            });
+        }
+    }
+}
+
+struct TotalMemSizeGauge {
+    inner: Arc<dyn GaugeFn>,
+}
+
+impl GaugeFn for TotalMemSizeGauge {
+    fn set(&self, value: i64) {
+        let _ = BACKPRESSURE_MEASUREMENT.try_with(|measurement| {
+            measurement.borrow_mut().finish_interval();
+        });
+        self.inner.set(value);
+    }
+}
+
+impl MetricsRecorder for BenchmarkMetricsRecorder {
+    fn register_counter(
+        &self,
+        name: &str,
+        description: &str,
+        labels: &[(&str, &str)],
+    ) -> Arc<dyn CounterFn> {
+        let inner = self.inner.register_counter(name, description, labels);
+        if name == slatedb::db_stats::BACKPRESSURE_COUNT {
+            Arc::new(BackpressureCounter { inner })
+        } else {
+            inner
+        }
+    }
+
+    fn register_gauge(
+        &self,
+        name: &str,
+        description: &str,
+        labels: &[(&str, &str)],
+    ) -> Arc<dyn GaugeFn> {
+        let inner = self.inner.register_gauge(name, description, labels);
+        if name == slatedb::db_stats::TOTAL_MEM_SIZE_BYTES {
+            Arc::new(TotalMemSizeGauge { inner })
+        } else {
+            inner
+        }
+    }
+
+    fn register_up_down_counter(
+        &self,
+        name: &str,
+        description: &str,
+        labels: &[(&str, &str)],
+    ) -> Arc<dyn UpDownCounterFn> {
+        self.inner
+            .register_up_down_counter(name, description, labels)
+    }
+
+    fn register_histogram(
+        &self,
+        name: &str,
+        description: &str,
+        labels: &[(&str, &str)],
+        boundaries: &[f64],
+    ) -> Arc<dyn HistogramFn> {
+        self.inner
+            .register_histogram(name, description, labels, boundaries)
+    }
+}
+
+pub async fn measure_backpressure<F>(future: F) -> (F::Output, Duration)
+where
+    F: Future,
+{
+    BACKPRESSURE_MEASUREMENT
+        .scope(
+            RefCell::new(BackpressureMeasurement::default()),
+            async move {
+                let output = future.await;
+                let elapsed = BACKPRESSURE_MEASUREMENT
+                    .with(|measurement| std::mem::take(&mut *measurement.borrow_mut()).finish());
+                (output, elapsed)
+            },
+        )
+        .await
+}
 
 #[derive(Debug, Default)]
 pub struct ApplicationCounters {
@@ -111,7 +264,7 @@ pub async fn sample_until_stopped(
     started: Instant,
     counters: Arc<ApplicationCounters>,
     store_metrics: Arc<StoreMetrics>,
-    slate_metrics: Arc<DefaultMetricsRecorder>,
+    slate_metrics: Arc<BenchmarkMetricsRecorder>,
     database_path: Path,
     shared_database_bytes: u64,
     mut stop: watch::Receiver<bool>,
@@ -280,7 +433,7 @@ impl HostSampler {
         started: Instant,
         counters: &ApplicationCounters,
         store_metrics: &StoreMetrics,
-        slate_metrics: &DefaultMetricsRecorder,
+        slate_metrics: &BenchmarkMetricsRecorder,
         database_path: &Path,
         shared_database_bytes: u64,
     ) -> TimeseriesSample {
@@ -460,11 +613,49 @@ fn finite_or_zero(value: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{append_timeseries, compact_timeseries};
+    use super::{
+        append_timeseries, compact_timeseries, measure_backpressure, BenchmarkMetricsRecorder,
+    };
     use crate::model::{
         MetricSnapshot, MetricValue, MetricValueType, TimeseriesFile, TimeseriesSample,
     };
+    use slatedb_common::metrics::{MetricValue as SlateMetricValue, MetricsRecorder};
     use std::collections::BTreeMap;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn measures_backpressure_between_counter_and_memory_recheck() {
+        let recorder = BenchmarkMetricsRecorder::new();
+        let counter = recorder.register_counter(
+            slatedb::db_stats::BACKPRESSURE_COUNT,
+            "backpressure events",
+            &[],
+        );
+        let gauge = recorder.register_gauge(
+            slatedb::db_stats::TOTAL_MEM_SIZE_BYTES,
+            "unflushed bytes",
+            &[],
+        );
+
+        let ((), elapsed) = measure_backpressure(async {
+            gauge.set(100);
+            counter.increment(1);
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            gauge.set(50);
+        })
+        .await;
+
+        assert!(elapsed >= Duration::from_millis(5));
+        let snapshot = recorder.snapshot();
+        assert!(snapshot
+            .by_name(slatedb::db_stats::BACKPRESSURE_COUNT)
+            .iter()
+            .any(|metric| matches!(&metric.value, SlateMetricValue::Counter(1))));
+        assert!(snapshot
+            .by_name(slatedb::db_stats::TOTAL_MEM_SIZE_BYTES)
+            .iter()
+            .any(|metric| matches!(&metric.value, SlateMetricValue::Gauge(50))));
+    }
 
     #[test]
     fn compacts_and_appends_metric_series_by_identity() {

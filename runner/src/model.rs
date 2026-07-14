@@ -145,7 +145,7 @@ pub struct StoragePerformance {
     pub bytes_written: u64,
     pub compaction_throughput_bytes_per_second: Option<f64>,
     pub write_amplification: Option<f64>,
-    pub backpressure_ns: Option<u64>,
+    pub backpressure_ns: u64,
     pub compaction_backlog_bytes: Option<u64>,
     pub five_minute_windows: Vec<IngestWindow>,
 }

@@ -2,7 +2,7 @@ use super::durability::DurabilitySender;
 use super::stats::WorkerStats;
 use super::util::{key_for_id, random_value, KeySelector};
 use crate::config::{VariantConfig, WorkloadKind};
-use crate::system::ApplicationCounters;
+use crate::system::{measure_backpressure, ApplicationCounters};
 use anyhow::{bail, Context, Result};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -100,10 +100,15 @@ async fn open_worker(
         let key = key_for_id(id, variant.key_bytes());
         if update {
             let value = random_value(variant.value_bytes(), &mut rng);
-            match db
-                .put_with_options(key, value.clone(), &PutOptions::default(), &write_options)
-                .await
-            {
+            let (result, backpressure) = measure_backpressure(db.put_with_options(
+                key,
+                value.clone(),
+                &PutOptions::default(),
+                &write_options,
+            ))
+            .await;
+            stats.record_backpressure(backpressure);
+            match result {
                 Ok(handle) => {
                     let returned_at = Instant::now();
                     stats.record_success("update", invoked.elapsed(), value.len() as u64);

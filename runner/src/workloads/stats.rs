@@ -16,6 +16,7 @@ pub struct WorkerStats {
     pub transaction_commits: u64,
     pub transaction_aborts: u64,
     pub transaction_conflicts: u64,
+    pub backpressure_ns: u64,
     pub first_write_return: Option<Instant>,
     pub last_write_sequence: Option<u64>,
     pub histograms: HistogramSet,
@@ -53,6 +54,12 @@ impl WorkerStats {
         );
     }
 
+    pub fn record_backpressure(&mut self, elapsed: Duration) {
+        self.backpressure_ns = self
+            .backpressure_ns
+            .saturating_add(elapsed.as_nanos().min(u64::MAX as u128) as u64);
+    }
+
     pub fn merge(&mut self, other: &Self) -> Result<()> {
         self.total = self.total.saturating_add(other.total);
         self.successful = self.successful.saturating_add(other.successful);
@@ -71,6 +78,7 @@ impl WorkerStats {
         self.transaction_conflicts = self
             .transaction_conflicts
             .saturating_add(other.transaction_conflicts);
+        self.backpressure_ns = self.backpressure_ns.saturating_add(other.backpressure_ns);
         self.first_write_return = match (self.first_write_return, other.first_write_return) {
             (Some(left), Some(right)) => Some(left.min(right)),
             (left, right) => left.or(right),
@@ -125,5 +133,24 @@ impl WorkerStats {
             transaction_abort_rate: transaction_rate(self.transaction_aborts),
             transaction_conflict_rate: transaction_rate(self.transaction_conflicts),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::WorkerStats;
+    use std::time::Duration;
+
+    #[test]
+    fn accumulates_backpressure_duration() {
+        let mut left = WorkerStats::default();
+        left.record_backpressure(Duration::from_nanos(7));
+        left.record_backpressure(Duration::from_nanos(11));
+
+        let mut right = WorkerStats::default();
+        right.record_backpressure(Duration::from_nanos(13));
+        left.merge(&right).expect("merge worker stats");
+
+        assert_eq!(left.backpressure_ns, 31);
     }
 }

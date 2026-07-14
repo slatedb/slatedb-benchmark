@@ -5,7 +5,7 @@ use crate::model::{
     BenchmarkConfiguration, Identity, InitialState, ResultRecord, RunManifest, SourceFiles,
 };
 use crate::object_store_probe::{delete_prefix, probe, ObjectStoreContext};
-use crate::system::{inspect_environment, verify_environment};
+use crate::system::{inspect_environment, verify_environment, BenchmarkMetricsRecorder};
 use crate::validation::{validate_result, validate_run};
 use crate::workloads::{
     execute_variant, extend_with_compaction_phase, populate_dataset, prepare_bulk_load,
@@ -25,7 +25,7 @@ use slatedb::db_cache::{
     DbCache, SplitCache,
 };
 use slatedb::{Db, SstBlockSize, VersionedManifest};
-use slatedb_common::metrics::{DefaultMetricsRecorder, MetricValue};
+use slatedb_common::metrics::{MetricValue, MetricsRecorder};
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path as FsPath, PathBuf};
@@ -146,7 +146,7 @@ async fn execute_inner(args: &RunArgs) -> Result<()> {
             .await?;
             golden_manager.cleanup_paths.push(clone_path.clone());
 
-            let recorder = Arc::new(DefaultMetricsRecorder::new());
+            let recorder = Arc::new(BenchmarkMetricsRecorder::new());
             let db = open_database(
                 clone_path.clone(),
                 Arc::clone(&store),
@@ -169,7 +169,7 @@ async fn execute_inner(args: &RunArgs) -> Result<()> {
                 .await
                 .context("closing clone validation handle")?;
             let mut outcome = if object_store.provider.eq_ignore_ascii_case("memory") {
-                let recorder = Arc::new(DefaultMetricsRecorder::new());
+                let recorder = Arc::new(BenchmarkMetricsRecorder::new());
                 let db = open_database(
                     clone_path.clone(),
                     Arc::clone(&store),
@@ -268,7 +268,7 @@ pub async fn execute_worker(args: WorkerArgs) -> Result<()> {
         .await
         .context("seeding worker database-size tracker")?;
     let store: Arc<dyn ObjectStore> = context.instrumented.clone();
-    let recorder = Arc::new(DefaultMetricsRecorder::new());
+    let recorder = Arc::new(BenchmarkMetricsRecorder::new());
     let db = open_database(
         database_path.clone(),
         store,
@@ -369,7 +369,7 @@ impl GoldenManager {
             records = record_count,
             "preparing golden database"
         );
-        let recorder = Arc::new(DefaultMetricsRecorder::new());
+        let recorder = Arc::new(BenchmarkMetricsRecorder::new());
         let db = open_database(
             path.clone(),
             Arc::clone(&self.store),
@@ -464,7 +464,7 @@ async fn run_rocks_profile(
         target_rate: None,
     };
     let path = run_root.clone().join("rocksdb-profile");
-    let bulk_recorder = Arc::new(DefaultMetricsRecorder::new());
+    let bulk_recorder = Arc::new(BenchmarkMetricsRecorder::new());
     let bulk_db = open_database(
         path.clone(),
         Arc::clone(&store),
@@ -499,7 +499,7 @@ async fn run_rocks_profile(
         bulk_db.flush().await?;
         None
     };
-    let recorder = Arc::new(DefaultMetricsRecorder::new());
+    let recorder = Arc::new(BenchmarkMetricsRecorder::new());
     let compaction_measurement = bulk_outcome.as_ref().map(|outcome| {
         let started = Instant::now();
         let start_store = store_metrics.snapshot();
@@ -731,14 +731,15 @@ async fn open_database(
     path: Path,
     store: Arc<dyn ObjectStore>,
     profile: &ProfileConfig,
-    recorder: Arc<DefaultMetricsRecorder>,
+    recorder: Arc<BenchmarkMetricsRecorder>,
     smoke: bool,
     bulk_load: bool,
 ) -> Result<Arc<Db>> {
     let settings = settings_for(profile, smoke, bulk_load)?;
+    let db_recorder: Arc<dyn MetricsRecorder> = recorder;
     let mut builder = Db::builder(path, store)
         .with_settings(settings)
-        .with_metrics_recorder(recorder);
+        .with_metrics_recorder(db_recorder);
     if let Some(cache) = cache_for(profile) {
         builder = builder.with_db_cache(cache);
     }
@@ -804,7 +805,7 @@ fn cache_for(profile: &ProfileConfig) -> Option<Arc<dyn DbCache>> {
 
 async fn wait_for_compaction(
     db: &Db,
-    recorder: &DefaultMetricsRecorder,
+    recorder: &BenchmarkMetricsRecorder,
     suite: &SuiteConfig,
 ) -> Result<()> {
     let timeout = Duration::from_millis(suite.compaction_timeout_ms);

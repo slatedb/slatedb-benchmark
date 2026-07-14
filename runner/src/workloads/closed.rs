@@ -4,7 +4,7 @@ use super::util::{
     choose_coprime_multiplier, key_for_id, prefix_key, random_unique_key, random_value, KeySelector,
 };
 use crate::config::{VariantConfig, WorkloadKind};
-use crate::system::ApplicationCounters;
+use crate::system::{measure_backpressure, ApplicationCounters};
 use anyhow::{bail, Context, Result};
 use futures::future::try_join_all;
 use rand::rngs::StdRng;
@@ -106,7 +106,7 @@ async fn worker_loop(
     let mut stats = WorkerStats::default();
     while Instant::now() < deadline {
         let started = Instant::now();
-        match execute_operation(
+        let (result, backpressure) = measure_backpressure(execute_operation(
             &db,
             &variant,
             &selector,
@@ -114,9 +114,10 @@ async fn worker_loop(
             &next_insert,
             &insert_lock,
             &mut rng,
-        )
-        .await
-        {
+        ))
+        .await;
+        stats.record_backpressure(backpressure);
+        match result {
             Ok(outcome) => {
                 let returned_at = Instant::now();
                 stats.record_success(outcome.name, started.elapsed(), outcome.payload_bytes);
@@ -548,10 +549,15 @@ async fn run_bulk_load(
         let key = key_for_id(id, variant.key_bytes());
         let value = random_value(variant.value_bytes(), &mut rng);
         let started = Instant::now();
-        match db
-            .put_with_options(key, value.clone(), &PutOptions::default(), &write_options)
-            .await
-        {
+        let (result, backpressure) = measure_backpressure(db.put_with_options(
+            key,
+            value.clone(),
+            &PutOptions::default(),
+            &write_options,
+        ))
+        .await;
+        stats.record_backpressure(backpressure);
+        match result {
             Ok(handle) => {
                 let returned_at = Instant::now();
                 stats.record_success("insert", started.elapsed(), value.len() as u64);
@@ -644,14 +650,14 @@ async fn capped_writer(
         ticker.tick().await;
         let started = Instant::now();
         let value = random_value(variant.value_bytes(), &mut rng);
-        let result = db
-            .put_with_options(
-                key_for_id(selector.sample(&mut rng), variant.key_bytes()),
-                value.clone(),
-                &PutOptions::default(),
-                &options,
-            )
-            .await;
+        let (result, backpressure) = measure_backpressure(db.put_with_options(
+            key_for_id(selector.sample(&mut rng), variant.key_bytes()),
+            value.clone(),
+            &PutOptions::default(),
+            &options,
+        ))
+        .await;
+        stats.record_backpressure(backpressure);
         match result {
             Ok(handle) => {
                 let returned_at = Instant::now();
