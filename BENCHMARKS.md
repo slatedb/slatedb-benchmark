@@ -108,6 +108,13 @@ Use the YCSB profile settings unless a test specifies otherwise.
 4. `prefix-scan`: Store 10 records under each of 10 million 8-byte prefixes,
    with an 8-byte suffix completing each key. Select prefixes uniformly and
    scan all 10 records with SlateDB's prefix-scan API.
+5. `open-loop-read`: Run YCSB C's 100% read mix with fixed-rate arrivals
+   scheduled independently of completions.
+6. `open-loop-read-update`: Run YCSB A's 50% read and 50% update mix with
+   fixed-rate arrivals scheduled independently of completions.
+
+For each open-loop test, reset to the preloaded dataset and run at fixed target
+rates of 1,000, 5,000, and 10,000 ops/s.
 
 ## Out of scope
 
