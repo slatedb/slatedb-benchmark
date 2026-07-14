@@ -48,8 +48,8 @@ jobs:
         run: ./scripts/use-local-slatedb.sh "$GITHUB_WORKSPACE/.slatedb-source"
       - name: Record selected commit
         run: echo "SLATEDB_COMMIT=$(git -C .slatedb-source rev-parse HEAD)" >> "$GITHUB_ENV"
-      - name: Resolve selected SlateDB lockfile
-        run: cargo check --workspace
+      - name: Check selected SlateDB source
+        run: cargo check --workspace --locked
       - name: Build runner
         run: cargo build --release --locked --manifest-path runner/Cargo.toml
       - name: Run complete suite

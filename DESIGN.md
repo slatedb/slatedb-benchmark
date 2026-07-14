@@ -142,6 +142,13 @@ $ ./target/release/slatedb-benchmark --version
 slatedb-benchmark <runner-version> (slatedb <version> <commit>)
 ```
 
+Compatibility and release jobs run `scripts/use-local-slatedb.sh` first. The
+script replaces the workspace's SlateDB dependencies with absolute paths into
+the selected checkout, resolves the lockfile, and checks `cargo metadata` to
+ensure all SlateDB packages came from that checkout. Subsequent builds use
+`--locked`, so the recorded checkout cannot silently differ from the code in
+the runner binary.
+
 The binary reads S3-compatible object-store configuration from the
 environment:
 

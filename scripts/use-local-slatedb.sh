@@ -1,11 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-slatedb_root="${1:-../slatedb}"
-mkdir -p .cargo
-cat > .cargo/config.toml <<EOF
-[patch.crates-io]
-slatedb = { path = "$slatedb_root/slatedb" }
-slatedb-common = { path = "$slatedb_root/slatedb-common" }
-slatedb-txn-obj = { path = "$slatedb_root/slatedb-txn-obj" }
-EOF
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+slatedb_root="${1:-$repo_root/../slatedb}"
+
+python3 "$repo_root/scripts/use-local-slatedb.py" "$repo_root" "$slatedb_root"
