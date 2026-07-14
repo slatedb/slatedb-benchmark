@@ -129,6 +129,72 @@ time from the first measured write through that final frontier. Workloads that
 set `await_durable=true` include durability in return latency and leave the
 separate lag fields null where they do not apply.
 
+## CLI
+
+CI and manual runs use the same `slatedb-benchmark` binary. Build it from the
+repository root:
+
+```console
+$ cargo build --release --locked \
+    --manifest-path runner/Cargo.toml \
+    --target-dir target
+$ ./target/release/slatedb-benchmark --version
+slatedb-benchmark <runner-version> (slatedb <version> <commit>)
+```
+
+The binary reads S3-compatible object-store configuration from the
+environment:
+
+```sh
+export AWS_ACCESS_KEY_ID=...
+export AWS_SECRET_ACCESS_KEY=...
+export AWS_REGION=auto
+export AWS_ENDPOINT_URL_S3=https://fly.storage.tigris.dev
+export SLATEDB_BENCH_BUCKET=slatedb-benchmarks
+export SLATEDB_BENCH_PREFIX="manual/$USER"
+```
+
+`--profile` runs one profile, adding `--workload` runs all of that workload's
+variants, and adding `--variant` runs one variant. Workload and variant
+selectors require their parent selectors. For example:
+
+```console
+$ ./target/release/slatedb-benchmark run \
+    --profile ycsb \
+    --workload ycsb-a \
+    --variant clients-16 \
+    --output .runs/ycsb-a
+{"status":"ok","run":".runs/ycsb-a/run.json"}
+```
+
+Omitting the selectors runs all profiles and variants:
+
+```console
+$ ./target/release/slatedb-benchmark run --output .runs/release
+{"status":"ok","run":".runs/release/run.json"}
+```
+
+Each `run` invocation probes the object store once, before preparing data. It
+writes progress to stderr and one JSON status line to stdout. The output tree
+is shown below. The output directory must not exist before the command starts.
+
+```text
+.runs/ycsb-a/
+  run.json
+  object-store.json
+  results/<version>/ycsb/ycsb-a/clients-16/
+    result.json
+    histograms.json
+    timeseries.json
+```
+
+`run.json` records the selected work, source commits, resolved configuration,
+object-store baseline, and result paths. The runner exits nonzero on
+configuration, execution, or validation failure and does not write a success
+line. Manual results use the published schema but remain under `.runs/`; only
+the release workflow copies validated results into `results/` and publishes
+them.
+
 ## Metrics and results
 
 The runner uses HDR histograms for operation latency, open-loop response
