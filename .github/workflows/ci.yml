@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.89.0
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace --locked
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+      - run: npm ci
+        working-directory: site
+      - run: npm run build
+        working-directory: site
+
+  docker-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.89.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: ./scripts/smoke.sh
+
+  slatedb-compatibility:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        slate-ref: [v0.14.1, main]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: slatedb/slatedb
+          ref: ${{ matrix.slate-ref }}
+          path: .slatedb-source
+      - uses: dtolnay/rust-toolchain@1.89.0
+      - run: ./scripts/use-local-slatedb.sh "$GITHUB_WORKSPACE/.slatedb-source"
+      - run: cargo check --workspace

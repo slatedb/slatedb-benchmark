@@ -1,0 +1,43 @@
+[workspace]
+members = ["runner"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/slatedb/slatedb-benchmark"
+
+[workspace.dependencies]
+anyhow = "1.0"
+async-channel = "2.5"
+async-trait = "0.1"
+base64 = "0.22"
+bytes = { version = "1.10", features = ["serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4.5", features = ["derive"] }
+futures = "0.3"
+hdrhistogram = "7.5"
+hostname = "0.4"
+jsonschema = "0.33"
+object_store = { version = "0.14.0", features = ["aws"] }
+rand = "0.9"
+rand_distr = "0.5"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+slatedb = { version = "=0.14.1", features = ["aws", "wal_disable", "zstd"] }
+slatedb-common = { version = "=0.14.1", features = ["serde"] }
+sysinfo = "0.35"
+tokio = { version = "1.47", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+uuid = { version = "1.18", features = ["serde", "v4"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+dbg_macro = "deny"
+todo = "deny"
+unwrap_used = "deny"

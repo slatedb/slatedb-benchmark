@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://benchmark.slatedb.io/schema/timeseries-v1.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "interval_ns", "samples"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "interval_ns": { "const": 1000000000 },
+    "samples": {
+      "type": "array", "minItems": 2,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["offset_ns", "operations", "errors", "cpu_percent", "rss_bytes", "network_bytes_sent", "network_bytes_received", "disk_bytes_read", "disk_bytes_written", "disk_read_operations", "disk_write_operations", "database_size_bytes", "object_store_requests", "object_store_bytes_read", "object_store_bytes_written", "slatedb_metrics"],
+        "properties": {
+          "offset_ns": { "type": "integer", "minimum": 0 }, "operations": { "type": "integer", "minimum": 0 }, "errors": { "type": "integer", "minimum": 0 },
+          "cpu_percent": { "type": "number", "minimum": 0 }, "rss_bytes": { "type": "integer", "minimum": 0 },
+          "network_bytes_sent": { "type": "integer", "minimum": 0 }, "network_bytes_received": { "type": "integer", "minimum": 0 },
+          "disk_bytes_read": { "type": "integer", "minimum": 0 }, "disk_bytes_written": { "type": "integer", "minimum": 0 },
+          "disk_read_operations": { "type": "integer", "minimum": 0 }, "disk_write_operations": { "type": "integer", "minimum": 0 },
+          "database_size_bytes": { "type": "integer", "minimum": 0 },
+          "object_store_requests": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
+          "object_store_bytes_read": { "type": "integer", "minimum": 0 }, "object_store_bytes_written": { "type": "integer", "minimum": 0 },
+          "slatedb_metrics": { "type": "array", "items": { "$ref": "#/$defs/metric" } }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "metric": {
+      "type": "object", "additionalProperties": false,
+      "required": ["name", "description", "labels", "value"],
+      "properties": {
+        "name": { "type": "string" }, "description": { "type": "string" },
+        "labels": { "type": "object", "additionalProperties": { "type": "string" } },
+        "value": { "type": "object", "required": ["type", "value"], "properties": { "type": { "type": "string" }, "value": {} } }
+      }
+    }
+  }
+}

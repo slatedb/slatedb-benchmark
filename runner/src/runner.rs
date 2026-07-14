@@ -1,0 +1,922 @@
+use crate::cli::{RunArgs, WorkerArgs};
+use crate::config::{ProfileConfig, SuiteConfig, VariantConfig, WorkloadKind};
+use crate::cost::PriceTable;
+use crate::model::{
+    BenchmarkConfiguration, Identity, InitialState, ResultRecord, RunManifest, SourceFiles,
+};
+use crate::object_store_probe::{delete_prefix, probe, ObjectStoreContext};
+use crate::system::{inspect_environment, verify_environment};
+use crate::validation::{validate_result, validate_run};
+use crate::workloads::{
+    execute_variant, extend_with_compaction_phase, populate_dataset, prepare_bulk_load,
+    WorkloadOutcome,
+};
+use anyhow::{bail, Context, Result};
+use chrono::Utc;
+use futures::TryStreamExt;
+use object_store::path::Path;
+use object_store::ObjectStore;
+use serde::Serialize;
+use sha2::{Digest, Sha256};
+use slatedb::admin::{AdminBuilder, CloneSourceSpec};
+use slatedb::config::{CheckpointOptions, CompactorOptions, CompressionCodec, Settings};
+use slatedb::db_cache::{
+    foyer::{FoyerCache, FoyerCacheOptions},
+    DbCache, SplitCache,
+};
+use slatedb::{Db, SstBlockSize};
+use slatedb_common::metrics::{DefaultMetricsRecorder, MetricValue};
+use std::collections::{BTreeMap, HashMap};
+use std::fs;
+use std::path::{Path as FsPath, PathBuf};
+use std::str::FromStr;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use uuid::Uuid;
+
+#[derive(Clone)]
+struct GoldenDatabase {
+    path: Path,
+    checkpoint_id: Uuid,
+    manifest_id: u64,
+    lsm_digest: String,
+    size_bytes: u64,
+}
+
+struct GoldenManager {
+    store: Arc<dyn ObjectStore>,
+    root: Path,
+    suite: SuiteConfig,
+    values: HashMap<String, GoldenDatabase>,
+    cleanup_paths: Vec<Path>,
+}
+
+pub async fn execute(args: RunArgs) -> Result<()> {
+    if args.output.exists() {
+        bail!("output directory {} already exists", args.output.display());
+    }
+    fs::create_dir_all(&args.output)
+        .with_context(|| format!("creating {}", args.output.display()))?;
+    let result = execute_inner(&args).await;
+    if result.is_err() {
+        tracing::error!("benchmark run failed; partial output remains for diagnosis");
+    }
+    result
+}
+
+async fn execute_inner(args: &RunArgs) -> Result<()> {
+    let started_at = Utc::now();
+    let suite = SuiteConfig::load_from(&args.config_dir, args.smoke)?;
+    let selected = suite.select(
+        args.profile.as_deref(),
+        args.workload.as_deref(),
+        args.variant.as_deref(),
+    )?;
+    let prices = PriceTable::load(&args.schema_dir)?;
+    let object_store = ObjectStoreContext::load(args.smoke)?;
+    let environment = inspect_environment(
+        &object_store.provider,
+        &object_store.endpoint,
+        &object_store.region,
+    );
+    verify_environment(&environment, args.smoke)?;
+    tracing::info!("probing object store before dataset preparation");
+    let (baseline, baseline_histograms) = probe(
+        Arc::clone(&object_store.raw),
+        &object_store.root,
+        &suite.object_store_probe,
+    )
+    .await?;
+    write_json(&args.output.join("object-store.json"), &baseline)?;
+
+    let run_id = Uuid::new_v4();
+    let run_root = object_store.root.clone().join(format!("run-{run_id}"));
+    let store: Arc<dyn ObjectStore> = object_store.instrumented.clone();
+    let mut golden_manager = GoldenManager {
+        store: Arc::clone(&store),
+        root: run_root.clone(),
+        suite: suite.clone(),
+        values: HashMap::new(),
+        cleanup_paths: Vec::new(),
+    };
+    let mut result_paths = Vec::new();
+
+    let run_result = async {
+        let rocks = selected
+            .iter()
+            .filter(|variant| variant.profile.name == "rocksdb")
+            .cloned()
+            .collect::<Vec<_>>();
+        if !rocks.is_empty() {
+            result_paths.extend(
+                run_rocks_profile(
+                    rocks,
+                    &suite,
+                    &run_root,
+                    Arc::clone(&store),
+                    object_store.instrumented.metrics(),
+                    &environment,
+                    &baseline,
+                    &baseline_histograms,
+                    &prices,
+                    args,
+                )
+                .await?,
+            );
+        }
+
+        for variant in selected
+            .iter()
+            .filter(|variant| variant.profile.name != "rocksdb")
+        {
+            let golden = golden_manager.prepare(variant).await?;
+            let clone_path = run_root
+                .clone()
+                .join("clones")
+                .join(variant.profile.name.as_str())
+                .join(variant.workload.name.as_str())
+                .join(format!("{}-{}", variant.variant, Uuid::new_v4()));
+            clone_database(
+                Arc::clone(&store),
+                &clone_path,
+                &golden.path,
+                golden.checkpoint_id,
+            )
+            .await?;
+            golden_manager.cleanup_paths.push(clone_path.clone());
+
+            let recorder = Arc::new(DefaultMetricsRecorder::new());
+            let db = open_database(
+                clone_path.clone(),
+                Arc::clone(&store),
+                &variant.profile,
+                Arc::clone(&recorder),
+                args.smoke,
+                false,
+            )
+            .await?;
+            let clone_digest = lsm_digest(&db)?;
+            if clone_digest != golden.lsm_digest {
+                bail!("clone {} does not match checkpoint LSM state", clone_path);
+            }
+            let initial = InitialState {
+                checkpoint_id: Some(golden.checkpoint_id.to_string()),
+                manifest_id: Some(golden.manifest_id),
+                lsm_digest_sha256: clone_digest,
+            };
+            db.close()
+                .await
+                .context("closing clone validation handle")?;
+            let mut outcome = if object_store.provider.eq_ignore_ascii_case("memory") {
+                let recorder = Arc::new(DefaultMetricsRecorder::new());
+                let db = open_database(
+                    clone_path.clone(),
+                    Arc::clone(&store),
+                    &variant.profile,
+                    Arc::clone(&recorder),
+                    args.smoke,
+                    false,
+                )
+                .await?;
+                let outcome = execute_variant(
+                    Arc::clone(&db),
+                    variant,
+                    object_store.instrumented.metrics(),
+                    recorder,
+                    clone_path.clone(),
+                    golden.size_bytes,
+                )
+                .await;
+                db.close().await.context("closing benchmark clone")?;
+                outcome?
+            } else {
+                execute_variant_in_fresh_process(
+                    variant,
+                    &clone_path,
+                    golden.size_bytes,
+                    &golden.lsm_digest,
+                    args,
+                )
+                .await?
+            };
+            let clone_size = prefix_size(Arc::clone(&store), &clone_path).await?;
+            outcome.storage.database_size_bytes = golden.size_bytes.saturating_add(clone_size);
+            let relative = write_variant_result(
+                variant,
+                outcome,
+                initial,
+                &environment,
+                &baseline,
+                &baseline_histograms,
+                &prices,
+                golden.size_bytes,
+                args,
+            )?;
+            result_paths.push(relative);
+            delete_prefix(Arc::clone(&store), &clone_path).await?;
+        }
+        Ok::<(), anyhow::Error>(())
+    }
+    .await;
+
+    let cleanup_result = golden_manager.cleanup().await;
+    let run_cleanup = delete_prefix(Arc::clone(&store), &run_root).await;
+    run_result?;
+    cleanup_result?;
+    run_cleanup?;
+
+    let run = RunManifest {
+        schema_version: 1,
+        status: "ok".to_string(),
+        started_at: started_at.to_rfc3339(),
+        finished_at: Utc::now().to_rfc3339(),
+        mode: suite.mode.clone(),
+        slate_version: env!("BENCHMARK_SLATE_VERSION").to_string(),
+        slate_commit: env!("BENCHMARK_SLATE_COMMIT").to_string(),
+        runner_version: env!("CARGO_PKG_VERSION").to_string(),
+        runner_commit: env!("BENCHMARK_RUNNER_COMMIT").to_string(),
+        lockfile_sha256: env!("BENCHMARK_LOCK_HASH").to_string(),
+        resolved_configuration: serde_json::to_value(&suite)?,
+        object_store_baseline: baseline,
+        results: result_paths,
+    };
+    validate_run(&run, &args.schema_dir)?;
+    write_json(&args.output.join("run.json"), &run)?;
+    println!(
+        "{{\"status\":\"ok\",\"run\":\"{}\"}}",
+        args.output.join("run.json").display()
+    );
+    Ok(())
+}
+
+pub async fn execute_worker(args: WorkerArgs) -> Result<()> {
+    let suite = SuiteConfig::load_from(&args.config_dir, args.smoke)?;
+    let mut selected = suite.select(
+        Some(&args.profile),
+        Some(&args.workload),
+        Some(&args.variant),
+    )?;
+    let variant = selected
+        .pop()
+        .context("worker selection did not resolve to a variant")?;
+    let context = ObjectStoreContext::load(args.smoke)?;
+    let database_path = Path::from(args.database_path);
+    context
+        .instrumented
+        .seed_prefix(&database_path)
+        .await
+        .context("seeding worker database-size tracker")?;
+    let store: Arc<dyn ObjectStore> = context.instrumented.clone();
+    let recorder = Arc::new(DefaultMetricsRecorder::new());
+    let db = open_database(
+        database_path.clone(),
+        store,
+        &variant.profile,
+        Arc::clone(&recorder),
+        args.smoke,
+        false,
+    )
+    .await?;
+    let digest = lsm_digest(&db)?;
+    if digest != args.expected_lsm_digest {
+        bail!("fresh worker opened an unexpected LSM state");
+    }
+    let outcome = execute_variant(
+        Arc::clone(&db),
+        &variant,
+        context.instrumented.metrics(),
+        recorder,
+        database_path,
+        args.shared_database_bytes,
+    )
+    .await;
+    db.close()
+        .await
+        .context("closing fresh-process benchmark clone")?;
+    write_json(&args.output, &outcome?)
+}
+
+async fn execute_variant_in_fresh_process(
+    variant: &VariantConfig,
+    database_path: &Path,
+    shared_database_bytes: u64,
+    expected_lsm_digest: &str,
+    args: &RunArgs,
+) -> Result<WorkloadOutcome> {
+    let output = args.output.join(format!(".worker-{}.json", Uuid::new_v4()));
+    let executable = std::env::current_exe().context("locating benchmark executable")?;
+    let mut command = tokio::process::Command::new(executable);
+    command
+        .arg("worker")
+        .arg("--profile")
+        .arg(&variant.profile.name)
+        .arg("--workload")
+        .arg(&variant.workload.name)
+        .arg("--variant")
+        .arg(&variant.variant)
+        .arg("--database-path")
+        .arg(database_path.to_string())
+        .arg("--shared-database-bytes")
+        .arg(shared_database_bytes.to_string())
+        .arg("--expected-lsm-digest")
+        .arg(expected_lsm_digest)
+        .arg("--output")
+        .arg(&output)
+        .arg("--config-dir")
+        .arg(&args.config_dir);
+    if args.smoke {
+        command.arg("--smoke");
+    }
+    let status = command
+        .status()
+        .await
+        .context("running fresh benchmark worker")?;
+    if !status.success() {
+        bail!("fresh benchmark worker exited with {status}");
+    }
+    let bytes =
+        fs::read(&output).with_context(|| format!("reading worker result {}", output.display()))?;
+    let outcome: WorkloadOutcome = serde_json::from_slice(&bytes)
+        .with_context(|| format!("parsing worker result {}", output.display()))?;
+    fs::remove_file(&output)
+        .with_context(|| format!("removing worker result {}", output.display()))?;
+    Ok(outcome)
+}
+
+impl GoldenManager {
+    async fn prepare(&mut self, variant: &VariantConfig) -> Result<GoldenDatabase> {
+        let prefix_layout = variant.workload.kind == WorkloadKind::PrefixScan;
+        let record_count = if variant.workload.kind == WorkloadKind::SustainedIngest {
+            0
+        } else {
+            variant.record_count()
+        };
+        let key = format!(
+            "{}-{}-{}-{}-{}",
+            if prefix_layout { "prefix" } else { "records" },
+            record_count,
+            variant.key_bytes(),
+            variant.value_bytes(),
+            variant.profile.compression.as_deref().unwrap_or("none")
+        );
+        if let Some(golden) = self.values.get(&key) {
+            return Ok(golden.clone());
+        }
+        let path = self.root.clone().join("golden").join(key.as_str());
+        tracing::info!(
+            dataset = key,
+            records = record_count,
+            "preparing golden database"
+        );
+        let recorder = Arc::new(DefaultMetricsRecorder::new());
+        let db = open_database(
+            path.clone(),
+            Arc::clone(&self.store),
+            &variant.profile,
+            Arc::clone(&recorder),
+            self.suite.mode == "smoke",
+            false,
+        )
+        .await?;
+        populate_dataset(
+            Arc::clone(&db),
+            record_count,
+            variant.key_bytes(),
+            variant.value_bytes(),
+            prefix_layout,
+        )
+        .await?;
+        wait_for_compaction(&db, &recorder, &self.suite).await?;
+        let digest = lsm_digest(&db)?;
+        db.close().await.context("closing golden database")?;
+
+        let admin = AdminBuilder::new(path.clone(), Arc::clone(&self.store)).build();
+        let checkpoint = admin
+            .create_detached_checkpoint(&CheckpointOptions {
+                lifetime: None,
+                source: None,
+                name: Some(format!("benchmark-{key}")),
+            })
+            .await
+            .context("creating golden checkpoint")?;
+        let size_bytes = prefix_size(Arc::clone(&self.store), &path).await?;
+        let golden = GoldenDatabase {
+            path: path.clone(),
+            checkpoint_id: checkpoint.id,
+            manifest_id: checkpoint.manifest_id,
+            lsm_digest: digest,
+            size_bytes,
+        };
+        self.cleanup_paths.push(path);
+        self.values.insert(key, golden.clone());
+        Ok(golden)
+    }
+
+    async fn cleanup(&self) -> Result<()> {
+        for golden in self.values.values() {
+            let admin = AdminBuilder::new(golden.path.clone(), Arc::clone(&self.store)).build();
+            admin
+                .delete_checkpoint(golden.checkpoint_id)
+                .await
+                .context("deleting golden checkpoint")?;
+        }
+        for path in &self.cleanup_paths {
+            delete_prefix(Arc::clone(&self.store), path).await?;
+        }
+        Ok(())
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_rocks_profile(
+    selected: Vec<VariantConfig>,
+    suite: &SuiteConfig,
+    run_root: &Path,
+    store: Arc<dyn ObjectStore>,
+    store_metrics: Arc<crate::instrumented_store::StoreMetrics>,
+    environment: &crate::model::Environment,
+    baseline: &crate::model::ObjectStoreBaseline,
+    baseline_histograms: &BTreeMap<String, crate::model::EncodedHistogram>,
+    prices: &PriceTable,
+    args: &RunArgs,
+) -> Result<Vec<String>> {
+    let profile = suite
+        .profiles
+        .iter()
+        .find(|profile| profile.name == "rocksdb")
+        .context("rocksdb profile is missing")?;
+    let bulk_workload = profile
+        .workloads
+        .iter()
+        .find(|workload| workload.kind == WorkloadKind::BulkLoad)
+        .context("bulk-load workload is missing")?;
+    let bulk_variant = VariantConfig {
+        profile: profile.clone(),
+        workload: bulk_workload.clone(),
+        variant: "clients-1".to_string(),
+        clients: Some(1),
+        target_rate: None,
+    };
+    let path = run_root.clone().join("rocksdb-profile");
+    let bulk_recorder = Arc::new(DefaultMetricsRecorder::new());
+    let bulk_db = open_database(
+        path.clone(),
+        Arc::clone(&store),
+        profile,
+        Arc::clone(&bulk_recorder),
+        args.smoke,
+        true,
+    )
+    .await?;
+    let bulk_initial = InitialState {
+        checkpoint_id: None,
+        manifest_id: Some(bulk_db.status().current_manifest.id()),
+        lsm_digest_sha256: lsm_digest(&bulk_db)?,
+    };
+    let selected_bulk = selected
+        .iter()
+        .find(|variant| variant.workload.kind == WorkloadKind::BulkLoad);
+    let mut bulk_outcome = if selected_bulk.is_some() {
+        Some(
+            execute_variant(
+                Arc::clone(&bulk_db),
+                &bulk_variant,
+                Arc::clone(&store_metrics),
+                Arc::clone(&bulk_recorder),
+                path.clone(),
+                0,
+            )
+            .await?,
+        )
+    } else {
+        prepare_bulk_load(Arc::clone(&bulk_db), &bulk_variant).await?;
+        bulk_db.flush().await?;
+        None
+    };
+    let recorder = Arc::new(DefaultMetricsRecorder::new());
+    let compaction_measurement = bulk_outcome.as_ref().map(|outcome| {
+        let started = Instant::now();
+        let start_store = store_metrics.snapshot();
+        let start_slate = recorder.snapshot();
+        let counters = Arc::new(crate::system::ApplicationCounters::default());
+        counters
+            .operations
+            .store(outcome.application.total_operations, Ordering::Relaxed);
+        let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
+        let sampler = tokio::spawn(crate::system::sample_until_stopped(
+            started,
+            counters,
+            Arc::clone(&store_metrics),
+            Arc::clone(&recorder),
+            path.clone(),
+            0,
+            stop_rx,
+        ));
+        (started, start_store, start_slate, stop_tx, sampler)
+    });
+    bulk_db
+        .close()
+        .await
+        .context("closing bulk-load database")?;
+
+    let db = open_database(
+        path.clone(),
+        Arc::clone(&store),
+        profile,
+        Arc::clone(&recorder),
+        args.smoke,
+        false,
+    )
+    .await?;
+    wait_for_compaction(&db, &recorder, suite).await?;
+    if let (Some(outcome), Some((started, start_store, start_slate, stop_tx, sampler))) =
+        (bulk_outcome.as_mut(), compaction_measurement)
+    {
+        let _ = stop_tx.send(true);
+        let samples = sampler.await.context("joining bulk compaction sampler")?;
+        let elapsed = started.elapsed();
+        let store_delta = store_metrics.snapshot().difference(&start_store);
+        let end_slate = recorder.snapshot();
+        extend_with_compaction_phase(
+            outcome,
+            samples,
+            store_delta,
+            &start_slate,
+            &end_slate,
+            elapsed,
+        );
+    }
+    let compacted_size = prefix_size(Arc::clone(&store), &path).await?;
+    let mut paths = Vec::new();
+    if let (Some(variant), Some(mut outcome)) = (selected_bulk, bulk_outcome.take()) {
+        outcome.storage.database_size_bytes = compacted_size;
+        paths.push(write_variant_result(
+            variant,
+            outcome,
+            bulk_initial,
+            environment,
+            baseline,
+            baseline_histograms,
+            prices,
+            0,
+            args,
+        )?);
+    }
+
+    for variant in selected
+        .iter()
+        .filter(|variant| variant.workload.kind != WorkloadKind::BulkLoad)
+    {
+        let initial_size = prefix_size(Arc::clone(&store), &path).await?;
+        let initial = InitialState {
+            checkpoint_id: None,
+            manifest_id: Some(db.status().current_manifest.id()),
+            lsm_digest_sha256: lsm_digest(&db)?,
+        };
+        let mut outcome = execute_variant(
+            Arc::clone(&db),
+            variant,
+            Arc::clone(&store_metrics),
+            Arc::clone(&recorder),
+            path.clone(),
+            0,
+        )
+        .await?;
+        outcome.storage.database_size_bytes = prefix_size(Arc::clone(&store), &path).await?;
+        paths.push(write_variant_result(
+            variant,
+            outcome,
+            initial,
+            environment,
+            baseline,
+            baseline_histograms,
+            prices,
+            initial_size,
+            args,
+        )?);
+    }
+    db.close()
+        .await
+        .context("closing RocksDB profile database")?;
+    delete_prefix(store, &path).await?;
+    Ok(paths)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_variant_result(
+    variant: &VariantConfig,
+    outcome: WorkloadOutcome,
+    initial_state: InitialState,
+    environment: &crate::model::Environment,
+    baseline: &crate::model::ObjectStoreBaseline,
+    baseline_histograms: &BTreeMap<String, crate::model::EncodedHistogram>,
+    prices: &PriceTable,
+    initial_database_bytes: u64,
+    args: &RunArgs,
+) -> Result<String> {
+    let version = env!("BENCHMARK_SLATE_VERSION");
+    let relative_directory = PathBuf::from("results")
+        .join(version)
+        .join(&variant.profile.name)
+        .join(&variant.workload.name)
+        .join(&variant.variant);
+    let directory = args.output.join(&relative_directory);
+    fs::create_dir_all(&directory)?;
+    let mut histograms = outcome.histograms.clone();
+    histograms.histograms.extend(baseline_histograms.clone());
+    let average_database_bytes = average_database_bytes(
+        &outcome.timeseries,
+        outcome.elapsed_ns,
+        initial_database_bytes,
+        outcome.storage.database_size_bytes,
+    );
+    let cost = prices.estimate(
+        outcome.elapsed_ns,
+        average_database_bytes,
+        &outcome.storage,
+        outcome.application.successful_operations,
+    );
+    let settings = settings_for(
+        &variant.profile,
+        args.smoke,
+        variant.workload.kind == WorkloadKind::BulkLoad,
+    )?;
+    let result = ResultRecord {
+        schema_version: 1,
+        identity: Identity {
+            slate_version: version.to_string(),
+            slate_commit: env!("BENCHMARK_SLATE_COMMIT").to_string(),
+            runner_version: env!("CARGO_PKG_VERSION").to_string(),
+            runner_commit: env!("BENCHMARK_RUNNER_COMMIT").to_string(),
+            lockfile_sha256: env!("BENCHMARK_LOCK_HASH").to_string(),
+            timestamp: Utc::now().to_rfc3339(),
+            profile: variant.profile.name.clone(),
+            workload: variant.workload.name.clone(),
+            variant: variant.variant.clone(),
+            mode: if args.smoke { "smoke" } else { "published" }.to_string(),
+        },
+        environment: environment.clone(),
+        object_store_baseline: baseline.clone(),
+        configuration: BenchmarkConfiguration {
+            clients: variant.clients,
+            target_rate: variant.target_rate,
+            warmup_ns: variant.warmup_ms().saturating_mul(1_000_000),
+            measurement_ns: variant.measurement_ms().saturating_mul(1_000_000),
+            record_count: variant.record_count(),
+            key_bytes: variant.key_bytes(),
+            value_bytes: variant.value_bytes(),
+            block_cache_bytes: variant.profile.block_cache_bytes,
+            metadata_cache_bytes: Some(
+                variant
+                    .profile
+                    .metadata_cache_bytes
+                    .unwrap_or(slatedb::db_cache::DEFAULT_META_CACHE_CAPACITY),
+            ),
+            sst_block_bytes: variant.profile.sst_block_bytes,
+            slate_settings: serde_json::to_value(settings)?,
+            build_profile: if cfg!(debug_assertions) {
+                "debug".to_string()
+            } else {
+                "release".to_string()
+            },
+            enabled_features: vec![
+                "aws".to_string(),
+                "foyer".to_string(),
+                "wal_disable".to_string(),
+                "zstd".to_string(),
+            ],
+        },
+        application: outcome.application,
+        durability: outcome.durability,
+        resources: outcome.resources,
+        storage: outcome.storage,
+        cost,
+        initial_state,
+        source_files: SourceFiles {
+            histograms: "histograms.json".to_string(),
+            timeseries: "timeseries.json".to_string(),
+        },
+    };
+    validate_result(&result, &histograms, &outcome.timeseries, &args.schema_dir)?;
+    write_json(&directory.join("result.json"), &result)?;
+    write_json(&directory.join("histograms.json"), &histograms)?;
+    write_json(&directory.join("timeseries.json"), &outcome.timeseries)?;
+    Ok(relative_directory.join("result.json").display().to_string())
+}
+
+async fn clone_database(
+    store: Arc<dyn ObjectStore>,
+    clone_path: &Path,
+    parent_path: &Path,
+    checkpoint_id: Uuid,
+) -> Result<()> {
+    let admin = AdminBuilder::new(clone_path.clone(), store).build();
+    admin
+        .create_clone_builder_from_source(CloneSourceSpec::with_checkpoint(
+            parent_path.clone(),
+            checkpoint_id,
+        ))
+        .build()
+        .await
+        .context("creating shallow benchmark clone")
+}
+
+async fn open_database(
+    path: Path,
+    store: Arc<dyn ObjectStore>,
+    profile: &ProfileConfig,
+    recorder: Arc<DefaultMetricsRecorder>,
+    smoke: bool,
+    bulk_load: bool,
+) -> Result<Arc<Db>> {
+    let settings = settings_for(profile, smoke, bulk_load)?;
+    let mut builder = Db::builder(path, store)
+        .with_settings(settings)
+        .with_metrics_recorder(recorder);
+    if let Some(cache) = cache_for(profile) {
+        builder = builder.with_db_cache(cache);
+    }
+    if profile.sst_block_bytes == Some(8192) {
+        builder = builder.with_sst_block_size(SstBlockSize::Block8Kib);
+    }
+    Ok(Arc::new(builder.build().await.context("opening SlateDB")?))
+}
+
+fn settings_for(profile: &ProfileConfig, smoke: bool, bulk_load: bool) -> Result<Settings> {
+    let mut settings = Settings {
+        flush_interval: Some(Duration::from_millis(profile.flush_interval_ms)),
+        metric_level: slatedb_common::metrics::MetricLevel::Info,
+        compression_codec: profile
+            .compression
+            .as_deref()
+            .map(CompressionCodec::from_str)
+            .transpose()?,
+        ..Default::default()
+    };
+    if smoke {
+        let mut options = CompactorOptions {
+            poll_interval: Duration::from_millis(20),
+            commit_compacted_interval: Duration::from_millis(20),
+            ..Default::default()
+        };
+        if let Some(worker) = options.worker.as_mut() {
+            worker.compactions_poll_interval = Duration::from_millis(20);
+        }
+        settings.compactor_options = Some(options);
+        settings.manifest_poll_interval = Duration::from_millis(20);
+        settings.l0_sst_size_bytes = 64 * 1024;
+        settings.max_unflushed_bytes = 8 * 1024 * 1024;
+    }
+    if bulk_load {
+        settings.compactor_options = None;
+        settings.wal_enabled = false;
+    }
+    Ok(settings)
+}
+
+fn cache_for(profile: &ProfileConfig) -> Option<Arc<dyn DbCache>> {
+    let block_cache = profile.block_cache_bytes.map(|max_capacity| {
+        Arc::new(FoyerCache::new_with_opts(FoyerCacheOptions {
+            max_capacity,
+            ..Default::default()
+        })) as Arc<dyn DbCache>
+    });
+    let metadata_capacity = profile
+        .metadata_cache_bytes
+        .unwrap_or(slatedb::db_cache::DEFAULT_META_CACHE_CAPACITY);
+    let metadata_cache = Some(Arc::new(FoyerCache::new_with_opts(FoyerCacheOptions {
+        max_capacity: metadata_capacity,
+        ..Default::default()
+    })) as Arc<dyn DbCache>);
+    Some(Arc::new(
+        SplitCache::new()
+            .with_block_cache(block_cache)
+            .with_meta_cache(metadata_cache)
+            .build(),
+    ))
+}
+
+async fn wait_for_compaction(
+    db: &Db,
+    recorder: &DefaultMetricsRecorder,
+    suite: &SuiteConfig,
+) -> Result<()> {
+    let timeout = Duration::from_millis(suite.compaction_timeout_ms);
+    let quiet = Duration::from_millis(suite.compaction_quiet_ms);
+    let started = Instant::now();
+    let mut stable_since = Instant::now();
+    let mut manifest_id = db.status().current_manifest.id();
+    loop {
+        if started.elapsed() > timeout {
+            bail!("timed out waiting for compaction to become idle");
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let current = db.status().current_manifest.id();
+        if current != manifest_id {
+            manifest_id = current;
+            stable_since = Instant::now();
+        }
+        let running = recorder
+            .snapshot()
+            .by_name(slatedb::compactor::stats::RUNNING_COMPACTIONS)
+            .iter()
+            .filter_map(|metric| match metric.value {
+                MetricValue::Gauge(value) | MetricValue::UpDownCounter(value) => Some(value),
+                _ => None,
+            })
+            .sum::<i64>();
+        if running == 0 && stable_since.elapsed() >= quiet {
+            return Ok(());
+        }
+    }
+}
+
+fn lsm_digest(db: &Db) -> Result<String> {
+    let core = serde_json::to_value(&db.status().current_manifest)?;
+    let mut layout = BTreeMap::new();
+    layout.insert("tree", core.get("tree").cloned().unwrap_or_default());
+    layout.insert(
+        "segments",
+        core.get("segments").cloned().unwrap_or_default(),
+    );
+    Ok(format!(
+        "{:x}",
+        Sha256::digest(serde_json::to_vec(&layout)?)
+    ))
+}
+
+async fn prefix_size(store: Arc<dyn ObjectStore>, path: &Path) -> Result<u64> {
+    store
+        .list(Some(path))
+        .map_ok(|meta| meta.size)
+        .try_fold(0_u64, |total, size| async move {
+            Ok(total.saturating_add(size))
+        })
+        .await
+        .context("measuring database size")
+}
+
+fn write_json(path: &FsPath, value: &impl Serialize) -> Result<()> {
+    fs::write(path, serde_json::to_vec_pretty(value)?)
+        .with_context(|| format!("writing {}", path.display()))
+}
+
+fn average_database_bytes(
+    timeseries: &crate::model::TimeseriesFile,
+    elapsed_ns: u64,
+    initial_bytes: u64,
+    final_bytes: u64,
+) -> u64 {
+    if elapsed_ns == 0 || timeseries.samples.len() < 2 {
+        return initial_bytes.saturating_add(final_bytes) / 2;
+    }
+    let mut byte_nanoseconds = 0_f64;
+    for window in timeseries.samples.windows(2) {
+        let left = &window[0];
+        let right = &window[1];
+        let duration = right.offset_ns.saturating_sub(left.offset_ns) as f64;
+        let average = (left.database_size_bytes as f64 + right.database_size_bytes as f64) / 2.0;
+        byte_nanoseconds += average * duration;
+    }
+    let last = &timeseries.samples[timeseries.samples.len() - 1];
+    if last.offset_ns < elapsed_ns {
+        byte_nanoseconds += final_bytes as f64 * elapsed_ns.saturating_sub(last.offset_ns) as f64;
+    }
+    (byte_nanoseconds / elapsed_ns as f64).max(0.0) as u64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::average_database_bytes;
+    use crate::model::{TimeseriesFile, TimeseriesSample};
+
+    #[test]
+    fn database_size_uses_trapezoidal_time_integration() {
+        let timeseries = TimeseriesFile {
+            schema_version: 1,
+            interval_ns: 1_000_000_000,
+            samples: vec![
+                TimeseriesSample {
+                    offset_ns: 0,
+                    database_size_bytes: 100,
+                    ..Default::default()
+                },
+                TimeseriesSample {
+                    offset_ns: 1_000_000_000,
+                    database_size_bytes: 300,
+                    ..Default::default()
+                },
+                TimeseriesSample {
+                    offset_ns: 2_000_000_000,
+                    database_size_bytes: 500,
+                    ..Default::default()
+                },
+            ],
+        };
+        assert_eq!(
+            average_database_bytes(&timeseries, 2_000_000_000, 0, 500),
+            300
+        );
+    }
+}

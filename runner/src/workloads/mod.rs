@@ -1,0 +1,485 @@
+mod closed;
+mod durability;
+mod open_loop;
+mod stats;
+mod util;
+
+use crate::config::{VariantConfig, WorkloadKind};
+use crate::instrumented_store::{StoreMetrics, StoreSnapshot};
+use crate::model::{
+    ApplicationPerformance, DurabilityPerformance, HistogramsFile, IngestWindow, ResourceUse,
+    StoragePerformance, TimeseriesFile,
+};
+use crate::system::{self, ApplicationCounters};
+use anyhow::{Context, Result};
+use durability::DurabilityTracker;
+use object_store::path::Path;
+use serde::{Deserialize, Serialize};
+use slatedb::Db;
+use slatedb_common::metrics::{DefaultMetricsRecorder, MetricValue as SlateMetricValue, Metrics};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tokio::sync::watch;
+
+pub use closed::populate_dataset;
+
+pub async fn prepare_bulk_load(db: Arc<Db>, variant: &VariantConfig) -> Result<()> {
+    let state = closed::ClosedLoopState::new(variant.record_count());
+    closed::run_closed_phase(db, variant, Duration::ZERO, None, None, &state).await?;
+    Ok(())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkloadOutcome {
+    pub application: ApplicationPerformance,
+    pub durability: DurabilityPerformance,
+    pub resources: ResourceUse,
+    pub storage: StoragePerformance,
+    pub histograms: HistogramsFile,
+    pub timeseries: TimeseriesFile,
+    pub elapsed_ns: u64,
+    storage_counters: StorageCounters,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+struct StorageCounters {
+    wal_flush_bytes: u64,
+    l0_flush_bytes: u64,
+    compacted_bytes: u64,
+    logical_write_bytes: u64,
+    backpressure_count: u64,
+}
+
+pub async fn execute_variant(
+    db: Arc<Db>,
+    variant: &VariantConfig,
+    store_metrics: Arc<StoreMetrics>,
+    slate_metrics: Arc<DefaultMetricsRecorder>,
+    database_path: Path,
+    shared_database_bytes: u64,
+) -> Result<WorkloadOutcome> {
+    let closed_state = closed::ClosedLoopState::new(variant.record_count());
+    let warmup = Duration::from_millis(variant.warmup_ms());
+    if !warmup.is_zero() {
+        tracing::info!(
+            profile = variant.profile.name,
+            workload = variant.workload.name,
+            variant = variant.variant,
+            "warming benchmark"
+        );
+        if is_open_loop(variant.workload.kind) {
+            open_loop::run_open_phase(Arc::clone(&db), variant, warmup, None, None).await?;
+        } else {
+            closed::run_closed_phase(Arc::clone(&db), variant, warmup, None, None, &closed_state)
+                .await?;
+        }
+        if may_write(variant.workload.kind) {
+            db.flush().await.context("draining warmup writes")?;
+        }
+    }
+
+    let start_store = store_metrics.snapshot();
+    let start_slate = slate_metrics.snapshot();
+    let counters = Arc::new(ApplicationCounters::default());
+    counters.reset();
+    let measured_started = Instant::now();
+    let (stop_tx, stop_rx) = watch::channel(false);
+    let sampler = tokio::spawn(system::sample_until_stopped(
+        measured_started,
+        Arc::clone(&counters),
+        Arc::clone(&store_metrics),
+        Arc::clone(&slate_metrics),
+        database_path,
+        shared_database_bytes,
+        stop_rx,
+    ));
+
+    let tracks_lag = may_write(variant.workload.kind) && !variant.workload.await_durable;
+    let tracker = tracks_lag.then(|| DurabilityTracker::start(Arc::clone(&db)));
+    let durability_sender = tracker.as_ref().map(DurabilityTracker::sender);
+    let configured_duration = Duration::from_millis(variant.measurement_ms());
+    let mut stats = if is_open_loop(variant.workload.kind) {
+        open_loop::run_open_phase(
+            Arc::clone(&db),
+            variant,
+            configured_duration,
+            durability_sender,
+            Some(Arc::clone(&counters)),
+        )
+        .await?
+    } else {
+        closed::run_closed_phase(
+            Arc::clone(&db),
+            variant,
+            configured_duration,
+            durability_sender,
+            Some(Arc::clone(&counters)),
+            &closed_state,
+        )
+        .await?
+    };
+    let generation_stopped = Instant::now();
+    let measurement_elapsed = generation_stopped.saturating_duration_since(measured_started);
+
+    let mut durability = DurabilityPerformance::default();
+    if stats.writes > 0 {
+        db.flush().await.context("final benchmark flush")?;
+        let drained_at = Instant::now();
+        durability.final_flush_drain_ns = Some(
+            drained_at
+                .saturating_duration_since(generation_stopped)
+                .as_nanos()
+                .min(u64::MAX as u128) as u64,
+        );
+        durability.last_measured_sequence = stats.last_write_sequence;
+        if let Some(tracker) = tracker {
+            let tracked = tracker.finish().await?;
+            durability.lag = Some(tracked.lag.summary());
+            stats.histograms.insert("durability_lag", tracked.lag);
+            durability.final_durable_sequence = Some(tracked.final_durable_sequence);
+            if let Some(first_write) = stats.first_write_return {
+                let seconds = tracked
+                    .covered_at
+                    .saturating_duration_since(first_write)
+                    .as_secs_f64()
+                    .max(f64::EPSILON);
+                durability.durable_ops_per_second = Some(stats.writes as f64 / seconds);
+            }
+        } else {
+            durability.final_durable_sequence = Some(db.status().durable_seq);
+            let total = drained_at
+                .saturating_duration_since(stats.first_write_return.unwrap_or(measured_started))
+                .as_secs_f64()
+                .max(f64::EPSILON);
+            durability.durable_ops_per_second = Some(stats.writes as f64 / total);
+        }
+    } else if let Some(tracker) = tracker {
+        // Close the channel and join the background subscriber even when a
+        // short smoke window happens not to select a write operation.
+        tracker.finish().await?;
+    }
+
+    let _ = stop_tx.send(true);
+    let samples = sampler.await.context("joining metric sampler")?;
+    let finished = Instant::now();
+    let total_elapsed = finished.saturating_duration_since(measured_started);
+    let end_store = store_metrics.snapshot();
+    let store_delta = end_store.difference(&start_store);
+    let end_slate = slate_metrics.snapshot();
+    let storage_counters = storage_counters(&start_slate, &end_slate);
+    let mut storage = storage_summary(
+        &storage_counters,
+        &store_delta,
+        &end_slate,
+        total_elapsed,
+        &samples,
+        variant.workload.kind,
+    );
+    storage.database_size_bytes = 0;
+    let resources = system::summarize_resources(&samples);
+    let open_loop = is_open_loop(variant.workload.kind);
+    let mut application = stats.application(measurement_elapsed, open_loop);
+    if open_loop {
+        let scheduled_seconds = configured_duration.as_secs_f64().max(f64::EPSILON);
+        application.offered_ops_per_second = Some(stats.offered as f64 / scheduled_seconds);
+        application.dropped_ops_per_second = Some(stats.dropped as f64 / scheduled_seconds);
+    }
+    Ok(WorkloadOutcome {
+        application,
+        durability,
+        resources,
+        storage,
+        histograms: stats.histograms.to_file()?,
+        timeseries: TimeseriesFile {
+            schema_version: 1,
+            interval_ns: 1_000_000_000,
+            samples,
+        },
+        elapsed_ns: total_elapsed.as_nanos().min(u64::MAX as u128) as u64,
+        storage_counters,
+    })
+}
+
+fn storage_summary(
+    counters: &StorageCounters,
+    store: &StoreSnapshot,
+    end_metrics: &Metrics,
+    elapsed: Duration,
+    samples: &[crate::model::TimeseriesSample],
+    kind: WorkloadKind,
+) -> StoragePerformance {
+    let write_amplification = (counters.logical_write_bytes > 0).then_some(
+        counters
+            .wal_flush_bytes
+            .saturating_add(counters.l0_flush_bytes)
+            .saturating_add(counters.compacted_bytes) as f64
+            / counters.logical_write_bytes as f64,
+    );
+    let backlog = gauge_value(
+        end_metrics,
+        slatedb::compactor::stats::TOTAL_BYTES_BEING_COMPACTED,
+    )
+    .map(|value| value.max(0) as u64);
+    StoragePerformance {
+        database_size_bytes: 0,
+        object_store_requests: store.requests.clone(),
+        object_store_errors: store.errors,
+        bytes_read: store.bytes_read,
+        bytes_written: store.bytes_written,
+        compaction_throughput_bytes_per_second: (counters.compacted_bytes > 0)
+            .then_some(counters.compacted_bytes as f64 / elapsed.as_secs_f64().max(f64::EPSILON)),
+        write_amplification,
+        backpressure_ns: (counters.backpressure_count == 0).then_some(0),
+        compaction_backlog_bytes: backlog,
+        five_minute_windows: if kind == WorkloadKind::SustainedIngest {
+            ingest_windows(samples)
+        } else {
+            Vec::new()
+        },
+    }
+}
+
+fn storage_counters(start: &Metrics, end: &Metrics) -> StorageCounters {
+    StorageCounters {
+        wal_flush_bytes: counter_delta_any(
+            start,
+            end,
+            &["slatedb.db.wal_flush_bytes", "slatedb.wal.wal_flush_bytes"],
+        ),
+        l0_flush_bytes: counter_delta(start, end, slatedb::db_stats::L0_FLUSH_BYTES),
+        compacted_bytes: counter_delta(start, end, slatedb::compactor::stats::BYTES_COMPACTED),
+        logical_write_bytes: counter_delta(start, end, slatedb::db_stats::MEMTABLE_WRITE_BYTES),
+        backpressure_count: counter_delta(start, end, slatedb::db_stats::BACKPRESSURE_COUNT),
+    }
+}
+
+pub fn extend_with_compaction_phase(
+    outcome: &mut WorkloadOutcome,
+    mut samples: Vec<crate::model::TimeseriesSample>,
+    store: StoreSnapshot,
+    start_metrics: &Metrics,
+    end_metrics: &Metrics,
+    elapsed: Duration,
+) {
+    let phase = storage_counters(start_metrics, end_metrics);
+    outcome.storage_counters.wal_flush_bytes = outcome
+        .storage_counters
+        .wal_flush_bytes
+        .saturating_add(phase.wal_flush_bytes);
+    outcome.storage_counters.l0_flush_bytes = outcome
+        .storage_counters
+        .l0_flush_bytes
+        .saturating_add(phase.l0_flush_bytes);
+    outcome.storage_counters.compacted_bytes = outcome
+        .storage_counters
+        .compacted_bytes
+        .saturating_add(phase.compacted_bytes);
+    outcome.storage_counters.logical_write_bytes = outcome
+        .storage_counters
+        .logical_write_bytes
+        .saturating_add(phase.logical_write_bytes);
+    outcome.storage_counters.backpressure_count = outcome
+        .storage_counters
+        .backpressure_count
+        .saturating_add(phase.backpressure_count);
+
+    for (operation, count) in store.requests {
+        let current = outcome
+            .storage
+            .object_store_requests
+            .entry(operation)
+            .or_default();
+        *current = current.saturating_add(count);
+    }
+    outcome.storage.object_store_errors = outcome
+        .storage
+        .object_store_errors
+        .saturating_add(store.errors);
+    outcome.storage.bytes_read = outcome.storage.bytes_read.saturating_add(store.bytes_read);
+    outcome.storage.bytes_written = outcome
+        .storage
+        .bytes_written
+        .saturating_add(store.bytes_written);
+
+    let phase_ns = elapsed.as_nanos().min(u64::MAX as u128) as u64;
+    let base = outcome.elapsed_ns;
+    for sample in &mut samples {
+        sample.offset_ns = sample.offset_ns.saturating_add(base);
+    }
+    outcome.timeseries.samples.extend(samples);
+    outcome.elapsed_ns = outcome.elapsed_ns.saturating_add(phase_ns);
+    outcome.resources = system::summarize_resources(&outcome.timeseries.samples);
+    outcome.storage.write_amplification = (outcome.storage_counters.logical_write_bytes > 0)
+        .then_some(
+            outcome
+                .storage_counters
+                .wal_flush_bytes
+                .saturating_add(outcome.storage_counters.l0_flush_bytes)
+                .saturating_add(outcome.storage_counters.compacted_bytes) as f64
+                / outcome.storage_counters.logical_write_bytes as f64,
+        );
+    outcome.storage.compaction_throughput_bytes_per_second =
+        (outcome.storage_counters.compacted_bytes > 0).then_some(
+            outcome.storage_counters.compacted_bytes as f64
+                / (outcome.elapsed_ns as f64 / 1e9).max(f64::EPSILON),
+        );
+    outcome.storage.compaction_backlog_bytes = gauge_value(
+        end_metrics,
+        slatedb::compactor::stats::TOTAL_BYTES_BEING_COMPACTED,
+    )
+    .map(|value| value.max(0) as u64);
+    outcome.storage.backpressure_ns =
+        (outcome.storage_counters.backpressure_count == 0).then_some(0);
+}
+
+fn ingest_windows(samples: &[crate::model::TimeseriesSample]) -> Vec<IngestWindow> {
+    const WINDOW_NS: u64 = 300_000_000_000;
+    if samples.is_empty() {
+        return Vec::new();
+    }
+    let mut windows = Vec::new();
+    let mut start_offset = 0_u64;
+    let mut start_operations = 0_u64;
+    for sample in samples.iter().skip(1) {
+        if sample.offset_ns.saturating_sub(start_offset) >= WINDOW_NS
+            || sample.offset_ns == samples[samples.len() - 1].offset_ns
+        {
+            let operations = sample.operations.saturating_sub(start_operations);
+            let seconds = sample.offset_ns.saturating_sub(start_offset) as f64 / 1e9;
+            let start = samples
+                .iter()
+                .rev()
+                .find(|candidate| candidate.offset_ns <= start_offset)
+                .unwrap_or(&samples[0]);
+            let wal = sample_counter_delta_any(
+                start,
+                sample,
+                &["slatedb.db.wal_flush_bytes", "slatedb.wal.wal_flush_bytes"],
+            );
+            let l0 = sample_counter_delta(start, sample, slatedb::db_stats::L0_FLUSH_BYTES);
+            let compacted =
+                sample_counter_delta(start, sample, slatedb::compactor::stats::BYTES_COMPACTED);
+            let logical =
+                sample_counter_delta(start, sample, slatedb::db_stats::MEMTABLE_WRITE_BYTES);
+            windows.push(IngestWindow {
+                start_offset_ns: start_offset,
+                operations,
+                ops_per_second: operations as f64 / seconds.max(f64::EPSILON),
+                compaction_backlog_bytes: sample_gauge(
+                    sample,
+                    slatedb::compactor::stats::TOTAL_BYTES_BEING_COMPACTED,
+                ),
+                write_amplification: (logical > 0).then_some(
+                    wal.saturating_add(l0).saturating_add(compacted) as f64 / logical as f64,
+                ),
+            });
+            start_offset = sample.offset_ns;
+            start_operations = sample.operations;
+        }
+    }
+    windows
+}
+
+fn sample_counter_delta(
+    start: &crate::model::TimeseriesSample,
+    end: &crate::model::TimeseriesSample,
+    name: &str,
+) -> u64 {
+    sample_counter(end, name).saturating_sub(sample_counter(start, name))
+}
+
+fn sample_counter_delta_any(
+    start: &crate::model::TimeseriesSample,
+    end: &crate::model::TimeseriesSample,
+    names: &[&str],
+) -> u64 {
+    names
+        .iter()
+        .find(|name| {
+            start
+                .slatedb_metrics
+                .iter()
+                .chain(&end.slatedb_metrics)
+                .any(|metric| metric.name == **name)
+        })
+        .map_or(0, |name| sample_counter_delta(start, end, name))
+}
+
+fn sample_counter(sample: &crate::model::TimeseriesSample, name: &str) -> u64 {
+    sample
+        .slatedb_metrics
+        .iter()
+        .filter(|metric| metric.name == name)
+        .filter_map(|metric| match &metric.value {
+            crate::model::MetricValue::Counter(value) => Some(*value),
+            _ => None,
+        })
+        .sum()
+}
+
+fn sample_gauge(sample: &crate::model::TimeseriesSample, name: &str) -> Option<u64> {
+    sample
+        .slatedb_metrics
+        .iter()
+        .filter(|metric| metric.name == name)
+        .filter_map(|metric| match &metric.value {
+            crate::model::MetricValue::Gauge(value)
+            | crate::model::MetricValue::UpDownCounter(value) => Some((*value).max(0) as u64),
+            _ => None,
+        })
+        .max()
+}
+
+fn counter_delta(start: &Metrics, end: &Metrics, name: &str) -> u64 {
+    counter_value(end, name).saturating_sub(counter_value(start, name))
+}
+
+fn counter_delta_any(start: &Metrics, end: &Metrics, names: &[&str]) -> u64 {
+    names
+        .iter()
+        .find(|name| !start.by_name(name).is_empty() || !end.by_name(name).is_empty())
+        .map_or(0, |name| counter_delta(start, end, name))
+}
+
+fn counter_value(metrics: &Metrics, name: &str) -> u64 {
+    metrics
+        .by_name(name)
+        .iter()
+        .filter_map(|metric| match metric.value {
+            SlateMetricValue::Counter(value) => Some(value),
+            _ => None,
+        })
+        .sum()
+}
+
+fn gauge_value(metrics: &Metrics, name: &str) -> Option<i64> {
+    metrics
+        .by_name(name)
+        .iter()
+        .filter_map(|metric| match metric.value {
+            SlateMetricValue::Gauge(value) | SlateMetricValue::UpDownCounter(value) => Some(value),
+            _ => None,
+        })
+        .max()
+}
+
+fn is_open_loop(kind: WorkloadKind) -> bool {
+    matches!(
+        kind,
+        WorkloadKind::OpenLoopRead | WorkloadKind::OpenLoopReadUpdate
+    )
+}
+
+fn may_write(kind: WorkloadKind) -> bool {
+    !matches!(
+        kind,
+        WorkloadKind::YcsbC
+            | WorkloadKind::RandomRead
+            | WorkloadKind::MultiRandomRead
+            | WorkloadKind::ForwardRange
+            | WorkloadKind::ReverseRange
+            | WorkloadKind::ColdRead
+            | WorkloadKind::PrefixScan
+            | WorkloadKind::OpenLoopRead
+    )
+}

@@ -1,0 +1,87 @@
+name: Benchmark release
+
+on:
+  workflow_dispatch:
+    inputs:
+      slate_ref:
+        description: SlateDB tag or commit
+        required: true
+        default: v0.14.1
+      slate_version:
+        description: Version used in result paths
+        required: true
+        default: 0.14.1
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: benchmark-release
+  cancel-in-progress: false
+
+jobs:
+  benchmark:
+    runs-on: warp-ubuntu-latest-x64-16x
+    environment: benchmark
+    env:
+      CLOUD_PROVIDER: aws
+      AWS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
+      AWS_REGION: auto
+      AWS_ENDPOINT_URL_S3: https://fly.storage.tigris.dev
+      SLATEDB_BENCH_BUCKET: ${{ secrets.TIGRIS_BUCKET }}
+      SLATEDB_BENCH_PREFIX: release/${{ inputs.slate_version }}
+      SLATEDB_BENCH_REGION: fra
+      SLATEDB_BENCH_RUNNER_TYPE: warp-ubuntu-latest-x64-16x
+      SLATEDB_VERSION: ${{ inputs.slate_version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: slatedb/slatedb
+          ref: ${{ inputs.slate_ref }}
+          path: .slatedb-source
+      - uses: dtolnay/rust-toolchain@1.89.0
+      - name: Configure selected SlateDB source
+        run: ./scripts/use-local-slatedb.sh "$GITHUB_WORKSPACE/.slatedb-source"
+      - name: Record selected commit
+        run: echo "SLATEDB_COMMIT=$(git -C .slatedb-source rev-parse HEAD)" >> "$GITHUB_ENV"
+      - name: Resolve selected SlateDB lockfile
+        run: cargo check --workspace
+      - name: Build runner
+        run: cargo build --release --locked --manifest-path runner/Cargo.toml
+      - name: Run complete suite
+        run: ./target/release/slatedb-benchmark run --output .runs/release
+      - name: Publish validated result sources
+        run: |
+          mkdir -p "results/${{ inputs.slate_version }}"
+          cp -R ".runs/release/results/${{ inputs.slate_version }}/." "results/${{ inputs.slate_version }}/"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+      - run: npm ci
+        working-directory: site
+      - run: npm run build
+        working-directory: site
+      - name: Commit published result sources
+        run: |
+          git add "results/${{ inputs.slate_version }}"
+          git config user.name "slatedb-benchmark[bot]"
+          git config user.email "slatedb-benchmark[bot]@users.noreply.github.com"
+          git commit -m "Publish SlateDB ${{ inputs.slate_version }} benchmarks"
+          git push
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site/dist
+      - uses: actions/deploy-pages@v4
+      - name: Preserve run artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-${{ inputs.slate_version }}
+          path: .runs/
+          if-no-files-found: ignore

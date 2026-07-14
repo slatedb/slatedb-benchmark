@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://benchmark.slatedb.io/schema/histograms-v1.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "encoding", "significant_digits", "histograms"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "encoding": { "const": "hdrhistogram-v2-deflate-base64" },
+    "significant_digits": { "const": 3 },
+    "histograms": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object", "additionalProperties": false,
+        "required": ["unit", "count", "min", "max", "data"],
+        "properties": {
+          "unit": { "const": "microseconds" }, "count": { "type": "integer", "minimum": 0 },
+          "min": { "type": "integer", "minimum": 0 }, "max": { "type": "integer", "minimum": 0 },
+          "data": { "type": "string", "contentEncoding": "base64" }
+        }
+      }
+    }
+  }
+}

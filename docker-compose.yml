@@ -1,0 +1,48 @@
+services:
+  minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    command: server /data --console-address :9001
+    environment:
+      MINIO_ROOT_USER: slatedb
+      MINIO_ROOT_PASSWORD: slatedb-secret
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+
+  minio-init:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        mc alias set smoke http://minio:9000 slatedb slatedb-secret &&
+        mc mb --ignore-existing smoke/slatedb-benchmarks
+
+  runner:
+    build: .
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      CLOUD_PROVIDER: aws
+      AWS_ACCESS_KEY_ID: slatedb
+      AWS_SECRET_ACCESS_KEY: slatedb-secret
+      AWS_REGION: auto
+      AWS_ENDPOINT_URL_S3: http://minio:9000
+      AWS_ALLOW_HTTP: "true"
+      AWS_VIRTUAL_HOSTED_STYLE_REQUEST: "false"
+      SLATEDB_BENCH_BUCKET: slatedb-benchmarks
+      SLATEDB_BENCH_PREFIX: docker-smoke
+      SLATEDB_BENCH_REGION: fra
+      SLATEDB_BENCH_RUNNER_TYPE: docker-smoke
+      RUST_LOG: info
+    volumes:
+      - ./.runs:/output
+    command: ["run", "--smoke", "--output", "/output/docker-smoke"]

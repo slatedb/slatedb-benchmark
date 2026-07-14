@@ -1,0 +1,164 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://benchmark.slatedb.io/schema/result-v1.json",
+  "title": "SlateDB benchmark result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "identity", "environment", "object_store_baseline", "configuration", "application", "durability", "resources", "storage", "cost", "initial_state", "source_files"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "identity": { "$ref": "#/$defs/identity" },
+    "environment": { "$ref": "#/$defs/environment" },
+    "object_store_baseline": { "$ref": "#/$defs/baseline" },
+    "configuration": { "$ref": "#/$defs/configuration" },
+    "application": { "$ref": "#/$defs/application" },
+    "durability": { "$ref": "#/$defs/durability" },
+    "resources": { "$ref": "#/$defs/resources" },
+    "storage": { "$ref": "#/$defs/storage" },
+    "cost": { "$ref": "#/$defs/cost" },
+    "initial_state": { "$ref": "#/$defs/initialState" },
+    "source_files": { "$ref": "#/$defs/sourceFiles" }
+  },
+  "$defs": {
+    "nullableNumber": { "type": ["number", "null"] },
+    "nullableInteger": { "type": ["integer", "null"], "minimum": 0 },
+    "latency": {
+      "type": "object", "additionalProperties": false,
+      "required": ["count", "p50_ns", "p95_ns", "p99_ns", "p999_ns", "max_ns"],
+      "properties": {
+        "count": { "type": "integer", "minimum": 0 }, "p50_ns": { "type": "integer", "minimum": 0 },
+        "p95_ns": { "type": "integer", "minimum": 0 }, "p99_ns": { "type": "integer", "minimum": 0 },
+        "p999_ns": { "type": "integer", "minimum": 0 }, "max_ns": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "identity": {
+      "type": "object", "additionalProperties": false,
+      "required": ["slate_version", "slate_commit", "runner_version", "runner_commit", "lockfile_sha256", "timestamp", "profile", "workload", "variant", "mode"],
+      "properties": {
+        "slate_version": { "type": "string" }, "slate_commit": { "type": "string" }, "runner_version": { "type": "string" },
+        "runner_commit": { "type": "string" }, "lockfile_sha256": { "type": "string" }, "timestamp": { "type": "string", "format": "date-time" },
+        "profile": { "enum": ["ycsb", "rocksdb", "slatedb"] }, "workload": { "type": "string" }, "variant": { "type": "string" },
+        "mode": { "enum": ["published", "smoke"] }
+      }
+    },
+    "environment": {
+      "type": "object", "additionalProperties": false,
+      "required": ["runner_type", "hostname", "cpu_model", "cpu_cores", "ram_bytes", "local_disk", "os", "kernel", "object_store", "endpoint", "region"],
+      "properties": {
+        "runner_type": { "type": "string" }, "hostname": { "type": "string" }, "cpu_model": { "type": "string" },
+        "cpu_cores": { "type": "integer", "minimum": 1 }, "ram_bytes": { "type": "integer", "minimum": 1 }, "local_disk": { "type": "string" },
+        "os": { "type": "string" }, "kernel": { "type": "string" }, "object_store": { "type": "string" },
+        "endpoint": { "type": "string" }, "region": { "type": "string" }
+      }
+    },
+    "baseline": {
+      "type": "object", "additionalProperties": false,
+      "required": ["measured_at", "put_latency", "get_latency", "upload_mib_per_second", "download_mib_per_second"],
+      "properties": {
+        "measured_at": { "type": "string", "format": "date-time" }, "put_latency": { "$ref": "#/$defs/latency" },
+        "get_latency": { "$ref": "#/$defs/latency" }, "upload_mib_per_second": { "type": "number", "minimum": 0 },
+        "download_mib_per_second": { "type": "number", "minimum": 0 }
+      }
+    },
+    "configuration": {
+      "type": "object", "additionalProperties": false,
+      "required": ["clients", "target_rate", "warmup_ns", "measurement_ns", "record_count", "key_bytes", "value_bytes", "block_cache_bytes", "metadata_cache_bytes", "sst_block_bytes", "slate_settings", "build_profile", "enabled_features"],
+      "properties": {
+        "clients": { "$ref": "#/$defs/nullableInteger" }, "target_rate": { "$ref": "#/$defs/nullableInteger" },
+        "warmup_ns": { "type": "integer", "minimum": 0 }, "measurement_ns": { "type": "integer", "minimum": 0 },
+        "record_count": { "type": "integer", "minimum": 0 }, "key_bytes": { "type": "integer", "minimum": 1 }, "value_bytes": { "type": "integer", "minimum": 1 },
+        "block_cache_bytes": { "$ref": "#/$defs/nullableInteger" }, "metadata_cache_bytes": { "$ref": "#/$defs/nullableInteger" },
+        "sst_block_bytes": { "$ref": "#/$defs/nullableInteger" }, "slate_settings": { "type": "object" },
+        "build_profile": { "type": "string" }, "enabled_features": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "application": {
+      "type": "object", "additionalProperties": false,
+      "required": ["total_operations", "successful_operations", "accepted_ops_per_second", "completed_ops_per_second", "offered_ops_per_second", "dropped_ops_per_second", "payload_mib_per_second", "errors", "return_latency", "return_latency_by_operation", "response_latency", "scheduling_delay", "batch_latency", "key_throughput_per_second", "transaction_commits", "transaction_aborts", "transaction_conflicts", "transaction_commit_rate", "transaction_abort_rate", "transaction_conflict_rate"],
+      "properties": {
+        "total_operations": { "type": "integer", "minimum": 0 }, "successful_operations": { "type": "integer", "minimum": 0 },
+        "accepted_ops_per_second": { "type": "number", "minimum": 0 }, "completed_ops_per_second": { "type": "number", "minimum": 0 },
+        "offered_ops_per_second": { "$ref": "#/$defs/nullableNumber" }, "dropped_ops_per_second": { "$ref": "#/$defs/nullableNumber" },
+        "payload_mib_per_second": { "type": "number", "minimum": 0 }, "errors": { "type": "integer", "minimum": 0 },
+        "return_latency": { "$ref": "#/$defs/latency" },
+        "return_latency_by_operation": { "type": "object", "additionalProperties": { "$ref": "#/$defs/latency" } },
+        "response_latency": { "anyOf": [{ "$ref": "#/$defs/latency" }, { "type": "null" }] },
+        "scheduling_delay": { "anyOf": [{ "$ref": "#/$defs/latency" }, { "type": "null" }] },
+        "batch_latency": { "anyOf": [{ "$ref": "#/$defs/latency" }, { "type": "null" }] },
+        "key_throughput_per_second": { "$ref": "#/$defs/nullableNumber" },
+        "transaction_commits": { "$ref": "#/$defs/nullableInteger" }, "transaction_aborts": { "$ref": "#/$defs/nullableInteger" },
+        "transaction_conflicts": { "$ref": "#/$defs/nullableInteger" },
+        "transaction_commit_rate": { "$ref": "#/$defs/nullableNumber" },
+        "transaction_abort_rate": { "$ref": "#/$defs/nullableNumber" },
+        "transaction_conflict_rate": { "$ref": "#/$defs/nullableNumber" }
+      }
+    },
+    "durability": {
+      "type": "object", "additionalProperties": false,
+      "required": ["lag", "final_flush_drain_ns", "durable_ops_per_second", "last_measured_sequence", "final_durable_sequence"],
+      "properties": {
+        "lag": { "anyOf": [{ "$ref": "#/$defs/latency" }, { "type": "null" }] },
+        "final_flush_drain_ns": { "$ref": "#/$defs/nullableInteger" }, "durable_ops_per_second": { "$ref": "#/$defs/nullableNumber" },
+        "last_measured_sequence": { "$ref": "#/$defs/nullableInteger" }, "final_durable_sequence": { "$ref": "#/$defs/nullableInteger" }
+      }
+    },
+    "resources": {
+      "type": "object", "additionalProperties": false,
+      "required": ["average_cpu_percent", "peak_cpu_percent", "peak_rss_bytes", "network_bytes_sent", "network_bytes_received", "disk_bytes_read", "disk_bytes_written", "disk_read_operations", "disk_write_operations"],
+      "properties": {
+        "average_cpu_percent": { "type": "number", "minimum": 0 }, "peak_cpu_percent": { "type": "number", "minimum": 0 },
+        "peak_rss_bytes": { "type": "integer", "minimum": 0 }, "network_bytes_sent": { "type": "integer", "minimum": 0 },
+        "network_bytes_received": { "type": "integer", "minimum": 0 }, "disk_bytes_read": { "type": "integer", "minimum": 0 },
+        "disk_bytes_written": { "type": "integer", "minimum": 0 }, "disk_read_operations": { "type": "integer", "minimum": 0 },
+        "disk_write_operations": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "storage": {
+      "type": "object", "additionalProperties": false,
+      "required": ["database_size_bytes", "object_store_requests", "object_store_errors", "bytes_read", "bytes_written", "compaction_throughput_bytes_per_second", "write_amplification", "backpressure_ns", "compaction_backlog_bytes", "five_minute_windows"],
+      "properties": {
+        "database_size_bytes": { "type": "integer", "minimum": 0 },
+        "object_store_requests": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
+        "object_store_errors": { "type": "integer", "minimum": 0 }, "bytes_read": { "type": "integer", "minimum": 0 }, "bytes_written": { "type": "integer", "minimum": 0 },
+        "compaction_throughput_bytes_per_second": { "$ref": "#/$defs/nullableNumber" }, "write_amplification": { "$ref": "#/$defs/nullableNumber" },
+        "backpressure_ns": { "$ref": "#/$defs/nullableInteger" }, "compaction_backlog_bytes": { "$ref": "#/$defs/nullableInteger" },
+        "five_minute_windows": { "type": "array", "items": { "$ref": "#/$defs/window" } }
+      }
+    },
+    "window": {
+      "type": "object", "additionalProperties": false,
+      "required": ["start_offset_ns", "operations", "ops_per_second", "compaction_backlog_bytes", "write_amplification"],
+      "properties": {
+        "start_offset_ns": { "type": "integer", "minimum": 0 }, "operations": { "type": "integer", "minimum": 0 },
+        "ops_per_second": { "type": "number", "minimum": 0 }, "compaction_backlog_bytes": { "$ref": "#/$defs/nullableInteger" },
+        "write_amplification": { "$ref": "#/$defs/nullableNumber" }
+      }
+    },
+    "cost": {
+      "type": "object", "additionalProperties": false,
+      "required": ["price_table_revision", "currency", "compute", "requests", "storage", "transfer", "total", "compute_per_million_operations", "requests_per_million_operations", "storage_per_million_operations", "transfer_per_million_operations", "total_per_million_operations"],
+      "properties": {
+        "price_table_revision": { "type": "string" }, "currency": { "type": "string" }, "compute": { "type": "number", "minimum": 0 },
+        "requests": { "type": "number", "minimum": 0 }, "storage": { "type": "number", "minimum": 0 }, "transfer": { "type": "number", "minimum": 0 },
+        "total": { "type": "number", "minimum": 0 },
+        "compute_per_million_operations": { "$ref": "#/$defs/nullableNumber" },
+        "requests_per_million_operations": { "$ref": "#/$defs/nullableNumber" },
+        "storage_per_million_operations": { "$ref": "#/$defs/nullableNumber" },
+        "transfer_per_million_operations": { "$ref": "#/$defs/nullableNumber" },
+        "total_per_million_operations": { "$ref": "#/$defs/nullableNumber" }
+      }
+    },
+    "initialState": {
+      "type": "object", "additionalProperties": false,
+      "required": ["checkpoint_id", "manifest_id", "lsm_digest_sha256"],
+      "properties": {
+        "checkpoint_id": { "type": ["string", "null"] }, "manifest_id": { "$ref": "#/$defs/nullableInteger" }, "lsm_digest_sha256": { "type": "string" }
+      }
+    },
+    "sourceFiles": {
+      "type": "object", "additionalProperties": false,
+      "required": ["histograms", "timeseries"],
+      "properties": { "histograms": { "type": "string" }, "timeseries": { "type": "string" } }
+    }
+  }
+}

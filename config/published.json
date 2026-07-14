@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "mode": "published",
+  "object_store_probe": {
+    "latency_operations": 2000,
+    "latency_object_bytes": 8192,
+    "throughput_object_bytes": 67108864,
+    "throughput_concurrency": 32,
+    "throughput_warmup_ms": 5000,
+    "throughput_measurement_ms": 30000
+  },
+  "profiles": [
+    {
+      "name": "ycsb",
+      "record_count": 100000000,
+      "key_bytes": 16,
+      "value_bytes": 1024,
+      "block_cache_bytes": 4294967296,
+      "metadata_cache_bytes": 536870912,
+      "flush_interval_ms": 100,
+      "warmup_ms": 60000,
+      "measurement_ms": 300000,
+      "compression": null,
+      "workloads": [
+        { "name": "ycsb-a", "kind": "ycsb-a", "variants": ["clients-1", "clients-16", "clients-64"] },
+        { "name": "ycsb-b", "kind": "ycsb-b", "variants": ["clients-1", "clients-16", "clients-64"] },
+        { "name": "ycsb-c", "kind": "ycsb-c", "variants": ["clients-1", "clients-16", "clients-64"] },
+        { "name": "ycsb-d", "kind": "ycsb-d", "variants": ["clients-1", "clients-16", "clients-64"] },
+        { "name": "ycsb-e", "kind": "ycsb-e", "variants": ["clients-1", "clients-16", "clients-64"] },
+        { "name": "ycsb-f", "kind": "ycsb-f", "variants": ["clients-1", "clients-16", "clients-64"] }
+      ]
+    },
+    {
+      "name": "rocksdb",
+      "record_count": 900000000,
+      "key_bytes": 20,
+      "value_bytes": 400,
+      "block_cache_bytes": 6442450944,
+      "metadata_cache_bytes": null,
+      "flush_interval_ms": 100,
+      "warmup_ms": 0,
+      "measurement_ms": 5400000,
+      "compression": "zstd",
+      "sst_block_bytes": 8192,
+      "workloads": [
+        { "name": "bulk-load", "kind": "bulk-load", "measurement_ms": 0, "variants": ["clients-1"] },
+        { "name": "random-read", "kind": "random-read", "variants": ["clients-64"] },
+        { "name": "multi-random-read", "kind": "multi-random-read", "variants": ["clients-64"] },
+        { "name": "forward-range", "kind": "forward-range", "variants": ["clients-64"] },
+        { "name": "reverse-range", "kind": "reverse-range", "variants": ["clients-64"] },
+        { "name": "overwrite", "kind": "overwrite", "await_durable": true, "variants": ["clients-64"] },
+        { "name": "read-while-writing", "kind": "read-while-writing", "await_durable": true, "variants": ["readers-64-writer-1"] },
+        { "name": "forward-range-while-writing", "kind": "forward-range-while-writing", "await_durable": true, "variants": ["readers-64-writer-1"] },
+        { "name": "reverse-range-while-writing", "kind": "reverse-range-while-writing", "await_durable": true, "variants": ["readers-64-writer-1"] }
+      ]
+    },
+    {
+      "name": "slatedb",
+      "record_count": 100000000,
+      "key_bytes": 16,
+      "value_bytes": 1024,
+      "block_cache_bytes": 4294967296,
+      "metadata_cache_bytes": 536870912,
+      "flush_interval_ms": 100,
+      "warmup_ms": 60000,
+      "measurement_ms": 300000,
+      "compression": null,
+      "workloads": [
+        { "name": "cold-read", "kind": "cold-read", "warmup_ms": 0, "variants": ["clients-1", "clients-16", "clients-64"] },
+        { "name": "sustained-ingest", "kind": "sustained-ingest", "record_count": 0, "warmup_ms": 0, "measurement_ms": 3600000, "variants": ["clients-64"] },
+        { "name": "transaction-contention", "kind": "transaction-contention", "record_count": 10000, "variants": ["clients-16", "clients-64"] },
+        { "name": "prefix-scan", "kind": "prefix-scan", "record_count": 100000000, "key_bytes": 16, "variants": ["clients-1", "clients-16", "clients-64"] },
+        { "name": "open-loop-read", "kind": "open-loop-read", "variants": ["rate-1000", "rate-5000", "rate-10000"] },
+        { "name": "open-loop-read-update", "kind": "open-loop-read-update", "variants": ["rate-1000", "rate-5000", "rate-10000"] }
+      ]
+    }
+  ]
+}
