@@ -97,6 +97,7 @@ pub struct ApplicationPerformance {
     pub accepted_ops_per_second: f64,
     pub completed_ops_per_second: f64,
     pub offered_ops_per_second: Option<f64>,
+    pub dropped_operations: Option<u64>,
     pub dropped_ops_per_second: Option<f64>,
     pub payload_mib_per_second: f64,
     pub errors: u64,

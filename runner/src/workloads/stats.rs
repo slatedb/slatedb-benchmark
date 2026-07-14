@@ -113,6 +113,7 @@ impl WorkerStats {
             accepted_ops_per_second: self.successful as f64 / seconds,
             completed_ops_per_second: self.successful as f64 / seconds,
             offered_ops_per_second: open_loop.then_some(self.offered as f64 / seconds),
+            dropped_operations: open_loop.then_some(self.dropped),
             dropped_ops_per_second: open_loop.then_some(self.dropped as f64 / seconds),
             payload_mib_per_second: self.payload_bytes as f64 / (1024.0 * 1024.0) / seconds,
             errors: self.errors,
@@ -152,5 +153,19 @@ mod tests {
         left.merge(&right).expect("merge worker stats");
 
         assert_eq!(left.backpressure_ns, 31);
+    }
+
+    #[test]
+    fn application_exposes_scheduler_drop_count() {
+        let stats = WorkerStats {
+            total: 10,
+            offered: 10,
+            dropped: 2,
+            ..Default::default()
+        };
+
+        let application = stats.application(Duration::from_secs(1), true);
+
+        assert_eq!(application.dropped_operations, Some(2));
     }
 }

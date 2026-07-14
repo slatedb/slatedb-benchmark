@@ -111,7 +111,7 @@ the runner counts arrivals that exceed the bound as dropped. It records:
 
 - response latency from scheduled arrival to completion
 - return latency from SlateDB invocation to completion
-- scheduling delay, offered ops/s, completed ops/s, and dropped ops/s
+- scheduling delay, offered ops/s, completed ops/s, and the scheduler's dropped operation count and rate
 
 The runner uses enough asynchronous workers to keep its own queue and CPU from
 limiting an otherwise healthy test. A result fails validation if the scheduler

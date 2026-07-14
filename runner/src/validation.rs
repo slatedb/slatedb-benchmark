@@ -1,5 +1,6 @@
 use crate::model::{
-    HistogramsFile, MetricSeriesValue, MetricValueType, ResultRecord, RunManifest, TimeseriesFile,
+    ApplicationPerformance, HistogramsFile, MetricSeriesValue, MetricValueType, ResultRecord,
+    RunManifest, TimeseriesFile,
 };
 use anyhow::{bail, Context, Result};
 use base64::engine::general_purpose::STANDARD;
@@ -92,20 +93,7 @@ fn validate_invariants(
         .get("return")
         .map(|histogram| histogram.count)
         .unwrap_or(0);
-    let dropped = if result.application.dropped_ops_per_second.is_some() {
-        result
-            .application
-            .total_operations
-            .saturating_sub(result.application.return_latency.count)
-    } else {
-        0
-    };
-    let expected_returns = result.application.total_operations.saturating_sub(dropped);
-    if return_count != expected_returns {
-        bail!(
-            "return histogram count {return_count} does not match returned operation count {expected_returns}"
-        );
-    }
+    let expected_returns = validate_return_histogram_count(&result.application, return_count)?;
     if result.application.return_latency.count != return_count {
         bail!("return latency summary does not match encoded histogram count");
     }
@@ -258,6 +246,33 @@ fn validate_invariants(
     Ok(())
 }
 
+fn validate_return_histogram_count(
+    application: &ApplicationPerformance,
+    return_count: u64,
+) -> Result<u64> {
+    let open_loop_fields = [
+        application.offered_ops_per_second.is_some(),
+        application.dropped_operations.is_some(),
+        application.dropped_ops_per_second.is_some(),
+    ];
+    if open_loop_fields.iter().any(|present| *present)
+        && !open_loop_fields.iter().all(|present| *present)
+    {
+        bail!("open-loop scheduler counters and rates must either all be present or all be absent");
+    }
+    let dropped = application.dropped_operations.unwrap_or(0);
+    let expected_returns = application
+        .total_operations
+        .checked_sub(dropped)
+        .context("scheduler dropped more operations than were offered")?;
+    if return_count != expected_returns {
+        bail!(
+            "return histogram count {return_count} does not match returned operation count {expected_returns}"
+        );
+    }
+    Ok(expected_returns)
+}
+
 fn validate_histogram_summary(
     histograms: &HistogramsFile,
     name: &str,
@@ -349,4 +364,27 @@ fn find_named(root: &Path, name: &str) -> Result<Vec<PathBuf>> {
         }
     }
     Ok(found)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_return_histogram_count;
+    use crate::model::ApplicationPerformance;
+
+    #[test]
+    fn open_loop_return_count_uses_scheduler_drop_count() {
+        let application = ApplicationPerformance {
+            total_operations: 10,
+            offered_ops_per_second: Some(10.0),
+            dropped_operations: Some(2),
+            dropped_ops_per_second: Some(2.0),
+            ..Default::default()
+        };
+
+        assert!(validate_return_histogram_count(&application, 7).is_err());
+        assert_eq!(
+            validate_return_histogram_count(&application, 8).expect("valid return count"),
+            8
+        );
+    }
 }
