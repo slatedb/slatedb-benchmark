@@ -16,6 +16,9 @@ apply.
   workload
 - Environment: runner type, CPU model and core count, RAM, local disk, OS and
   kernel, object store, endpoint, and region
+- Object-store baseline: direct upload and download MiB/s and p50, p95, p99,
+  p99.9, and maximum request latency from the runner to the benchmark bucket,
+  measured outside SlateDB
 - Configuration: client count, duration, record count, key and value sizes,
   cache sizes, SlateDB settings, build profile, and enabled features
 - Application performance: total operations, accepted ops/s, payload MiB/s,
