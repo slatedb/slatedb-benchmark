@@ -3,6 +3,11 @@ use rand::distr::Distribution;
 use rand::{Rng, RngCore};
 use rand_distr::Zipf;
 
+// Match YCSB's ScrambledZipfianGenerator and Utils.fnvhash64.
+const YCSB_ZIPFIAN_ITEM_COUNT: u64 = 10_000_000_000;
+const YCSB_FNV_OFFSET_BASIS_64: u64 = 0xcbf2_9ce4_8422_2325;
+const YCSB_FNV_PRIME_64: u64 = 1_099_511_628_211;
+
 pub fn key_for_id(id: u64, size: usize) -> Bytes {
     let mut key = vec![0_u8; size];
     let encoded = id.to_be_bytes();
@@ -51,7 +56,7 @@ impl KeySelector {
 
     pub fn zipfian(record_count: u64) -> Self {
         Self {
-            zipf: Zipf::new(record_count.max(1) as f64, 0.99).ok(),
+            zipf: Zipf::new(YCSB_ZIPFIAN_ITEM_COUNT as f64, 0.99).ok(),
             record_count,
         }
     }
@@ -60,11 +65,24 @@ impl KeySelector {
         if self.record_count == 0 {
             return 0;
         }
-        self.zipf
-            .as_ref()
-            .map(|zipf| zipf.sample(rng) as u64 - 1)
-            .unwrap_or_else(|| rng.random_range(0..self.record_count))
+        match &self.zipf {
+            Some(zipf) => {
+                let rank = (zipf.sample(rng) as u64).saturating_sub(1);
+                ycsb_scramble(rank) % self.record_count
+            }
+            None => rng.random_range(0..self.record_count),
+        }
     }
+}
+
+fn ycsb_scramble(mut value: u64) -> u64 {
+    let mut hash = YCSB_FNV_OFFSET_BASIS_64;
+    for _ in 0..8 {
+        hash ^= value & 0xff;
+        value >>= 8;
+        hash = hash.wrapping_mul(YCSB_FNV_PRIME_64);
+    }
+    (hash as i64).wrapping_abs() as u64
 }
 
 pub fn choose_coprime_multiplier(record_count: u64, rng: &mut impl Rng) -> u64 {
@@ -90,7 +108,8 @@ fn gcd(mut left: u64, mut right: u64) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{key_for_id, prefix_key, random_unique_key};
+    use super::{key_for_id, prefix_key, random_unique_key, ycsb_scramble, KeySelector};
+    use rand::SeedableRng;
     use std::collections::BTreeSet;
 
     #[test]
@@ -114,5 +133,37 @@ mod tests {
             .map(|id| random_unique_key(id, 16, &mut rng))
             .collect::<BTreeSet<_>>();
         assert_eq!(keys.len(), 1_000);
+    }
+
+    #[test]
+    fn ycsb_scramble_matches_reference_fnv_hashes() {
+        assert_eq!(ycsb_scramble(0), 6_284_781_860_667_377_211);
+        assert_eq!(ycsb_scramble(1), 8_517_097_267_634_966_620);
+        assert_eq!(ycsb_scramble(2), 1_820_151_046_732_198_393);
+        assert_eq!(ycsb_scramble(9_999_999_999), 3_605_131_173_811_637_474);
+    }
+
+    #[test]
+    fn hottest_ycsb_ranks_are_scattered_across_loaded_keys() {
+        let record_count = 100_000_000;
+        let ids = (0..5)
+            .map(|rank| ycsb_scramble(rank) % record_count)
+            .collect::<Vec<_>>();
+        let first = *ids.iter().min().expect("hot key");
+        let last = *ids.iter().max().expect("hot key");
+
+        assert_eq!(
+            ids,
+            [67_377_211, 34_966_620, 32_198_393, 99_787_802, 71_816_769]
+        );
+        assert!(last - first > 50_000_000);
+    }
+
+    #[test]
+    fn scrambled_zipfian_samples_stay_within_loaded_keyspace() {
+        let selector = KeySelector::zipfian(1_000);
+        let mut rng = rand::rngs::StdRng::seed_from_u64(7);
+
+        assert!((0..10_000).all(|_| selector.sample(&mut rng) < 1_000));
     }
 }
