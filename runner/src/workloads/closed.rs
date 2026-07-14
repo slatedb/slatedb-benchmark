@@ -11,7 +11,7 @@ use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 use slatedb::config::{PutOptions, ScanOptions, WriteOptions};
-use slatedb::{Db, IsolationLevel, IterationOrder, WriteHandle};
+use slatedb::{Db, ErrorKind, IsolationLevel, IterationOrder, WriteHandle};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -514,7 +514,7 @@ async fn transaction(
             write_handle: handle,
             transaction_commit: true,
         }),
-        Err(error) if error.to_string().to_ascii_lowercase().contains("conflict") => {
+        Err(error) if error.kind() == ErrorKind::Transaction => {
             Err(OperationError::TransactionConflict)
         }
         Err(error) => Err(OperationError::Other(error.into())),
