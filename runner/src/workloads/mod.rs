@@ -7,8 +7,8 @@ mod util;
 use crate::config::{VariantConfig, WorkloadKind};
 use crate::instrumented_store::{StoreMetrics, StoreSnapshot};
 use crate::model::{
-    ApplicationPerformance, DurabilityPerformance, HistogramsFile, IngestWindow, ResourceUse,
-    StoragePerformance, TimeseriesFile,
+    ApplicationPerformance, DurabilityPerformance, HistogramsFile, IngestWindow, MetricSeriesValue,
+    MetricValueType, ResourceUse, StoragePerformance, TimeseriesFile,
 };
 use crate::system::{self, ApplicationCounters};
 use anyhow::{Context, Result};
@@ -167,16 +167,17 @@ pub async fn execute_variant(
     let store_delta = end_store.difference(&start_store);
     let end_slate = slate_metrics.snapshot();
     let storage_counters = storage_counters(&start_slate, &end_slate);
+    let timeseries = system::compact_timeseries(samples)?;
     let mut storage = storage_summary(
         &storage_counters,
         &store_delta,
         &end_slate,
         total_elapsed,
-        &samples,
+        &timeseries,
         variant.workload.kind,
     );
     storage.database_size_bytes = 0;
-    let resources = system::summarize_resources(&samples);
+    let resources = system::summarize_resources(&timeseries.samples);
     let open_loop = is_open_loop(variant.workload.kind);
     let mut application = stats.application(measurement_elapsed, open_loop);
     if open_loop {
@@ -190,11 +191,7 @@ pub async fn execute_variant(
         resources,
         storage,
         histograms: stats.histograms.to_file()?,
-        timeseries: TimeseriesFile {
-            schema_version: 1,
-            interval_ns: 1_000_000_000,
-            samples,
-        },
+        timeseries,
         elapsed_ns: total_elapsed.as_nanos().min(u64::MAX as u128) as u64,
         storage_counters,
     })
@@ -205,7 +202,7 @@ fn storage_summary(
     store: &StoreSnapshot,
     end_metrics: &Metrics,
     elapsed: Duration,
-    samples: &[crate::model::TimeseriesSample],
+    timeseries: &TimeseriesFile,
     kind: WorkloadKind,
 ) -> StoragePerformance {
     let write_amplification = (counters.logical_write_bytes > 0).then_some(
@@ -232,7 +229,7 @@ fn storage_summary(
         backpressure_ns: (counters.backpressure_count == 0).then_some(0),
         compaction_backlog_bytes: backlog,
         five_minute_windows: if kind == WorkloadKind::SustainedIngest {
-            ingest_windows(samples)
+            ingest_windows(timeseries)
         } else {
             Vec::new()
         },
@@ -260,7 +257,7 @@ pub fn extend_with_compaction_phase(
     start_metrics: &Metrics,
     end_metrics: &Metrics,
     elapsed: Duration,
-) {
+) -> Result<()> {
     let phase = storage_counters(start_metrics, end_metrics);
     outcome.storage_counters.wal_flush_bytes = outcome
         .storage_counters
@@ -306,7 +303,8 @@ pub fn extend_with_compaction_phase(
     for sample in &mut samples {
         sample.offset_ns = sample.offset_ns.saturating_add(base);
     }
-    outcome.timeseries.samples.extend(samples);
+    let phase_timeseries = system::compact_timeseries(samples)?;
+    system::append_timeseries(&mut outcome.timeseries, phase_timeseries)?;
     outcome.elapsed_ns = outcome.elapsed_ns.saturating_add(phase_ns);
     outcome.resources = system::summarize_resources(&outcome.timeseries.samples);
     outcome.storage.write_amplification = (outcome.storage_counters.logical_write_bytes > 0)
@@ -330,43 +328,62 @@ pub fn extend_with_compaction_phase(
     .map(|value| value.max(0) as u64);
     outcome.storage.backpressure_ns =
         (outcome.storage_counters.backpressure_count == 0).then_some(0);
+    Ok(())
 }
 
-fn ingest_windows(samples: &[crate::model::TimeseriesSample]) -> Vec<IngestWindow> {
+fn ingest_windows(timeseries: &TimeseriesFile) -> Vec<IngestWindow> {
     const WINDOW_NS: u64 = 300_000_000_000;
+    let samples = &timeseries.samples;
     if samples.is_empty() {
         return Vec::new();
     }
     let mut windows = Vec::new();
     let mut start_offset = 0_u64;
     let mut start_operations = 0_u64;
-    for sample in samples.iter().skip(1) {
+    for (sample_index, sample) in samples.iter().enumerate().skip(1) {
         if sample.offset_ns.saturating_sub(start_offset) >= WINDOW_NS
             || sample.offset_ns == samples[samples.len() - 1].offset_ns
         {
             let operations = sample.operations.saturating_sub(start_operations);
             let seconds = sample.offset_ns.saturating_sub(start_offset) as f64 / 1e9;
-            let start = samples
+            let start_index = samples
                 .iter()
+                .enumerate()
                 .rev()
-                .find(|candidate| candidate.offset_ns <= start_offset)
-                .unwrap_or(&samples[0]);
+                .find(|(_, candidate)| candidate.offset_ns <= start_offset)
+                .map(|(index, _)| index)
+                .unwrap_or(0);
             let wal = sample_counter_delta_any(
-                start,
-                sample,
+                timeseries,
+                start_index,
+                sample_index,
                 &["slatedb.db.wal_flush_bytes", "slatedb.wal.wal_flush_bytes"],
             );
-            let l0 = sample_counter_delta(start, sample, slatedb::db_stats::L0_FLUSH_BYTES);
-            let compacted =
-                sample_counter_delta(start, sample, slatedb::compactor::stats::BYTES_COMPACTED);
-            let logical =
-                sample_counter_delta(start, sample, slatedb::db_stats::MEMTABLE_WRITE_BYTES);
+            let l0 = sample_counter_delta(
+                timeseries,
+                start_index,
+                sample_index,
+                slatedb::db_stats::L0_FLUSH_BYTES,
+            );
+            let compacted = sample_counter_delta(
+                timeseries,
+                start_index,
+                sample_index,
+                slatedb::compactor::stats::BYTES_COMPACTED,
+            );
+            let logical = sample_counter_delta(
+                timeseries,
+                start_index,
+                sample_index,
+                slatedb::db_stats::MEMTABLE_WRITE_BYTES,
+            );
             windows.push(IngestWindow {
                 start_offset_ns: start_offset,
                 operations,
                 ops_per_second: operations as f64 / seconds.max(f64::EPSILON),
                 compaction_backlog_bytes: sample_gauge(
-                    sample,
+                    timeseries,
+                    sample_index,
                     slatedb::compactor::stats::TOTAL_BYTES_BEING_COMPACTED,
                 ),
                 write_amplification: (logical > 0).then_some(
@@ -380,53 +397,61 @@ fn ingest_windows(samples: &[crate::model::TimeseriesSample]) -> Vec<IngestWindo
     windows
 }
 
-fn sample_counter_delta(
-    start: &crate::model::TimeseriesSample,
-    end: &crate::model::TimeseriesSample,
-    name: &str,
-) -> u64 {
-    sample_counter(end, name).saturating_sub(sample_counter(start, name))
+fn sample_counter_delta(timeseries: &TimeseriesFile, start: usize, end: usize, name: &str) -> u64 {
+    sample_counter(timeseries, end, name).saturating_sub(sample_counter(timeseries, start, name))
 }
 
 fn sample_counter_delta_any(
-    start: &crate::model::TimeseriesSample,
-    end: &crate::model::TimeseriesSample,
+    timeseries: &TimeseriesFile,
+    start: usize,
+    end: usize,
     names: &[&str],
 ) -> u64 {
     names
         .iter()
         .find(|name| {
-            start
+            timeseries
                 .slatedb_metrics
                 .iter()
-                .chain(&end.slatedb_metrics)
                 .any(|metric| metric.name == **name)
         })
-        .map_or(0, |name| sample_counter_delta(start, end, name))
+        .map_or(0, |name| sample_counter_delta(timeseries, start, end, name))
 }
 
-fn sample_counter(sample: &crate::model::TimeseriesSample, name: &str) -> u64 {
-    sample
+fn sample_counter(timeseries: &TimeseriesFile, sample: usize, name: &str) -> u64 {
+    timeseries
         .slatedb_metrics
         .iter()
-        .filter(|metric| metric.name == name)
-        .filter_map(|metric| match &metric.value {
-            crate::model::MetricValue::Counter(value) => Some(*value),
-            _ => None,
-        })
+        .filter(|metric| metric.name == name && metric.value_type == MetricValueType::Counter)
+        .filter_map(
+            |metric| match metric.values.get(sample).and_then(Option::as_ref) {
+                Some(MetricSeriesValue::Scalar(value)) => value.as_u64(),
+                _ => None,
+            },
+        )
         .sum()
 }
 
-fn sample_gauge(sample: &crate::model::TimeseriesSample, name: &str) -> Option<u64> {
-    sample
+fn sample_gauge(timeseries: &TimeseriesFile, sample: usize, name: &str) -> Option<u64> {
+    timeseries
         .slatedb_metrics
         .iter()
-        .filter(|metric| metric.name == name)
-        .filter_map(|metric| match &metric.value {
-            crate::model::MetricValue::Gauge(value)
-            | crate::model::MetricValue::UpDownCounter(value) => Some((*value).max(0) as u64),
-            _ => None,
+        .filter(|metric| {
+            metric.name == name
+                && matches!(
+                    metric.value_type,
+                    MetricValueType::Gauge | MetricValueType::UpDownCounter
+                )
         })
+        .filter_map(
+            |metric| match metric.values.get(sample).and_then(Option::as_ref) {
+                Some(MetricSeriesValue::Scalar(value)) => value
+                    .as_i64()
+                    .map(|value| value.max(0) as u64)
+                    .or_else(|| value.as_u64()),
+                _ => None,
+            },
+        )
         .max()
 }
 

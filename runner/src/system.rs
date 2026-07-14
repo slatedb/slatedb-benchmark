@@ -1,5 +1,9 @@
 use crate::instrumented_store::{StoreMetrics, StoreSnapshot};
-use crate::model::{Environment, MetricSnapshot, MetricValue, ResourceUse, TimeseriesSample};
+use crate::model::{
+    Environment, MetricHistogramValue, MetricSeries, MetricSeriesValue, MetricSnapshot,
+    MetricValue, MetricValueType, ResourceUse, TimeseriesFile, TimeseriesSample,
+};
+use anyhow::{bail, ensure, Result};
 use object_store::path::Path;
 use slatedb_common::metrics::{DefaultMetricsRecorder, MetricValue as SlateMetricValue};
 use std::collections::BTreeMap;
@@ -130,6 +134,100 @@ pub async fn sample_until_stopped(
         }
     }
     samples
+}
+
+pub fn compact_timeseries(mut samples: Vec<TimeseriesSample>) -> Result<TimeseriesFile> {
+    let mut series = Vec::<MetricSeries>::new();
+    for (sample_index, sample) in samples.iter_mut().enumerate() {
+        for metric_series in &mut series {
+            metric_series.values.push(None);
+        }
+        for metric in std::mem::take(&mut sample.slatedb_metrics) {
+            let (value_type, boundaries, value) = compact_metric_value(metric.value);
+            if let Some(existing) = series
+                .iter_mut()
+                .find(|existing| existing.name == metric.name && existing.labels == metric.labels)
+            {
+                ensure_metric_definition(existing, &metric.description, value_type, &boundaries)?;
+                if existing.values[sample_index].is_some() {
+                    bail!(
+                        "duplicate SlateDB metric {} with labels {:?}",
+                        metric.name,
+                        metric.labels
+                    );
+                }
+                existing.values[sample_index] = Some(value);
+            } else {
+                let mut values = vec![None; sample_index + 1];
+                values[sample_index] = Some(value);
+                series.push(MetricSeries {
+                    name: metric.name,
+                    description: metric.description,
+                    labels: metric.labels,
+                    value_type,
+                    boundaries,
+                    values,
+                });
+            }
+        }
+    }
+    Ok(TimeseriesFile {
+        schema_version: 1,
+        interval_ns: 1_000_000_000,
+        samples,
+        slatedb_metrics: series,
+    })
+}
+
+pub fn append_timeseries(target: &mut TimeseriesFile, mut phase: TimeseriesFile) -> Result<()> {
+    ensure!(
+        target.schema_version == phase.schema_version,
+        "cannot append time series with different schema versions"
+    );
+    ensure!(
+        target.interval_ns == phase.interval_ns,
+        "cannot append time series with different intervals"
+    );
+    let existing_samples = target.samples.len();
+    let phase_samples = phase.samples.len();
+    for metric_series in &mut target.slatedb_metrics {
+        ensure!(
+            metric_series.values.len() == existing_samples,
+            "SlateDB metric series length does not match existing sample count"
+        );
+        metric_series
+            .values
+            .resize(existing_samples.saturating_add(phase_samples), None);
+    }
+    for phase_series in phase.slatedb_metrics {
+        if let Some(existing) = target.slatedb_metrics.iter_mut().find(|existing| {
+            existing.name == phase_series.name && existing.labels == phase_series.labels
+        }) {
+            ensure_metric_definition(
+                existing,
+                &phase_series.description,
+                phase_series.value_type,
+                &phase_series.boundaries,
+            )?;
+            ensure!(
+                phase_series.values.len() == phase_samples,
+                "SlateDB metric series length does not match phase sample count"
+            );
+            existing.values[existing_samples..].clone_from_slice(&phase_series.values);
+        } else {
+            let mut phase_series = phase_series;
+            ensure!(
+                phase_series.values.len() == phase_samples,
+                "SlateDB metric series length does not match phase sample count"
+            );
+            let mut values = vec![None; existing_samples];
+            values.append(&mut phase_series.values);
+            phase_series.values = values;
+            target.slatedb_metrics.push(phase_series);
+        }
+    }
+    target.samples.append(&mut phase.samples);
+    Ok(())
 }
 
 pub fn summarize_resources(samples: &[TimeseriesSample]) -> ResourceUse {
@@ -296,10 +394,203 @@ fn convert_metric(metric: &slatedb_common::metrics::Metric) -> MetricSnapshot {
     }
 }
 
+fn compact_metric_value(
+    value: MetricValue,
+) -> (MetricValueType, Option<Vec<f64>>, MetricSeriesValue) {
+    match value {
+        MetricValue::Counter(value) => (
+            MetricValueType::Counter,
+            None,
+            MetricSeriesValue::Scalar(value.into()),
+        ),
+        MetricValue::Gauge(value) => (
+            MetricValueType::Gauge,
+            None,
+            MetricSeriesValue::Scalar(value.into()),
+        ),
+        MetricValue::UpDownCounter(value) => (
+            MetricValueType::UpDownCounter,
+            None,
+            MetricSeriesValue::Scalar(value.into()),
+        ),
+        MetricValue::Histogram {
+            count,
+            sum,
+            min,
+            max,
+            boundaries,
+            bucket_counts,
+        } => (
+            MetricValueType::Histogram,
+            Some(boundaries),
+            MetricSeriesValue::Histogram(MetricHistogramValue {
+                count,
+                sum,
+                min,
+                max,
+                bucket_counts,
+            }),
+        ),
+    }
+}
+
+fn ensure_metric_definition(
+    series: &MetricSeries,
+    description: &str,
+    value_type: MetricValueType,
+    boundaries: &Option<Vec<f64>>,
+) -> Result<()> {
+    ensure!(
+        series.description == description
+            && series.value_type == value_type
+            && series.boundaries == *boundaries,
+        "SlateDB metric {} changed its definition during sampling",
+        series.name
+    );
+    Ok(())
+}
+
 fn finite_or_zero(value: f64) -> f64 {
     if value.is_finite() {
         value
     } else {
         0.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{append_timeseries, compact_timeseries};
+    use crate::model::{
+        MetricSnapshot, MetricValue, MetricValueType, TimeseriesFile, TimeseriesSample,
+    };
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn compacts_and_appends_metric_series_by_identity() {
+        let mut first = compact_timeseries(vec![
+            sample(0, vec![counter("writes", 1)]),
+            sample(1, vec![counter("writes", 2)]),
+        ])
+        .expect("first phase");
+        let second = compact_timeseries(vec![
+            sample(2, vec![counter("writes", 3), gauge("queue", 7)]),
+            sample(3, vec![counter("writes", 4), gauge("queue", 5)]),
+        ])
+        .expect("second phase");
+
+        append_timeseries(&mut first, second).expect("append phase");
+
+        assert_eq!(first.samples.len(), 4);
+        assert_eq!(first.slatedb_metrics.len(), 2);
+        let writes = series(&first, "writes");
+        assert_eq!(writes.values.len(), 4);
+        assert!(writes.values.iter().all(Option::is_some));
+        let queue = series(&first, "queue");
+        assert_eq!(queue.value_type, MetricValueType::Gauge);
+        assert_eq!(queue.values.len(), 4);
+        assert!(queue.values[..2].iter().all(Option::is_none));
+        assert!(queue.values[2..].iter().all(Option::is_some));
+
+        let encoded = serde_json::to_vec(&first).expect("serialize time series");
+        let decoded: TimeseriesFile =
+            serde_json::from_slice(&encoded).expect("deserialize time series");
+        assert_eq!(decoded.samples.len(), 4);
+        assert_eq!(decoded.slatedb_metrics.len(), 2);
+        let value = serde_json::to_value(&decoded).expect("time series value");
+        assert!(value["samples"]
+            .as_array()
+            .expect("samples")
+            .iter()
+            .all(|sample| sample.get("slatedb_metrics").is_none()));
+    }
+
+    #[test]
+    fn ninety_minute_columnar_metrics_fit_below_github_limit() {
+        let mut metrics = Vec::new();
+        for index in 0..95 {
+            metrics.push(counter(&format!("counter-{index}"), index));
+        }
+        for index in 0..9 {
+            metrics.push(gauge(&format!("gauge-{index}"), index as i64));
+        }
+        metrics.push(MetricSnapshot {
+            name: "running-compactions".to_string(),
+            description: "A representative up/down counter description".to_string(),
+            labels: BTreeMap::from([("worker".to_string(), "local".to_string())]),
+            value: MetricValue::UpDownCounter(1),
+        });
+        for index in 0..20 {
+            metrics.push(histogram(&format!("histogram-{index}")));
+        }
+        let mut timeseries = compact_timeseries(vec![
+            sample(0, metrics.clone()),
+            sample(1_000_000_000, metrics),
+        ])
+        .expect("compact representative metrics");
+        let sample = timeseries.samples[1].clone();
+        timeseries.samples.resize(5_402, sample);
+        for metric in &mut timeseries.slatedb_metrics {
+            let value = metric.values[1].clone();
+            metric.values.resize(5_402, value);
+        }
+
+        let encoded = serde_json::to_vec(&timeseries).expect("serialize projected time series");
+        assert!(encoded.len() < 100 * 1024 * 1024);
+        let text = std::str::from_utf8(&encoded).expect("JSON is UTF-8");
+        assert_eq!(
+            text.matches("\"description\"").count(),
+            timeseries.slatedb_metrics.len()
+        );
+    }
+
+    fn sample(offset_ns: u64, slatedb_metrics: Vec<MetricSnapshot>) -> TimeseriesSample {
+        TimeseriesSample {
+            offset_ns,
+            slatedb_metrics,
+            ..Default::default()
+        }
+    }
+
+    fn counter(name: &str, value: u64) -> MetricSnapshot {
+        MetricSnapshot {
+            name: name.to_string(),
+            description: "A representative counter description".to_string(),
+            labels: BTreeMap::new(),
+            value: MetricValue::Counter(value),
+        }
+    }
+
+    fn gauge(name: &str, value: i64) -> MetricSnapshot {
+        MetricSnapshot {
+            name: name.to_string(),
+            description: "A representative gauge description".to_string(),
+            labels: BTreeMap::new(),
+            value: MetricValue::Gauge(value),
+        }
+    }
+
+    fn histogram(name: &str) -> MetricSnapshot {
+        MetricSnapshot {
+            name: name.to_string(),
+            description: "A representative histogram description".to_string(),
+            labels: BTreeMap::new(),
+            value: MetricValue::Histogram {
+                count: 1_000,
+                sum: 50_000.0,
+                min: 1.0,
+                max: 100.0,
+                boundaries: (0..12).map(|value| value as f64 * 10.0).collect(),
+                bucket_counts: vec![77; 13],
+            },
+        }
+    }
+
+    fn series<'a>(timeseries: &'a TimeseriesFile, name: &str) -> &'a crate::model::MetricSeries {
+        timeseries
+            .slatedb_metrics
+            .iter()
+            .find(|metric| metric.name == name)
+            .expect("metric series")
     }
 }

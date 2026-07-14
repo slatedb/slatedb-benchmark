@@ -545,7 +545,7 @@ async fn run_rocks_profile(
             &start_slate,
             &end_slate,
             elapsed,
-        );
+        )?;
     }
     let compacted_size = prefix_size(Arc::clone(&store), &path).await?;
     let mut paths = Vec::new();
@@ -701,7 +701,7 @@ fn write_variant_result(
     validate_result(&result, &histograms, &outcome.timeseries, &args.schema_dir)?;
     write_json(&directory.join("result.json"), &result)?;
     write_json(&directory.join("histograms.json"), &histograms)?;
-    write_json(&directory.join("timeseries.json"), &outcome.timeseries)?;
+    write_compact_json(&directory.join("timeseries.json"), &outcome.timeseries)?;
     Ok(relative_directory.join("result.json").display().to_string())
 }
 
@@ -862,6 +862,11 @@ fn write_json(path: &FsPath, value: &impl Serialize) -> Result<()> {
         .with_context(|| format!("writing {}", path.display()))
 }
 
+fn write_compact_json(path: &FsPath, value: &impl Serialize) -> Result<()> {
+    fs::write(path, serde_json::to_vec(value)?)
+        .with_context(|| format!("writing {}", path.display()))
+}
+
 fn average_database_bytes(
     timeseries: &crate::model::TimeseriesFile,
     elapsed_ns: u64,
@@ -896,6 +901,7 @@ mod tests {
         let timeseries = TimeseriesFile {
             schema_version: 1,
             interval_ns: 1_000_000_000,
+            slatedb_metrics: Vec::new(),
             samples: vec![
                 TimeseriesSample {
                     offset_ns: 0,

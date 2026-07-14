@@ -25,6 +25,36 @@ for (const relative of run.results) {
   for (const required of ['result.json', 'histograms.json', 'timeseries.json']) {
     if (!files.includes(required)) throw new Error(`${directory} is missing ${required}`);
   }
+  const timeseries = JSON.parse(await readFile(path.join(directory, 'timeseries.json'), 'utf8'));
+  if (!Array.isArray(timeseries.slatedb_metrics)) {
+    throw new Error(`${directory} does not contain columnar SlateDB metrics`);
+  }
+  if (timeseries.samples.some((sample) => Object.hasOwn(sample, 'slatedb_metrics'))) {
+    throw new Error(`${directory} repeats SlateDB metric metadata in each sample`);
+  }
+  for (const metric of timeseries.slatedb_metrics) {
+    if (metric.values.length !== timeseries.samples.length) {
+      throw new Error(`${directory} metric ${metric.name} is not aligned with its samples`);
+    }
+  }
+  const fixed = {
+    ...timeseries,
+    samples: [],
+    slatedb_metrics: timeseries.slatedb_metrics.map((metric) => ({ ...metric, values: [] })),
+  };
+  const bytes = (value) => Buffer.byteLength(JSON.stringify(value));
+  const hostSampleBytes = Math.max(...timeseries.samples.map(bytes));
+  const metricValueBytes = timeseries.slatedb_metrics.reduce(
+    (total, metric) => total + Math.max(...metric.values.map(bytes)) + 1,
+    0,
+  );
+  const projectedNinetyMinuteBytes =
+    bytes(fixed) + 5_402 * (hostSampleBytes + metricValueBytes + 1);
+  if (projectedNinetyMinuteBytes >= 90 * 1024 * 1024) {
+    throw new Error(
+      `${directory} projects to ${(projectedNinetyMinuteBytes / 1024 / 1024).toFixed(1)} MiB for 90 minutes`,
+    );
+  }
 }
 if (expected.size) throw new Error(`missing smoke variants: ${[...expected].join(', ')}`);
 console.log(`verified ${catalog.length} Docker smoke variants`);

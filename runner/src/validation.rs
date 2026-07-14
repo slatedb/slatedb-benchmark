@@ -1,4 +1,6 @@
-use crate::model::{HistogramsFile, ResultRecord, RunManifest, TimeseriesFile};
+use crate::model::{
+    HistogramsFile, MetricSeriesValue, MetricValueType, ResultRecord, RunManifest, TimeseriesFile,
+};
 use anyhow::{bail, Context, Result};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
@@ -163,6 +165,59 @@ fn validate_invariants(
     }
     if timeseries.samples.len() < 2 {
         bail!("resource samples do not span the measurement window");
+    }
+    let mut metric_identities = BTreeSet::new();
+    for metric in &timeseries.slatedb_metrics {
+        if !metric_identities.insert((metric.name.as_str(), serde_json::to_string(&metric.labels)?))
+        {
+            bail!("duplicate SlateDB metric series {}", metric.name);
+        }
+        if metric.values.len() != timeseries.samples.len() {
+            bail!(
+                "SlateDB metric {} has {} values for {} samples",
+                metric.name,
+                metric.values.len(),
+                timeseries.samples.len()
+            );
+        }
+        match metric.value_type {
+            MetricValueType::Histogram => {
+                let boundaries = metric
+                    .boundaries
+                    .as_ref()
+                    .context("histogram metric has no bucket boundaries")?;
+                for value in metric.values.iter().flatten() {
+                    let MetricSeriesValue::Histogram(value) = value else {
+                        bail!("histogram metric {} contains a scalar value", metric.name);
+                    };
+                    if value.bucket_counts.len() != boundaries.len().saturating_add(1) {
+                        bail!(
+                            "histogram metric {} has the wrong number of bucket counts",
+                            metric.name
+                        );
+                    }
+                }
+            }
+            MetricValueType::Counter | MetricValueType::Gauge | MetricValueType::UpDownCounter => {
+                if metric.boundaries.is_some() {
+                    bail!("scalar metric {} has histogram boundaries", metric.name);
+                }
+                for value in metric.values.iter().flatten() {
+                    let MetricSeriesValue::Scalar(value) = value else {
+                        bail!("scalar metric {} contains a histogram value", metric.name);
+                    };
+                    if metric.value_type == MetricValueType::Counter && value.as_u64().is_none() {
+                        bail!("counter metric {} contains a negative value", metric.name);
+                    }
+                    if metric.value_type != MetricValueType::Counter
+                        && value.as_i64().is_none()
+                        && value.as_u64().is_none()
+                    {
+                        bail!("scalar metric {} contains a non-integer value", metric.name);
+                    }
+                }
+            }
+        }
     }
     let last_offset = timeseries
         .samples

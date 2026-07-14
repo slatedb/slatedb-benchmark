@@ -216,7 +216,11 @@ SlateDB metrics supply DB activity, WAL and L0 flush bytes, L0 stalls,
 backpressure, compaction, and internal object-store request counts, errors, and
 latency. A runner-side wrapper adds transferred byte counts, which SlateDB does
 not currently expose. A host sampler collects CPU, RSS, network, and local disk
-statistics.
+statistics. Time-series JSON stores host samples as rows and SlateDB metrics as
+columnar series: metric names, descriptions, labels, types, and histogram
+boundaries appear once, while an aligned value array carries each one-second
+snapshot. A `null` value means that a dynamically registered metric was absent
+from that sample.
 
 Each variant produces one self-contained JSON summary plus its encoded
 histograms and time series:

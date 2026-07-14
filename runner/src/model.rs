@@ -220,6 +220,7 @@ pub struct TimeseriesFile {
     pub schema_version: u32,
     pub interval_ns: u64,
     pub samples: Vec<TimeseriesSample>,
+    pub slatedb_metrics: Vec<MetricSeries>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -239,7 +240,43 @@ pub struct TimeseriesSample {
     pub object_store_requests: BTreeMap<String, u64>,
     pub object_store_bytes_read: u64,
     pub object_store_bytes_written: u64,
+    #[serde(skip)]
     pub slatedb_metrics: Vec<MetricSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetricSeries {
+    pub name: String,
+    pub description: String,
+    pub labels: BTreeMap<String, String>,
+    pub value_type: MetricValueType,
+    pub boundaries: Option<Vec<f64>>,
+    pub values: Vec<Option<MetricSeriesValue>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MetricValueType {
+    Counter,
+    Gauge,
+    UpDownCounter,
+    Histogram,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum MetricSeriesValue {
+    Scalar(serde_json::Number),
+    Histogram(MetricHistogramValue),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetricHistogramValue {
+    pub count: u64,
+    pub sum: f64,
+    pub min: f64,
+    pub max: f64,
+    pub bucket_counts: Vec<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

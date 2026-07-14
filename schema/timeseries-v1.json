@@ -3,7 +3,7 @@
   "$id": "https://benchmark.slatedb.io/schema/timeseries-v1.json",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "interval_ns", "samples"],
+  "required": ["schema_version", "interval_ns", "samples", "slatedb_metrics"],
   "properties": {
     "schema_version": { "const": 1 },
     "interval_ns": { "const": 1000000000 },
@@ -11,7 +11,7 @@
       "type": "array", "minItems": 2,
       "items": {
         "type": "object", "additionalProperties": false,
-        "required": ["offset_ns", "operations", "errors", "cpu_percent", "rss_bytes", "network_bytes_sent", "network_bytes_received", "disk_bytes_read", "disk_bytes_written", "disk_read_operations", "disk_write_operations", "database_size_bytes", "object_store_requests", "object_store_bytes_read", "object_store_bytes_written", "slatedb_metrics"],
+        "required": ["offset_ns", "operations", "errors", "cpu_percent", "rss_bytes", "network_bytes_sent", "network_bytes_received", "disk_bytes_read", "disk_bytes_written", "disk_read_operations", "disk_write_operations", "database_size_bytes", "object_store_requests", "object_store_bytes_read", "object_store_bytes_written"],
         "properties": {
           "offset_ns": { "type": "integer", "minimum": 0 }, "operations": { "type": "integer", "minimum": 0 }, "errors": { "type": "integer", "minimum": 0 },
           "cpu_percent": { "type": "number", "minimum": 0 }, "rss_bytes": { "type": "integer", "minimum": 0 },
@@ -20,20 +20,45 @@
           "disk_read_operations": { "type": "integer", "minimum": 0 }, "disk_write_operations": { "type": "integer", "minimum": 0 },
           "database_size_bytes": { "type": "integer", "minimum": 0 },
           "object_store_requests": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
-          "object_store_bytes_read": { "type": "integer", "minimum": 0 }, "object_store_bytes_written": { "type": "integer", "minimum": 0 },
-          "slatedb_metrics": { "type": "array", "items": { "$ref": "#/$defs/metric" } }
+          "object_store_bytes_read": { "type": "integer", "minimum": 0 }, "object_store_bytes_written": { "type": "integer", "minimum": 0 }
         }
       }
-    }
+    },
+    "slatedb_metrics": { "type": "array", "items": { "$ref": "#/$defs/metricSeries" } }
   },
   "$defs": {
-    "metric": {
+    "metricSeries": {
       "type": "object", "additionalProperties": false,
-      "required": ["name", "description", "labels", "value"],
+      "required": ["name", "description", "labels", "value_type", "boundaries", "values"],
       "properties": {
         "name": { "type": "string" }, "description": { "type": "string" },
         "labels": { "type": "object", "additionalProperties": { "type": "string" } },
-        "value": { "type": "object", "required": ["type", "value"], "properties": { "type": { "type": "string" }, "value": {} } }
+        "value_type": { "enum": ["counter", "gauge", "up_down_counter", "histogram"] },
+        "boundaries": {
+          "anyOf": [
+            { "type": "array", "items": { "type": "number" } },
+            { "type": "null" }
+          ]
+        },
+        "values": {
+          "type": "array", "minItems": 2,
+          "items": {
+            "anyOf": [
+              { "type": "integer" },
+              { "type": "null" },
+              { "$ref": "#/$defs/histogramValue" }
+            ]
+          }
+        }
+      }
+    },
+    "histogramValue": {
+      "type": "object", "additionalProperties": false,
+      "required": ["count", "sum", "min", "max", "bucket_counts"],
+      "properties": {
+        "count": { "type": "integer", "minimum": 0 },
+        "sum": { "type": "number" }, "min": { "type": "number" }, "max": { "type": "number" },
+        "bucket_counts": { "type": "array", "items": { "type": "integer", "minimum": 0 } }
       }
     }
   }
