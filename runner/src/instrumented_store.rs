@@ -224,10 +224,16 @@ impl ObjectStore for InstrumentedStore {
     }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> StoreResult<GetResult> {
-        self.metrics.get.fetch_add(1, Ordering::Relaxed);
+        let is_head = options.head;
+        let counter = if is_head {
+            &self.metrics.head
+        } else {
+            &self.metrics.get
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
         let result = self.inner.get_opts(location, options).await;
         self.error(&result);
-        if let Ok(get) = &result {
+        if let (Ok(get), false) = (&result, is_head) {
             self.metrics.bytes_read.fetch_add(
                 get.range.end.saturating_sub(get.range.start),
                 Ordering::Relaxed,
@@ -319,6 +325,41 @@ impl ObjectStore for InstrumentedStore {
             }
         }
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::InstrumentedStore;
+    use object_store::memory::InMemory;
+    use object_store::path::Path;
+    use object_store::{ObjectStoreExt, PutPayload};
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn counts_head_separately_from_get() {
+        let store = InstrumentedStore::new(Arc::new(InMemory::new()));
+        let location = Path::from("object");
+        let payload = PutPayload::from_static(b"value");
+        store
+            .put(&location, payload)
+            .await
+            .expect("store test object");
+
+        let meta = store.head(&location).await.expect("head test object");
+
+        assert_eq!(meta.size, 5);
+        let after_head = store.metrics().snapshot();
+        assert_eq!(after_head.requests.get("head"), Some(&1));
+        assert_eq!(after_head.requests.get("get"), Some(&0));
+        assert_eq!(after_head.bytes_read, 0);
+
+        store.get(&location).await.expect("get test object");
+
+        let after_get = store.metrics().snapshot();
+        assert_eq!(after_get.requests.get("head"), Some(&1));
+        assert_eq!(after_get.requests.get("get"), Some(&1));
+        assert_eq!(after_get.bytes_read, 5);
     }
 }
 
