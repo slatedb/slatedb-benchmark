@@ -1,0 +1,111 @@
+schema_version = 1
+release = true
+execution = "isolated"
+record_count = 100000000
+key_bytes = 16
+value_bytes = 1024
+block_cache_bytes = 4294967296
+metadata_cache_bytes = 536870912
+warmup = "60s"
+measurement = "5m"
+compaction_quiet = "15s"
+compaction_timeout = "10m"
+
+[object_store_probe]
+latency_operations = 2000
+latency_object_bytes = 8192
+throughput_object_bytes = 67108864
+throughput_concurrency = 32
+throughput_warmup = "5s"
+throughput_measurement = "30s"
+
+[[workloads]]
+name = "cold-read"
+kind = "cold-read"
+warmup = "0s"
+
+[[workloads.variants]]
+name = "clients-1"
+clients = 1
+
+[[workloads.variants]]
+name = "clients-16"
+clients = 16
+
+[[workloads.variants]]
+name = "clients-64"
+clients = 64
+
+[[workloads]]
+name = "open-loop-read"
+kind = "open-loop-read"
+
+[[workloads.variants]]
+name = "rate-1000"
+target_rate = 1000
+
+[[workloads.variants]]
+name = "rate-5000"
+target_rate = 5000
+
+[[workloads.variants]]
+name = "rate-10000"
+target_rate = 10000
+
+[[workloads]]
+name = "open-loop-read-update"
+kind = "open-loop-read-update"
+
+[[workloads.variants]]
+name = "rate-1000"
+target_rate = 1000
+
+[[workloads.variants]]
+name = "rate-5000"
+target_rate = 5000
+
+[[workloads.variants]]
+name = "rate-10000"
+target_rate = 10000
+
+[[workloads]]
+name = "prefix-scan"
+kind = "prefix-scan"
+record_count = 100000000
+key_bytes = 16
+
+[[workloads.variants]]
+name = "clients-1"
+clients = 1
+
+[[workloads.variants]]
+name = "clients-16"
+clients = 16
+
+[[workloads.variants]]
+name = "clients-64"
+clients = 64
+
+[[workloads]]
+name = "sustained-ingest"
+kind = "sustained-ingest"
+record_count = 0
+warmup = "0s"
+measurement = "60m"
+
+[[workloads.variants]]
+name = "clients-64"
+clients = 64
+
+[[workloads]]
+name = "transaction-contention"
+kind = "transaction-contention"
+record_count = 10000
+
+[[workloads.variants]]
+name = "clients-16"
+clients = 16
+
+[[workloads.variants]]
+name = "clients-64"
+clients = 64

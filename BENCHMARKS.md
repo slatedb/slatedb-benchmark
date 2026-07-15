@@ -3,9 +3,16 @@
 Run all profiles for each SlateDB release on a WarpBuild
 `warp-ubuntu-latest-x64-16x` runner against Tigris in the `auto` region.
 
-Each profile has one fixed configuration. Do not cross product its workloads
+Each workload has one fixed effective configuration. SlateDB settings inherit
+from the library defaults and then the profile. Do not cross product workloads
 with additional value sizes, cache sizes, machines, object stores, or SlateDB
 settings.
+
+The `config/` directory contains two files per profile:
+`<profile>.profile.toml` defines the profile, its ordered `[[workloads]]`, and
+their nested variants; `<profile>.settings.toml` contains the profile-wide
+SlateDB settings. The `smoke` profile is a small, non-release integration suite;
+it is not a reduced rewrite of the release catalog.
 
 ## Standard results
 
@@ -79,9 +86,11 @@ Run the tests below in order against the same database.
 
 1. `bulk-load`: With one client, insert all 900 million records in random key
    order. Disable the WAL and compactor, and do not wait for durability during
-   individual writes. Flush all memtables after loading, enable compaction, and
-   wait for compaction to finish. RocksDB also uses its vector memtable and an
-   explicit full compaction; SlateDB has no exact equivalents.
+   individual writes. Set both L0 SST limits to `u32::MAX` so the uncompacted L0
+   can hold the complete load. Flush all memtables after loading, restore the
+   profile settings, and wait for compaction to finish. RocksDB also uses its
+   vector memtable and an explicit full compaction; SlateDB has no exact
+   equivalents.
 2. `random-read`: Read uniformly random existing keys.
 3. `multi-random-read`: Read batches of 10 uniformly random keys. SlateDB has no
    native `MultiGet`, so issue 10 `get` calls concurrently and report batch

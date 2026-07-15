@@ -1,12 +1,13 @@
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parse as parseToml } from 'smol-toml';
 
 const repoRoot = fileURLToPath(new URL('../..', import.meta.url));
 const outputRoot = process.env.BENCHMARK_MOCK_RESULTS_ROOT
   ? path.resolve(process.cwd(), process.env.BENCHMARK_MOCK_RESULTS_ROOT)
   : path.join(repoRoot, '.mock-results');
-const published = JSON.parse(await readFile(path.join(repoRoot, 'config/published.json'), 'utf8'));
+const published = await loadReleaseConfiguration(path.join(repoRoot, 'config'));
 
 const version = '0.14.1-mock';
 const timestamp = new Date().toISOString();
@@ -64,9 +65,8 @@ const writeWorkloads = new Set([
 ]);
 
 function variantSettings(variant) {
-  const target = variant.startsWith('rate-') ? Number(variant.slice(5)) : null;
-  const clientsMatch = variant.match(/(?:clients|readers)-(\d+)/);
-  const clients = target === null ? Number(clientsMatch?.[1] ?? 1) : null;
+  const target = variant.target_rate ?? null;
+  const clients = variant.clients ?? null;
   const scale = target !== null ? (target >= 10_000 ? 'large' : target >= 5_000 ? 'medium' : 'small')
     : clients >= 64 ? 'large' : clients >= 16 ? 'medium' : 'small';
   return { target, clients, scale };
@@ -166,8 +166,9 @@ const resultPaths = [];
 
 for (const profile of published.profiles) {
   for (const workload of profile.workloads) {
-    for (const variant of workload.variants) {
-      const { clients, target, scale } = variantSettings(variant);
+    for (const variantDefinition of workload.variants) {
+      const variant = variantDefinition.name;
+      const { clients, target, scale } = variantSettings(variantDefinition);
       const latency = latencyTemplates[scale];
       const operations = latency.summary.count;
       const throughput = mockThroughput(profile.name, workload.name, clients, target);
@@ -228,9 +229,23 @@ for (const profile of published.profiles) {
           metadata_cache_bytes: profile.metadata_cache_bytes,
           sst_block_bytes: profile.sst_block_bytes ?? null,
           slate_settings: {
-            flush_interval_ms: profile.flush_interval_ms,
-            await_durable: awaitDurable,
-            compression: profile.compression,
+            flush_interval: '100ms',
+            wal_enabled: workload.kind !== 'bulk-load',
+            manifest_poll_interval: '20ms',
+            manifest_update_timeout: '300s',
+            min_filter_keys: 1000,
+            l0_sst_size_bytes: 65536,
+            max_wal_flushes_before_l0_flush: 4096,
+            l0_max_ssts: workload.kind === 'bulk-load' ? 4_294_967_295 : 8,
+            l0_max_ssts_per_key: workload.kind === 'bulk-load' ? 4_294_967_295 : 8,
+            l0_flush_parallelism: 4,
+            max_unflushed_bytes: 8388608,
+            compactor_options: workload.kind === 'bulk-load' ? null : {},
+            compression_codec: profile.name === 'rocksdb' ? 'Zstd' : null,
+            object_store_cache_options: {},
+            garbage_collector_options: {},
+            metric_level: 'Info',
+            default_ttl: null,
           },
           build_profile: 'release',
           enabled_features: ['aws', 'foyer', 'wal_disable', 'zstd'],
@@ -365,7 +380,9 @@ const run = {
   runner_commit: zeroCommit,
   lockfile_sha256: zeroHash,
   resolved_configuration: published,
-  object_store_baseline: objectStoreBaseline,
+  object_store_baselines: Object.fromEntries(
+    published.profiles.map((profile) => [profile.name, objectStoreBaseline]),
+  ),
   results: resultPaths,
 };
 await Promise.all([
@@ -378,4 +395,42 @@ console.log(`Generated ${resultPaths.length} mock benchmark variants in ${output
 async function writeJson(file, value) {
   await mkdir(path.dirname(file), { recursive: true });
   await writeFile(file, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+async function loadReleaseConfiguration(configRoot) {
+  const entries = await readdir(configRoot, { withFileTypes: true });
+  const profiles = [];
+  const profileSuffix = '.profile.toml';
+  const profileEntries = entries
+    .filter((entry) => entry.isFile() && entry.name.endsWith(profileSuffix))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  for (const entry of profileEntries) {
+    const profileName = entry.name.slice(0, -profileSuffix.length);
+    const profilePath = path.join(configRoot, entry.name);
+    const profile = parseToml(await readFile(profilePath, 'utf8'));
+    if (!profile.release) continue;
+
+    const workloads = profile.workloads.map((workload) => ({
+      ...workload,
+      warmup_ms: workload.warmup === undefined ? undefined : durationMs(workload.warmup),
+      measurement_ms: workload.measurement === undefined ? undefined : durationMs(workload.measurement),
+    }));
+    profiles.push({
+      ...profile,
+      name: profileName,
+      warmup_ms: durationMs(profile.warmup),
+      measurement_ms: durationMs(profile.measurement),
+      compaction_quiet_ms: durationMs(profile.compaction_quiet),
+      compaction_timeout_ms: durationMs(profile.compaction_timeout),
+      workloads,
+    });
+  }
+  return { schema_version: 1, profiles };
+}
+
+function durationMs(value) {
+  const match = /^(\d+)(ms|s|m|h)$/.exec(value);
+  if (!match) throw new Error(`unsupported duration ${value}`);
+  const multiplier = { ms: 1, s: 1_000, m: 60_000, h: 3_600_000 }[match[2]];
+  return Number(match[1]) * multiplier;
 }

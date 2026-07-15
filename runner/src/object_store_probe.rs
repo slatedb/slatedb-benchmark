@@ -28,7 +28,7 @@ pub struct ObjectStoreContext {
 }
 
 impl ObjectStoreContext {
-    pub fn load(smoke: bool) -> Result<Self> {
+    pub fn load() -> Result<Self> {
         let provider = env::var("CLOUD_PROVIDER").unwrap_or_else(|_| "aws".to_string());
         let raw: Arc<dyn ObjectStore> = match provider.to_ascii_lowercase().as_str() {
             "aws" => {
@@ -52,13 +52,8 @@ impl ObjectStoreContext {
             }
             other => bail!("unsupported CLOUD_PROVIDER {other}; expected aws, memory, or local"),
         };
-        let prefix = env::var("SLATEDB_BENCH_PREFIX").unwrap_or_else(|_| {
-            if smoke {
-                format!("smoke/{}", Uuid::new_v4())
-            } else {
-                format!("manual/{}", Uuid::new_v4())
-            }
-        });
+        let prefix = env::var("SLATEDB_BENCH_PREFIX")
+            .unwrap_or_else(|_| format!("manual/{}", Uuid::new_v4()));
         let endpoint = env::var("AWS_ENDPOINT_URL_S3")
             .or_else(|_| env::var("AWS_ENDPOINT"))
             .unwrap_or_else(|_| "https://fly.storage.tigris.dev".to_string());

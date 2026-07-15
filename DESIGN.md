@@ -16,7 +16,7 @@ The repository layout is:
 
 ```text
 runner/                 Rust benchmark runner and workload implementations
-config/                 Profile definitions and SlateDB settings
+config/                 `<profile>.profile.toml` and `<profile>.settings.toml`
 schema/                 Versioned JSON schemas and price tables
 results/<version>/      Published result records and histograms
 site/                   Static website
@@ -29,6 +29,44 @@ described in `BENCHMARKS.md`.
 Result files are the source of truth for the site. The site reads them at build
 time, so publishing needs no database or API service. Git history records any
 correction to a published result.
+
+### SlateDB settings
+
+The runner discovers a profile from each `config/*.profile.toml`; the filename
+prefix is the profile name. Each profile declares its ordered `[[workloads]]`
+array, with nested `[[workloads.variants]]` records containing a display name
+and either `clients` or `target_rate`. Behavior is never inferred from a variant
+name. The RocksDB profile uses declaration order to preserve its stateful
+benchmark sequence.
+
+SlateDB engine settings are checked-in profile TOML rather than generated from
+benchmark configuration. SlateDB's settings loader resolves them in this order:
+
+```text
+SlateDB Settings::default()
+  -> config/<profile>.settings.toml
+```
+
+Profile settings are required, and every workload normally uses the same
+effective SlateDB settings. Bulk load is an execution-phase exception: the
+runner clones the profile settings, disables the WAL and compactor, and sets
+`l0_max_ssts` and `l0_max_ssts_per_key` to `u32::MAX`. After loading and
+flushing the complete dataset, it reopens the database with the original
+profile settings and waits for compaction to finish. Every result records the
+effective `Settings` object used for its measured workload.
+
+Dataset sizes, operation mixes, timings, durability behavior, cache capacity,
+SST block size, object-store probe parameters, release eligibility, workloads,
+variants, and execution model live in `profile.toml`. Cache and SST block size
+are attached as `DbBuilder` components and are not fields in SlateDB's
+`Settings` type. Human-readable durations in TOML are resolved to milliseconds
+internally and nanoseconds in result records.
+
+The `smoke` directory is an ordinary profile with `release = false`. Its few
+purpose-built workloads cover the important runner paths with small datasets.
+Release discovery excludes non-release profiles unless one is named
+explicitly, so Docker runs it with `--profile smoke` and the release workflow
+continues to name `rocksdb`, `ycsb`, and `slatedb`.
 
 ## Execution
 
@@ -87,9 +125,11 @@ the runner cannot clear caches managed inside Tigris.
 
 ### Object-store baseline
 
-At the start of the release run, before dataset preparation or workload
-execution, the runner probes the Tigris bucket and endpoint through the
-object-store client without opening SlateDB. The latency probe performs 2,000
+At the start of each selected profile, before its dataset preparation or
+workload execution, the runner probes the Tigris bucket and endpoint through
+the object-store client without opening SlateDB. Probe parameters belong to
+the profile, so the probe runs exactly once per profile. The release latency
+probe performs 2,000
 sequential PUTs and GETs of 8 KiB objects and records their histograms and
 required percentiles.
 
@@ -182,16 +222,23 @@ $ ./target/release/slatedb-benchmark run \
 {"status":"ok","run":".runs/ycsb-a/run.json"}
 ```
 
-Omitting the selectors runs all profiles and variants:
+Omitting the selectors runs all release profiles and variants. Profiles with
+`release = false`, including `smoke`, require an explicit `--profile`:
 
 ```console
 $ ./target/release/slatedb-benchmark run --output .runs/release
 {"status":"ok","run":".runs/release/run.json"}
 ```
 
-Each `run` invocation probes the object store once, before preparing data. It
-writes progress to stderr and one JSON status line to stdout. The output tree
-is shown below. The output directory must not exist before the command starts.
+The read-only `catalog` command prints the discovered release identities as
+JSON without running a benchmark. Passing `--profile smoke` includes that
+explicit non-release profile instead. CI uses this output to verify that a
+smoke run produced exactly its configured result set.
+
+Each `run` invocation probes the object store once per selected profile, before
+preparing that profile's data. It writes progress to stderr and one JSON status
+line to stdout. The output tree is shown below. The output directory must not
+exist before the command starts.
 
 ```text
 .runs/ycsb-a/
@@ -204,7 +251,7 @@ is shown below. The output directory must not exist before the command starts.
 ```
 
 `run.json` records the selected work, source commits, resolved configuration,
-object-store baseline, and result paths. The runner exits nonzero on
+per-profile object-store baselines, and result paths. The runner exits nonzero on
 configuration, execution, or validation failure and does not write a success
 line. Manual results use the published schema but remain under `.runs/`; only
 the release workflow copies validated results into `results/` and publishes

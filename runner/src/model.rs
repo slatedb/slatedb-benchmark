@@ -15,7 +15,7 @@ pub struct RunManifest {
     pub runner_commit: String,
     pub lockfile_sha256: String,
     pub resolved_configuration: Value,
-    pub object_store_baseline: ObjectStoreBaseline,
+    pub object_store_baselines: BTreeMap<String, ObjectStoreBaseline>,
     pub results: Vec<String>,
 }
 

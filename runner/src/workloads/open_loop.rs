@@ -74,6 +74,10 @@ pub async fn run_open_phase(
             window.record_offered(offered_batch, dropped_batch);
         }
     }
+    let now = Instant::now();
+    if now < deadline {
+        tokio::time::sleep_until(deadline.into()).await;
+    }
     drop(sender);
 
     let mut merged = WorkerStats::default();

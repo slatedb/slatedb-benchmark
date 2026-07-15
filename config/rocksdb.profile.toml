@@ -1,0 +1,97 @@
+schema_version = 1
+release = true
+execution = "sequential"
+record_count = 900000000
+key_bytes = 20
+value_bytes = 400
+block_cache_bytes = 6442450944
+warmup = "0s"
+measurement = "90m"
+sst_block_bytes = 8192
+compaction_quiet = "15s"
+compaction_timeout = "10m"
+
+[object_store_probe]
+latency_operations = 2000
+latency_object_bytes = 8192
+throughput_object_bytes = 67108864
+throughput_concurrency = 32
+throughput_warmup = "5s"
+throughput_measurement = "30s"
+
+[[workloads]]
+name = "bulk-load"
+kind = "bulk-load"
+measurement = "0s"
+
+[[workloads.variants]]
+name = "clients-1"
+clients = 1
+
+[[workloads]]
+name = "random-read"
+kind = "random-read"
+
+[[workloads.variants]]
+name = "clients-64"
+clients = 64
+
+[[workloads]]
+name = "multi-random-read"
+kind = "multi-random-read"
+
+[[workloads.variants]]
+name = "clients-64"
+clients = 64
+
+[[workloads]]
+name = "forward-range"
+kind = "forward-range"
+
+[[workloads.variants]]
+name = "clients-64"
+clients = 64
+
+[[workloads]]
+name = "reverse-range"
+kind = "reverse-range"
+
+[[workloads.variants]]
+name = "clients-64"
+clients = 64
+
+[[workloads]]
+name = "overwrite"
+kind = "overwrite"
+await_durable = true
+
+[[workloads.variants]]
+name = "clients-64"
+clients = 64
+
+[[workloads]]
+name = "read-while-writing"
+kind = "read-while-writing"
+await_durable = true
+
+[[workloads.variants]]
+name = "readers-64-writer-1"
+clients = 64
+
+[[workloads]]
+name = "forward-range-while-writing"
+kind = "forward-range-while-writing"
+await_durable = true
+
+[[workloads.variants]]
+name = "readers-64-writer-1"
+clients = 64
+
+[[workloads]]
+name = "reverse-range-while-writing"
+kind = "reverse-range-while-writing"
+await_durable = true
+
+[[workloads.variants]]
+name = "readers-64-writer-1"
+clients = 64

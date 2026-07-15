@@ -36,8 +36,6 @@ pub struct RunArgs {
     pub variant: Option<String>,
     #[arg(long)]
     pub output: PathBuf,
-    #[arg(long, help = "Use unpublished reduced datasets and durations")]
-    pub smoke: bool,
     #[arg(long, default_value = "config")]
     pub config_dir: PathBuf,
     #[arg(long, default_value = "schema")]
@@ -53,7 +51,9 @@ pub struct ValidateArgs {
 #[derive(Debug, Args)]
 pub struct CatalogArgs {
     #[arg(long)]
-    pub smoke: bool,
+    pub profile: Option<String>,
+    #[arg(long, default_value = "config")]
+    pub config_dir: PathBuf,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -72,8 +72,6 @@ pub struct WorkerArgs {
     pub expected_lsm_digest: String,
     #[arg(long)]
     pub output: PathBuf,
-    #[arg(long)]
-    pub smoke: bool,
     #[arg(long, default_value = "config")]
     pub config_dir: PathBuf,
 }

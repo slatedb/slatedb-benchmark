@@ -1,5 +1,5 @@
 use crate::cli::{RunArgs, WorkerArgs};
-use crate::config::{ProfileConfig, SuiteConfig, VariantConfig, WorkloadKind};
+use crate::config::{ProfileConfig, ProfileExecution, SuiteConfig, VariantConfig, WorkloadKind};
 use crate::cost::PriceTable;
 use crate::model::{
     BenchmarkConfiguration, Identity, InitialState, ResultRecord, RunManifest, SourceFiles,
@@ -19,7 +19,7 @@ use object_store::ObjectStore;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use slatedb::admin::{AdminBuilder, CloneSourceSpec};
-use slatedb::config::{CheckpointOptions, CompactorOptions, CompressionCodec, Settings};
+use slatedb::config::{CheckpointOptions, Settings};
 use slatedb::db_cache::{
     foyer::{FoyerCache, FoyerCacheOptions},
     DbCache, SplitCache,
@@ -29,7 +29,6 @@ use slatedb_common::metrics::{MetricValue, MetricsRecorder};
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path as FsPath, PathBuf};
-use std::str::FromStr;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -47,7 +46,6 @@ struct GoldenDatabase {
 struct GoldenManager {
     store: Arc<dyn ObjectStore>,
     root: Path,
-    suite: SuiteConfig,
     values: HashMap<String, GoldenDatabase>,
     cleanup_paths: Vec<Path>,
 }
@@ -67,75 +65,160 @@ pub async fn execute(args: RunArgs) -> Result<()> {
 
 async fn execute_inner(args: &RunArgs) -> Result<()> {
     let started_at = Utc::now();
-    let suite = SuiteConfig::load_from(&args.config_dir, args.smoke)?;
+    let suite = SuiteConfig::load_from(&args.config_dir)?;
     let selected = suite.select(
         args.profile.as_deref(),
         args.workload.as_deref(),
         args.variant.as_deref(),
     )?;
+    let mode = selected
+        .first()
+        .context("benchmark selection is empty")?
+        .profile
+        .mode()
+        .to_string();
+    if selected
+        .iter()
+        .any(|variant| variant.profile.mode() != mode)
+    {
+        bail!("a benchmark run cannot mix release and non-release profiles");
+    }
+
     let prices = PriceTable::load(&args.schema_dir)?;
-    let object_store = ObjectStoreContext::load(args.smoke)?;
+    let object_store = ObjectStoreContext::load()?;
     let environment = inspect_environment(
         &object_store.provider,
         &object_store.endpoint,
         &object_store.region,
     );
-    verify_environment(&environment, args.smoke)?;
-    tracing::info!("probing object store before dataset preparation");
-    let (baseline, baseline_histograms) = probe(
-        Arc::clone(&object_store.raw),
-        &object_store.root,
-        &suite.object_store_probe,
-    )
-    .await?;
-    write_json(&args.output.join("object-store.json"), &baseline)?;
 
-    let run_id = Uuid::new_v4();
-    let run_root = object_store.root.clone().join(format!("run-{run_id}"));
+    let mut by_profile = BTreeMap::<String, Vec<VariantConfig>>::new();
+    for variant in selected {
+        by_profile
+            .entry(variant.profile.name.clone())
+            .or_default()
+            .push(variant);
+    }
+    let profile_count = by_profile.len();
+    let mut object_store_baselines = BTreeMap::new();
+    let mut result_paths = Vec::new();
+    for (profile_name, variants) in by_profile {
+        let profile = &variants
+            .first()
+            .context("profile selection is empty")?
+            .profile;
+        verify_environment(&environment, !profile.release)?;
+        tracing::info!(
+            profile = profile_name,
+            "probing object store before dataset preparation"
+        );
+        let probe_root = object_store.root.clone().join(profile_name.as_str());
+        let (baseline, baseline_histograms) = probe(
+            Arc::clone(&object_store.raw),
+            &probe_root,
+            &profile.object_store_probe,
+        )
+        .await?;
+        let baseline_path = if profile_count == 1 {
+            args.output.join("object-store.json")
+        } else {
+            args.output
+                .join(format!("object-store-{profile_name}.json"))
+        };
+        write_json(&baseline_path, &baseline)?;
+        result_paths.extend(
+            execute_profile(
+                variants,
+                &suite,
+                &object_store,
+                &environment,
+                &baseline,
+                &baseline_histograms,
+                &prices,
+                args,
+            )
+            .await?,
+        );
+        object_store_baselines.insert(profile_name, baseline);
+    }
+
+    let run = RunManifest {
+        schema_version: 1,
+        status: "ok".to_string(),
+        started_at: started_at.to_rfc3339(),
+        finished_at: Utc::now().to_rfc3339(),
+        mode,
+        slate_version: env!("BENCHMARK_SLATE_VERSION").to_string(),
+        slate_commit: env!("BENCHMARK_SLATE_COMMIT").to_string(),
+        runner_version: env!("CARGO_PKG_VERSION").to_string(),
+        runner_commit: env!("BENCHMARK_RUNNER_COMMIT").to_string(),
+        lockfile_sha256: env!("BENCHMARK_LOCK_HASH").to_string(),
+        resolved_configuration: serde_json::to_value(&suite)?,
+        object_store_baselines,
+        results: result_paths,
+    };
+    validate_run(&run, &args.schema_dir)?;
+    write_json(&args.output.join("run.json"), &run)?;
+    println!(
+        "{{\"status\":\"ok\",\"run\":\"{}\"}}",
+        args.output.join("run.json").display()
+    );
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn execute_profile(
+    selected: Vec<VariantConfig>,
+    suite: &SuiteConfig,
+    object_store: &ObjectStoreContext,
+    environment: &crate::model::Environment,
+    baseline: &crate::model::ObjectStoreBaseline,
+    baseline_histograms: &BTreeMap<String, crate::model::EncodedHistogram>,
+    prices: &PriceTable,
+    args: &RunArgs,
+) -> Result<Vec<String>> {
+    let profile = selected
+        .first()
+        .context("profile selection is empty")?
+        .profile
+        .clone();
+    let run_root = object_store
+        .root
+        .clone()
+        .join(profile.name.as_str())
+        .join(format!("run-{}", Uuid::new_v4()));
     let store: Arc<dyn ObjectStore> = object_store.instrumented.clone();
     let mut golden_manager = GoldenManager {
         store: Arc::clone(&store),
         root: run_root.clone(),
-        suite: suite.clone(),
         values: HashMap::new(),
         cleanup_paths: Vec::new(),
     };
-    let mut result_paths = Vec::new();
 
     let run_result = async {
-        let rocks = selected
-            .iter()
-            .filter(|variant| variant.profile.name == "rocksdb")
-            .cloned()
-            .collect::<Vec<_>>();
-        if !rocks.is_empty() {
-            result_paths.extend(
-                run_rocks_profile(
-                    rocks,
-                    &suite,
-                    &run_root,
-                    Arc::clone(&store),
-                    object_store.instrumented.metrics(),
-                    !object_store.provider.eq_ignore_ascii_case("memory"),
-                    &environment,
-                    &baseline,
-                    &baseline_histograms,
-                    &prices,
-                    args,
-                )
-                .await?,
-            );
+        if profile.execution == ProfileExecution::Sequential {
+            return run_sequential_profile(
+                selected,
+                suite,
+                &run_root,
+                Arc::clone(&store),
+                object_store.instrumented.metrics(),
+                !object_store.provider.eq_ignore_ascii_case("memory"),
+                environment,
+                baseline,
+                baseline_histograms,
+                prices,
+                args,
+            )
+            .await;
         }
 
-        for variant in selected
-            .iter()
-            .filter(|variant| variant.profile.name != "rocksdb")
-        {
+        let mut result_paths = Vec::new();
+        for variant in &selected {
             let golden = golden_manager.prepare(variant).await?;
             let clone_path = run_root
                 .clone()
                 .join("clones")
-                .join(variant.profile.name.as_str())
                 .join(variant.workload.name.as_str())
                 .join(format!("{}-{}", variant.variant, Uuid::new_v4()));
             clone_database(
@@ -152,9 +235,8 @@ async fn execute_inner(args: &RunArgs) -> Result<()> {
                 clone_path.clone(),
                 Arc::clone(&store),
                 &variant.profile,
+                &variant.slate_settings,
                 Arc::clone(&recorder),
-                args.smoke,
-                false,
             )
             .await?;
             let clone_digest = lsm_digest(&db)?;
@@ -175,9 +257,8 @@ async fn execute_inner(args: &RunArgs) -> Result<()> {
                     clone_path.clone(),
                     Arc::clone(&store),
                     &variant.profile,
+                    &variant.slate_settings,
                     Arc::clone(&recorder),
-                    args.smoke,
-                    false,
                 )
                 .await?;
                 let outcome = execute_variant(
@@ -203,56 +284,33 @@ async fn execute_inner(args: &RunArgs) -> Result<()> {
             };
             let clone_size = prefix_size(Arc::clone(&store), &clone_path).await?;
             outcome.storage.database_size_bytes = golden.size_bytes.saturating_add(clone_size);
-            let relative = write_variant_result(
+            result_paths.push(write_variant_result(
                 variant,
                 outcome,
                 initial,
-                &environment,
-                &baseline,
-                &baseline_histograms,
-                &prices,
+                environment,
+                baseline,
+                baseline_histograms,
+                prices,
                 golden.size_bytes,
                 args,
-            )?;
-            result_paths.push(relative);
+            )?);
             delete_prefix(Arc::clone(&store), &clone_path).await?;
         }
-        Ok::<(), anyhow::Error>(())
+        Ok(result_paths)
     }
     .await;
 
     let cleanup_result = golden_manager.cleanup().await;
-    let run_cleanup = delete_prefix(Arc::clone(&store), &run_root).await;
-    run_result?;
+    let run_cleanup = delete_prefix(store, &run_root).await;
+    let result_paths = run_result?;
     cleanup_result?;
     run_cleanup?;
-
-    let run = RunManifest {
-        schema_version: 1,
-        status: "ok".to_string(),
-        started_at: started_at.to_rfc3339(),
-        finished_at: Utc::now().to_rfc3339(),
-        mode: suite.mode.clone(),
-        slate_version: env!("BENCHMARK_SLATE_VERSION").to_string(),
-        slate_commit: env!("BENCHMARK_SLATE_COMMIT").to_string(),
-        runner_version: env!("CARGO_PKG_VERSION").to_string(),
-        runner_commit: env!("BENCHMARK_RUNNER_COMMIT").to_string(),
-        lockfile_sha256: env!("BENCHMARK_LOCK_HASH").to_string(),
-        resolved_configuration: serde_json::to_value(&suite)?,
-        object_store_baseline: baseline,
-        results: result_paths,
-    };
-    validate_run(&run, &args.schema_dir)?;
-    write_json(&args.output.join("run.json"), &run)?;
-    println!(
-        "{{\"status\":\"ok\",\"run\":\"{}\"}}",
-        args.output.join("run.json").display()
-    );
-    Ok(())
+    Ok(result_paths)
 }
 
 pub async fn execute_worker(args: WorkerArgs) -> Result<()> {
-    let suite = SuiteConfig::load_from(&args.config_dir, args.smoke)?;
+    let suite = SuiteConfig::load_from(&args.config_dir)?;
     let mut selected = suite.select(
         Some(&args.profile),
         Some(&args.workload),
@@ -261,7 +319,7 @@ pub async fn execute_worker(args: WorkerArgs) -> Result<()> {
     let variant = selected
         .pop()
         .context("worker selection did not resolve to a variant")?;
-    let context = ObjectStoreContext::load(args.smoke)?;
+    let context = ObjectStoreContext::load()?;
     let database_path = Path::from(args.database_path);
     context
         .instrumented
@@ -274,9 +332,8 @@ pub async fn execute_worker(args: WorkerArgs) -> Result<()> {
         database_path.clone(),
         store,
         &variant.profile,
+        &variant.slate_settings,
         Arc::clone(&recorder),
-        args.smoke,
-        false,
     )
     .await?;
     let digest = lsm_digest(&db)?;
@@ -326,9 +383,6 @@ async fn execute_variant_in_fresh_process(
         .arg(&output)
         .arg("--config-dir")
         .arg(&args.config_dir);
-    if args.smoke {
-        command.arg("--smoke");
-    }
     let status = command
         .status()
         .await
@@ -354,12 +408,13 @@ impl GoldenManager {
             variant.record_count()
         };
         let key = format!(
-            "{}-{}-{}-{}-{}",
+            "{}-{}-{}-{}-{}-{}",
             if prefix_layout { "prefix" } else { "records" },
             record_count,
             variant.key_bytes(),
             variant.value_bytes(),
-            variant.profile.compression.as_deref().unwrap_or("none")
+            variant.profile.sst_block_bytes.unwrap_or_default(),
+            settings_digest(&variant.slate_settings)?
         );
         if let Some(golden) = self.values.get(&key) {
             return Ok(golden.clone());
@@ -375,9 +430,8 @@ impl GoldenManager {
             path.clone(),
             Arc::clone(&self.store),
             &variant.profile,
+            &variant.slate_settings,
             Arc::clone(&recorder),
-            self.suite.mode == "smoke",
-            false,
         )
         .await?;
         populate_dataset(
@@ -388,7 +442,7 @@ impl GoldenManager {
             prefix_layout,
         )
         .await?;
-        wait_for_compaction(&db, &recorder, &self.suite).await?;
+        wait_for_compaction(&db, &recorder, &variant.profile).await?;
         db.close().await.context("closing golden database")?;
 
         let admin = AdminBuilder::new(path.clone(), Arc::clone(&self.store)).build();
@@ -435,7 +489,7 @@ impl GoldenManager {
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn run_rocks_profile(
+async fn run_sequential_profile(
     selected: Vec<VariantConfig>,
     suite: &SuiteConfig,
     run_root: &Path,
@@ -448,32 +502,39 @@ async fn run_rocks_profile(
     prices: &PriceTable,
     args: &RunArgs,
 ) -> Result<Vec<String>> {
-    let profile = suite
-        .profiles
-        .iter()
-        .find(|profile| profile.name == "rocksdb")
-        .context("rocksdb profile is missing")?;
+    let profile = selected
+        .first()
+        .context("sequential profile selection is empty")?
+        .profile
+        .clone();
     let bulk_workload = profile
         .workloads
         .iter()
         .find(|workload| workload.kind == WorkloadKind::BulkLoad)
-        .context("bulk-load workload is missing")?;
-    let bulk_variant = VariantConfig {
-        profile: profile.clone(),
-        workload: bulk_workload.clone(),
-        variant: "clients-1".to_string(),
-        clients: Some(1),
-        target_rate: None,
-    };
-    let path = run_root.clone().join("rocksdb-profile");
+        .context("sequential profile requires a bulk-load workload")?;
+    let bulk_variant_name = bulk_workload
+        .variants
+        .first()
+        .context("bulk-load workload has no variants")?
+        .name
+        .clone();
+    let mut bulk_variant = suite
+        .select(
+            Some(&profile.name),
+            Some(&bulk_workload.name),
+            Some(&bulk_variant_name),
+        )?
+        .pop()
+        .context("bulk-load variant is missing")?;
+    bulk_variant.slate_settings = bulk_load_settings(&bulk_variant.slate_settings);
+    let path = run_root.clone().join("sequential-profile");
     let bulk_recorder = Arc::new(BenchmarkMetricsRecorder::new());
     let bulk_db = open_database(
         path.clone(),
         Arc::clone(&store),
-        profile,
+        &profile,
+        &bulk_variant.slate_settings,
         Arc::clone(&bulk_recorder),
-        args.smoke,
-        true,
     )
     .await?;
     let bulk_initial = InitialState {
@@ -483,8 +544,8 @@ async fn run_rocks_profile(
     };
     let selected_bulk = selected
         .iter()
-        .find(|variant| variant.workload.kind == WorkloadKind::BulkLoad);
-    let mut bulk_outcome = if selected_bulk.is_some() {
+        .any(|variant| variant.workload.kind == WorkloadKind::BulkLoad);
+    let mut bulk_outcome = if selected_bulk {
         Some(
             execute_variant(
                 Arc::clone(&bulk_db),
@@ -527,16 +588,16 @@ async fn run_rocks_profile(
         .await
         .context("closing bulk-load database")?;
 
+    let profile_settings = suite.slate_settings(&profile)?;
     let compaction_db = open_database(
         path.clone(),
         Arc::clone(&store),
-        profile,
+        &profile,
+        &profile_settings,
         Arc::clone(&recorder),
-        args.smoke,
-        false,
     )
     .await?;
-    wait_for_compaction(&compaction_db, &recorder, suite).await?;
+    wait_for_compaction(&compaction_db, &recorder, &profile).await?;
     if let (Some(outcome), Some((started, start_store, start_slate, stop_tx, sampler))) =
         (bulk_outcome.as_mut(), compaction_measurement)
     {
@@ -560,10 +621,10 @@ async fn run_rocks_profile(
         .context("closing post-bulk compaction database")?;
     let compacted_size = prefix_size(Arc::clone(&store), &path).await?;
     let mut paths = Vec::new();
-    if let (Some(variant), Some(mut outcome)) = (selected_bulk, bulk_outcome.take()) {
+    if let Some(mut outcome) = bulk_outcome.take() {
         outcome.storage.database_size_bytes = compacted_size;
         paths.push(write_variant_result(
-            variant,
+            &bulk_variant,
             outcome,
             bulk_initial,
             environment,
@@ -606,6 +667,15 @@ async fn run_rocks_profile(
     Ok(paths)
 }
 
+fn bulk_load_settings(profile_settings: &Settings) -> Settings {
+    let mut settings = profile_settings.clone();
+    settings.wal_enabled = false;
+    settings.compactor_options = None;
+    settings.l0_max_ssts = u32::MAX as usize;
+    settings.l0_max_ssts_per_key = u32::MAX as usize;
+    settings
+}
+
 async fn execute_rocks_variant(
     variant: &VariantConfig,
     database_path: &Path,
@@ -641,9 +711,8 @@ async fn execute_rocks_variant(
             database_path.clone(),
             store,
             &variant.profile,
+            &variant.slate_settings,
             Arc::clone(&recorder),
-            args.smoke,
-            false,
         )
         .await?;
         if lsm_digest(&db)? != initial.lsm_digest_sha256 {
@@ -700,11 +769,6 @@ fn write_variant_result(
         &outcome.storage,
         outcome.application.successful_operations,
     );
-    let settings = settings_for(
-        &variant.profile,
-        args.smoke,
-        variant.workload.kind == WorkloadKind::BulkLoad,
-    )?;
     let result = ResultRecord {
         schema_version: 1,
         identity: Identity {
@@ -717,7 +781,7 @@ fn write_variant_result(
             profile: variant.profile.name.clone(),
             workload: variant.workload.name.clone(),
             variant: variant.variant.clone(),
-            mode: if args.smoke { "smoke" } else { "published" }.to_string(),
+            mode: variant.profile.mode().to_string(),
         },
         environment: environment.clone(),
         object_store_baseline: baseline.clone(),
@@ -737,7 +801,7 @@ fn write_variant_result(
                     .unwrap_or(slatedb::db_cache::DEFAULT_META_CACHE_CAPACITY),
             ),
             sst_block_bytes: variant.profile.sst_block_bytes,
-            slate_settings: serde_json::to_value(settings)?,
+            slate_settings: serde_json::to_value(&variant.slate_settings)?,
             build_profile: if cfg!(debug_assertions) {
                 "debug".to_string()
             } else {
@@ -789,14 +853,12 @@ async fn open_database(
     path: Path,
     store: Arc<dyn ObjectStore>,
     profile: &ProfileConfig,
+    settings: &Settings,
     recorder: Arc<BenchmarkMetricsRecorder>,
-    smoke: bool,
-    bulk_load: bool,
 ) -> Result<Arc<Db>> {
-    let settings = settings_for(profile, smoke, bulk_load)?;
     let db_recorder: Arc<dyn MetricsRecorder> = recorder;
     let mut builder = Db::builder(path, store)
-        .with_settings(settings)
+        .with_settings(settings.clone())
         .with_metrics_recorder(db_recorder);
     if let Some(cache) = cache_for(profile) {
         builder = builder.with_db_cache(cache);
@@ -805,38 +867,6 @@ async fn open_database(
         builder = builder.with_sst_block_size(SstBlockSize::Block8Kib);
     }
     Ok(Arc::new(builder.build().await.context("opening SlateDB")?))
-}
-
-fn settings_for(profile: &ProfileConfig, smoke: bool, bulk_load: bool) -> Result<Settings> {
-    let mut settings = Settings {
-        flush_interval: Some(Duration::from_millis(profile.flush_interval_ms)),
-        metric_level: slatedb_common::metrics::MetricLevel::Info,
-        compression_codec: profile
-            .compression
-            .as_deref()
-            .map(CompressionCodec::from_str)
-            .transpose()?,
-        ..Default::default()
-    };
-    if smoke {
-        let mut options = CompactorOptions {
-            poll_interval: Duration::from_millis(20),
-            commit_compacted_interval: Duration::from_millis(20),
-            ..Default::default()
-        };
-        if let Some(worker) = options.worker.as_mut() {
-            worker.compactions_poll_interval = Duration::from_millis(20);
-        }
-        settings.compactor_options = Some(options);
-        settings.manifest_poll_interval = Duration::from_millis(20);
-        settings.l0_sst_size_bytes = 64 * 1024;
-        settings.max_unflushed_bytes = 8 * 1024 * 1024;
-    }
-    if bulk_load {
-        settings.compactor_options = None;
-        settings.wal_enabled = false;
-    }
-    Ok(settings)
 }
 
 fn cache_for(profile: &ProfileConfig) -> Option<Arc<dyn DbCache>> {
@@ -864,10 +894,10 @@ fn cache_for(profile: &ProfileConfig) -> Option<Arc<dyn DbCache>> {
 async fn wait_for_compaction(
     db: &Db,
     recorder: &BenchmarkMetricsRecorder,
-    suite: &SuiteConfig,
+    profile: &ProfileConfig,
 ) -> Result<()> {
-    let timeout = Duration::from_millis(suite.compaction_timeout_ms);
-    let quiet = Duration::from_millis(suite.compaction_quiet_ms);
+    let timeout = Duration::from_millis(profile.compaction_timeout_ms);
+    let quiet = Duration::from_millis(profile.compaction_quiet_ms);
     let started = Instant::now();
     let mut stable_since = Instant::now();
     let mut manifest_id = db.status().current_manifest.id();
@@ -912,6 +942,13 @@ fn manifest_lsm_digest(manifest: &VersionedManifest) -> Result<String> {
     Ok(format!(
         "{:x}",
         Sha256::digest(serde_json::to_vec(&layout)?)
+    ))
+}
+
+fn settings_digest(settings: &Settings) -> Result<String> {
+    Ok(format!(
+        "{:x}",
+        Sha256::digest(serde_json::to_vec(settings)?)
     ))
 }
 
@@ -962,9 +999,15 @@ fn average_database_bytes(
 
 #[cfg(test)]
 mod tests {
-    use super::{average_database_bytes, execute_rocks_variant, lsm_digest, open_database};
+    use super::{
+        average_database_bytes, bulk_load_settings, execute_rocks_variant, lsm_digest,
+        open_database,
+    };
     use crate::cli::RunArgs;
-    use crate::config::{ProfileConfig, VariantConfig, WorkloadConfig, WorkloadKind};
+    use crate::config::{
+        ProbeConfig, ProfileConfig, ProfileExecution, VariantConfig, VariantDefinition,
+        WorkloadConfig, WorkloadKind,
+    };
     use crate::instrumented_store::InstrumentedStore;
     use crate::model::{TimeseriesFile, TimeseriesSample};
     use crate::system::BenchmarkMetricsRecorder;
@@ -1008,6 +1051,19 @@ mod tests {
             average_database_bytes(&timeseries, 2_000_000_000, 0, 500),
             300
         );
+    }
+
+    #[test]
+    fn bulk_load_settings_disable_durability_and_l0_backpressure() {
+        let profile_settings = Settings::default();
+        let settings = bulk_load_settings(&profile_settings);
+
+        assert!(!settings.wal_enabled);
+        assert!(settings.compactor_options.is_none());
+        assert_eq!(settings.l0_max_ssts, u32::MAX as usize);
+        assert_eq!(settings.l0_max_ssts_per_key, u32::MAX as usize);
+        assert!(profile_settings.wal_enabled);
+        assert!(profile_settings.compactor_options.is_some());
     }
 
     #[tokio::test]
@@ -1063,7 +1119,11 @@ mod tests {
         let overwrite = WorkloadConfig {
             name: "overwrite".to_string(),
             kind: WorkloadKind::Overwrite,
-            variants: vec!["clients-1".to_string()],
+            variants: vec![VariantDefinition {
+                name: "clients-1".to_string(),
+                clients: Some(1),
+                target_rate: None,
+            }],
             await_durable: false,
             record_count: None,
             key_bytes: None,
@@ -1074,7 +1134,11 @@ mod tests {
         let random_read = WorkloadConfig {
             name: "random-read".to_string(),
             kind: WorkloadKind::RandomRead,
-            variants: vec!["clients-1".to_string()],
+            variants: vec![VariantDefinition {
+                name: "clients-1".to_string(),
+                clients: Some(1),
+                target_rate: None,
+            }],
             await_durable: false,
             record_count: None,
             key_bytes: None,
@@ -1084,17 +1148,31 @@ mod tests {
         };
         let profile = ProfileConfig {
             name: "rocksdb".to_string(),
+            release: false,
+            execution: ProfileExecution::Sequential,
+            object_store_probe: ProbeConfig {
+                latency_operations: 1,
+                latency_object_bytes: 1,
+                throughput_object_bytes: 1,
+                throughput_concurrency: 1,
+                throughput_warmup_ms: 0,
+                throughput_measurement_ms: 1,
+            },
+            compaction_quiet_ms: 10,
+            compaction_timeout_ms: 1_000,
             record_count: 8,
             key_bytes: 16,
             value_bytes: 64,
             block_cache_bytes: Some(1024 * 1024),
             metadata_cache_bytes: Some(1024 * 1024),
-            flush_interval_ms: 10,
             warmup_ms: 0,
-            measurement_ms: 20,
-            compression: None,
+            measurement_ms: 200,
             sst_block_bytes: None,
             workloads: vec![overwrite.clone(), random_read.clone()],
+        };
+        let slate_settings = Settings {
+            flush_interval: Some(std::time::Duration::from_millis(10)),
+            ..Default::default()
         };
         let variant = |workload| VariantConfig {
             profile: profile.clone(),
@@ -1102,13 +1180,13 @@ mod tests {
             variant: "clients-1".to_string(),
             clients: Some(1),
             target_rate: None,
+            slate_settings: slate_settings.clone(),
         };
         let args = RunArgs {
             profile: None,
             workload: None,
             variant: None,
             output: PathBuf::new(),
-            smoke: true,
             config_dir: PathBuf::from("config"),
             schema_dir: PathBuf::from("schema"),
         };
@@ -1120,9 +1198,8 @@ mod tests {
             path.clone(),
             Arc::clone(&store),
             &profile,
+            &slate_settings,
             recorder,
-            true,
-            false,
         )
         .await?;
         populate_dataset(Arc::clone(&db), 8, 16, 64, false).await?;

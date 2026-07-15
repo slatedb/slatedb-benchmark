@@ -1,0 +1,59 @@
+schema_version = 1
+release = false
+execution = "isolated"
+record_count = 128
+key_bytes = 16
+value_bytes = 1024
+block_cache_bytes = 8388608
+metadata_cache_bytes = 2097152
+warmup = "15ms"
+measurement = "40ms"
+compaction_quiet = "100ms"
+compaction_timeout = "10s"
+
+[object_store_probe]
+latency_operations = 8
+latency_object_bytes = 8192
+throughput_object_bytes = 1048576
+throughput_concurrency = 2
+throughput_warmup = "20ms"
+throughput_measurement = "80ms"
+
+[[workloads]]
+name = "open-loop-read-update"
+kind = "open-loop-read-update"
+measurement = "80ms"
+
+[[workloads.variants]]
+name = "rate-100"
+target_rate = 100
+
+[[workloads]]
+name = "prefix-scan"
+kind = "prefix-scan"
+record_count = 160
+
+[[workloads.variants]]
+name = "clients-1"
+clients = 1
+
+[[workloads]]
+name = "read-write"
+kind = "ycsb-a"
+
+[[workloads.variants]]
+name = "clients-1"
+clients = 1
+
+[[workloads.variants]]
+name = "clients-4"
+clients = 4
+
+[[workloads]]
+name = "transaction-contention"
+kind = "transaction-contention"
+record_count = 64
+
+[[workloads.variants]]
+name = "clients-4"
+clients = 4

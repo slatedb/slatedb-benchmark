@@ -7,7 +7,7 @@ const run = JSON.parse(await readFile(path.join(root, 'run.json'), 'utf8'));
 const catalog = JSON.parse(
   await new Promise((resolve, reject) => {
     import('node:child_process').then(({ execFile }) =>
-      execFile('cargo', ['run', '--quiet', '--', 'catalog', '--smoke'], { cwd: process.cwd() }, (error, stdout) =>
+      execFile('cargo', ['run', '--quiet', '--', 'catalog', '--profile', 'smoke'], { cwd: process.cwd() }, (error, stdout) =>
         error ? reject(error) : resolve(stdout),
       ),
     );
