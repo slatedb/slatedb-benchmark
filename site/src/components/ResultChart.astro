@@ -5,7 +5,6 @@ interface Props {
   result: BenchmarkResult;
   timeseries: BenchmarkTimeseries;
   variant: string;
-  rawBase: string;
 }
 
 type Point = { x: number | string; y: number };
@@ -16,11 +15,10 @@ type ChartDefinition = {
   unit: string;
   digits: number;
   mode: 'time' | 'percentiles';
-  rawHref: string;
   datasets: Array<{ label: string; color: string; points: Point[] }>;
 };
 
-const { result, timeseries, variant, rawBase } = Astro.props;
+const { result, timeseries, variant } = Astro.props;
 const application = timeseries.application_windows;
 const atEnd = (window: { start_offset_ns: number; duration_ns: number }) =>
   (window.start_offset_ns + window.duration_ns) / 1e9;
@@ -49,7 +47,6 @@ const latencyChart: ChartDefinition = {
   unit: 'Milliseconds',
   digits: 3,
   mode: 'time',
-  rawHref: `${rawBase}/timeseries.json`,
   datasets: latencyDatasets(latencyRows),
 };
 
@@ -60,7 +57,6 @@ const throughputChart: ChartDefinition = {
   unit: 'MiB / second',
   digits: 2,
   mode: 'time',
-  rawHref: `${rawBase}/timeseries.json`,
   datasets: [{
     label: 'MiB/s',
     color: '#b26844',
@@ -81,7 +77,6 @@ const tailLatencyChart: ChartDefinition = {
   unit: 'ms',
   digits: 3,
   mode: 'percentiles',
-  rawHref: `${rawBase}/result.json`,
   datasets: [{
     label: 'Return latency',
     color: '#b26844',
@@ -104,7 +99,6 @@ const durabilityChart: ChartDefinition | null = durabilityRows.length > 0 ? {
   unit: 'Milliseconds',
   digits: 3,
   mode: 'time',
-  rawHref: `${rawBase}/timeseries.json`,
   datasets: latencyDatasets(durabilityRows),
 } : null;
 
@@ -115,30 +109,14 @@ const charts = [throughputChart, latencyChart, tailLatencyChart, durabilityChart
 <section class="timeseries-region" aria-label="Performance charts" data-chart-switcher>
   <div class="chart-toolbar">
     <p class="chart-description" id="active-chart-description" data-chart-description>{charts[0].description}</p>
-    <div class="chart-actions">
-      <label class="chart-selector">
-        <span>Chart</span>
-        <select data-chart-select aria-label="Chart">
-          {charts.map((chart, index) => (
-            <option value={chart.key} selected={index === 0}>{chart.title}</option>
-          ))}
-        </select>
-      </label>
-      <a
-        class="chart-download-link"
-        data-chart-raw-link
-        href={charts[0].rawHref}
-        download
-        aria-label={`Download data for ${charts[0].title}`}
-        title="Download raw chart data"
-      >
-        <svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M12 3v12"></path>
-          <path d="m7 10 5 5 5-5"></path>
-          <path d="M5 20h14"></path>
-        </svg>
-      </a>
-    </div>
+    <label class="chart-selector">
+      <span>Chart</span>
+      <select data-chart-select aria-label="Chart">
+        {charts.map((chart, index) => (
+          <option value={chart.key} selected={index === 0}>{chart.title}</option>
+        ))}
+      </select>
+    </label>
   </div>
   <div class="chart-stage">
     {charts.map((chart, index) => (
@@ -147,7 +125,6 @@ const charts = [throughputChart, latencyChart, tailLatencyChart, durabilityChart
         id={`${chart.key}-panel`}
         data-chart-panel={chart.key}
         data-chart-description={chart.description}
-        data-raw-href={chart.rawHref}
         hidden={index !== 0}
       >
         <div class="time-chart-canvas">
@@ -228,7 +205,6 @@ const charts = [throughputChart, latencyChart, tailLatencyChart, durabilityChart
 
   document.querySelectorAll<HTMLElement>('[data-chart-switcher]').forEach((switcher) => {
     const select = switcher.querySelector<HTMLSelectElement>('[data-chart-select]');
-    const rawLink = switcher.querySelector<HTMLAnchorElement>('[data-chart-raw-link]');
     const description = switcher.querySelector<HTMLElement>('[data-chart-description]');
     const panels = [...switcher.querySelectorAll<HTMLElement>('[data-chart-panel]')];
     const activate = (key: string) => {
@@ -236,11 +212,7 @@ const charts = [throughputChart, latencyChart, tailLatencyChart, durabilityChart
         panel.hidden = panel.dataset.chartPanel !== key;
       });
       const panel = panels.find((candidate) => !candidate.hidden);
-      if (rawLink && panel?.dataset.rawHref) rawLink.href = panel.dataset.rawHref;
       if (description && panel?.dataset.chartDescription) description.textContent = panel.dataset.chartDescription;
-      if (rawLink && select?.selectedOptions[0]?.textContent) {
-        rawLink.setAttribute('aria-label', `Download data for ${select.selectedOptions[0].textContent}`);
-      }
       const canvas = panel?.querySelector<HTMLCanvasElement>('[data-time-chart]');
       if (canvas) requestAnimationFrame(() => renderChart(canvas));
     };
