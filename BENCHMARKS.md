@@ -14,6 +14,9 @@ their nested variants; `<suite>.settings.toml` contains the suite-wide
 SlateDB settings. The `smoke` suite is a small, non-release integration suite;
 it is not a reduced rewrite of the release catalog.
 
+Each measured variant starts with an empty local object-store cache. Warmup may
+populate it; PUT caching and startup preloading remain disabled.
+
 ## Standard results
 
 Every workload emits the same result record. Use `null` for fields that do not
@@ -49,7 +52,8 @@ apply.
 ## YCSB suite
 
 - Dataset: 100 million records with 16-byte keys and 1 KiB values
-- Cache: 4 GiB block cache and 512 MiB metadata cache
+- Cache: 4 GiB block cache, 512 MiB metadata/index cache, and 16 GiB local
+  object-store cache
 - Writes: `await_durable=false` with `flush_interval=100ms`
 - Concurrency: 1, 16, and 64 clients
 - Run: 60-second warmup followed by 5 minutes of measurement
@@ -77,7 +81,8 @@ and the defaults in
 where SlateDB has an equivalent setting.
 
 - Dataset: 900 million records with 20-byte keys and 400-byte values
-- Cache: 6 GiB block cache; use SlateDB's default metadata cache
+- Cache: 6 GiB block cache, 128 MiB metadata/index cache, and 16 GiB local
+  object-store cache
 - SST block size: 8 KiB
 - Compression: Zstandard
 - Concurrency: 64 clients

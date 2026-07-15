@@ -223,6 +223,7 @@ for (const suite of published.suites) {
           value_bytes: valueBytes,
           block_cache_bytes: suite.block_cache_bytes,
           metadata_cache_bytes: suite.metadata_cache_bytes,
+          object_store_cache_bytes: suite.object_store_cache_bytes ?? null,
           sst_block_bytes: suite.sst_block_bytes ?? null,
           slate_settings: {
             flush_interval: '100ms',
@@ -238,7 +239,10 @@ for (const suite of published.suites) {
             max_unflushed_bytes: 8388608,
             compactor_options: workload.kind === 'bulk-load' ? null : {},
             compression_codec: suite.name === 'rocksdb' ? 'Zstd' : null,
-            object_store_cache_options: {},
+            object_store_cache_options: {
+              root_folder: null,
+              max_cache_size_bytes: suite.object_store_cache_bytes ?? null,
+            },
             garbage_collector_options: {},
             metric_level: 'Info',
             default_ttl: null,

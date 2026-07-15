@@ -82,6 +82,7 @@ pub struct BenchmarkConfiguration {
     pub value_bytes: usize,
     pub block_cache_bytes: Option<u64>,
     pub metadata_cache_bytes: Option<u64>,
+    pub object_store_cache_bytes: Option<u64>,
     pub sst_block_bytes: Option<usize>,
     pub slate_settings: Value,
     pub build_profile: String,

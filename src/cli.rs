@@ -86,6 +86,8 @@ pub struct WorkerArgs {
     #[arg(long)]
     pub expected_lsm_digest: String,
     #[arg(long)]
+    pub object_store_cache_root: Option<PathBuf>,
+    #[arg(long)]
     pub output: PathBuf,
     #[arg(long, default_value = "config")]
     pub config_dir: PathBuf,

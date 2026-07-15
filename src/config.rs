@@ -42,6 +42,7 @@ pub struct SuiteConfig {
     pub value_bytes: usize,
     pub block_cache_bytes: Option<u64>,
     pub metadata_cache_bytes: Option<u64>,
+    pub object_store_cache_bytes: Option<u64>,
     pub warmup_ms: u64,
     pub measurement_ms: u64,
     pub sst_block_bytes: Option<usize>,
@@ -120,6 +121,7 @@ struct SuiteFile {
     value_bytes: usize,
     block_cache_bytes: Option<u64>,
     metadata_cache_bytes: Option<u64>,
+    object_store_cache_bytes: Option<u64>,
     warmup: String,
     measurement: String,
     #[serde(default)]
@@ -370,8 +372,15 @@ impl BenchmarkConfig {
         let path = self
             .config_dir
             .join(format!("{}.settings.toml", suite.name));
-        Settings::from_file(&path)
-            .with_context(|| format!("loading SlateDB settings file {}", path.display()))
+        let mut settings = Settings::from_file(&path)
+            .with_context(|| format!("loading SlateDB settings file {}", path.display()))?;
+        settings.object_store_cache_options.root_folder = None;
+        settings.object_store_cache_options.max_cache_size_bytes = suite
+            .object_store_cache_bytes
+            .map(usize::try_from)
+            .transpose()
+            .context("object-store cache capacity exceeds the platform limit")?;
+        Ok(settings)
     }
 }
 
@@ -478,6 +487,7 @@ fn load_suite(suite_path: &Path) -> Result<SuiteConfig> {
         value_bytes: file.value_bytes,
         block_cache_bytes: file.block_cache_bytes,
         metadata_cache_bytes: file.metadata_cache_bytes,
+        object_store_cache_bytes: file.object_store_cache_bytes,
         warmup_ms: parse_duration_ms(&file.warmup, suite_path, "warmup")?,
         measurement_ms: parse_duration_ms(&file.measurement, suite_path, "measurement")?,
         sst_block_bytes: file.sst_block_bytes,
@@ -658,5 +668,21 @@ mod tests {
         );
         assert!(suite_settings.wal_enabled);
         assert!(suite_settings.compactor_options.is_some());
+        assert_eq!(suite.block_cache_bytes, Some(6 * 1024 * 1024 * 1024));
+        assert_eq!(suite.metadata_cache_bytes, Some(128 * 1024 * 1024));
+        assert_eq!(
+            suite.object_store_cache_bytes,
+            Some(16 * 1024 * 1024 * 1024)
+        );
+        assert_eq!(
+            suite_settings
+                .object_store_cache_options
+                .max_cache_size_bytes,
+            Some(16 * 1024 * 1024 * 1024)
+        );
+        assert!(suite_settings
+            .object_store_cache_options
+            .root_folder
+            .is_none());
     }
 }

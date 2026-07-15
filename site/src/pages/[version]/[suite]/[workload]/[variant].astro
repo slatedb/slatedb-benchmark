@@ -25,6 +25,11 @@ const formatBytes = (value: unknown) => {
   while (amount >= 1024 && index < units.length - 1) { amount /= 1024; index += 1; }
   return `${amount.toFixed(index === 0 ? 0 : 2)} ${units[index]}`;
 };
+const cacheSummary = [
+  ['block', result.configuration.block_cache_bytes],
+  ['metadata/index', result.configuration.metadata_cache_bytes],
+  ['object store', result.configuration.object_store_cache_bytes],
+].map(([name, bytes]) => bytes == null ? `${name} disabled` : `${formatBytes(bytes)} ${name}`).join(' · ');
 
 const {
   object_store_requests: objectStoreRequests,
@@ -74,7 +79,7 @@ const tables = [
         <div><dt>Machine</dt><dd>{result.environment.runner_type}</dd></div>
         <div><dt>Object store</dt><dd>{result.environment.object_store} · {result.environment.region}</dd></div>
         <div><dt>Dataset</dt><dd>{result.configuration.record_count.toLocaleString()} × {formatBytes(result.configuration.value_bytes)}</dd></div>
-        <div><dt>Cache</dt><dd>{formatBytes(result.configuration.block_cache_bytes)}</dd></div>
+        <div><dt>Cache</dt><dd>{cacheSummary}</dd></div>
         <div><dt>Durability</dt><dd>{result.durability.lag ? 'Async + tracked' : 'Awaited / read-only'}</dd></div>
       </dl>
     </aside>

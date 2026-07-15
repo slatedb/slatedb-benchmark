@@ -30,6 +30,7 @@ export type BenchmarkResult = {
     value_bytes: number;
     block_cache_bytes: number | null;
     metadata_cache_bytes: number | null;
+    object_store_cache_bytes: number | null;
   };
   application: Record<string, unknown> & {
     successful_operations: number;

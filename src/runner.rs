@@ -286,12 +286,14 @@ async fn execute_isolated_variant(
             )
             .await?
         } else {
+            let object_store_cache = object_store_cache_directory(&variant.suite)?;
             let recorder = Arc::new(BenchmarkMetricsRecorder::new());
-            let db = open_database(
+            let db = open_database_with_object_store_cache(
                 clone_path.clone(),
                 Arc::clone(&store),
                 &variant.suite,
                 &variant.slate_settings,
+                object_store_cache.as_ref().map(|cache| cache.path()),
                 Arc::clone(&recorder),
             )
             .await?;
@@ -336,11 +338,12 @@ pub async fn execute_worker(args: WorkerArgs) -> Result<()> {
         .context("seeding worker database-size tracker")?;
     let store: Arc<dyn ObjectStore> = context.instrumented.clone();
     let recorder = Arc::new(BenchmarkMetricsRecorder::new());
-    let db = open_database(
+    let db = open_database_with_object_store_cache(
         database_path.clone(),
         store,
         &variant.suite,
         &variant.slate_settings,
+        args.object_store_cache_root.as_deref(),
         Arc::clone(&recorder),
     )
     .await?;
@@ -370,6 +373,7 @@ async fn execute_variant_in_fresh_process(
     expected_lsm_digest: &str,
     args: &RunArgs,
 ) -> Result<WorkloadOutcome> {
+    let object_store_cache = object_store_cache_directory(&variant.suite)?;
     let output = args.output.join(format!(".worker-{}.json", Uuid::new_v4()));
     let executable = std::env::current_exe().context("locating benchmark executable")?;
     let mut command = tokio::process::Command::new(executable);
@@ -391,6 +395,9 @@ async fn execute_variant_in_fresh_process(
         .arg(&output)
         .arg("--config-dir")
         .arg(&args.config_dir);
+    if let Some(cache) = &object_store_cache {
+        command.arg("--object-store-cache-root").arg(cache.path());
+    }
     let status = command
         .status()
         .await
@@ -545,12 +552,14 @@ async fn run_sequential_suite(
         .context("bulk-load variant is missing")?;
     bulk_variant.slate_settings = bulk_load_settings(&bulk_variant.slate_settings);
     let path = run_root.clone().join("sequential-suite");
+    let object_store_cache = object_store_cache_directory(&suite)?;
     let bulk_recorder = Arc::new(BenchmarkMetricsRecorder::new());
-    let bulk_db = open_database(
+    let bulk_db = open_database_with_object_store_cache(
         path.clone(),
         Arc::clone(&store),
         &suite,
         &bulk_variant.slate_settings,
+        object_store_cache.as_ref().map(|cache| cache.path()),
         Arc::clone(&bulk_recorder),
     )
     .await?;
@@ -606,11 +615,12 @@ async fn run_sequential_suite(
         .context("closing bulk-load database")?;
 
     let suite_settings = benchmark.slate_settings(&suite)?;
-    let compaction_db = open_database(
+    let compaction_db = open_database_with_object_store_cache(
         path.clone(),
         Arc::clone(&store),
         &suite,
         &suite_settings,
+        object_store_cache.as_ref().map(|cache| cache.path()),
         Arc::clone(&recorder),
     )
     .await?;
@@ -717,12 +727,14 @@ async fn execute_rocks_variant(
         )
         .await?
     } else {
+        let object_store_cache = object_store_cache_directory(&variant.suite)?;
         let recorder = Arc::new(BenchmarkMetricsRecorder::new());
-        let db = open_database(
+        let db = open_database_with_object_store_cache(
             database_path.clone(),
             store,
             &variant.suite,
             &variant.slate_settings,
+            object_store_cache.as_ref().map(|cache| cache.path()),
             Arc::clone(&recorder),
         )
         .await?;
@@ -803,6 +815,7 @@ fn write_variant_result(
                     .metadata_cache_bytes
                     .unwrap_or(slatedb::db_cache::DEFAULT_META_CACHE_CAPACITY),
             ),
+            object_store_cache_bytes: variant.suite.object_store_cache_bytes,
             sst_block_bytes: variant.suite.sst_block_bytes,
             slate_settings: serde_json::to_value(&variant.slate_settings)?,
             build_profile: if cfg!(debug_assertions) {
@@ -863,20 +876,37 @@ async fn open_database(
     settings: &Settings,
     recorder: Arc<BenchmarkMetricsRecorder>,
 ) -> Result<Arc<Db>> {
+    open_database_with_object_store_cache(path, store, suite, settings, None, recorder).await
+}
+
+async fn open_database_with_object_store_cache(
+    path: Path,
+    store: Arc<dyn ObjectStore>,
+    suite: &SuiteConfig,
+    settings: &Settings,
+    object_store_cache_root: Option<&FsPath>,
+    recorder: Arc<BenchmarkMetricsRecorder>,
+) -> Result<Arc<Db>> {
+    let mut settings = settings.clone();
+    settings.object_store_cache_options.root_folder =
+        object_store_cache_root.map(FsPath::to_path_buf);
+    settings.object_store_cache_options.max_cache_size_bytes = suite
+        .object_store_cache_bytes
+        .map(usize::try_from)
+        .transpose()
+        .context("object-store cache capacity exceeds the platform limit")?;
     let db_recorder: Arc<dyn MetricsRecorder> = recorder;
     let mut builder = Db::builder(path, store)
-        .with_settings(settings.clone())
+        .with_settings(settings)
         .with_metrics_recorder(db_recorder);
-    if let Some(cache) = cache_for(suite) {
-        builder = builder.with_db_cache(cache);
-    }
+    builder = builder.with_db_cache(cache_for(suite));
     if suite.sst_block_bytes == Some(8192) {
         builder = builder.with_sst_block_size(SstBlockSize::Block8Kib);
     }
     Ok(Arc::new(builder.build().await.context("opening SlateDB")?))
 }
 
-fn cache_for(suite: &SuiteConfig) -> Option<Arc<dyn DbCache>> {
+fn cache_for(suite: &SuiteConfig) -> Arc<dyn DbCache> {
     let block_cache = suite.block_cache_bytes.map(|max_capacity| {
         Arc::new(FoyerCache::new_with_opts(FoyerCacheOptions {
             max_capacity,
@@ -890,12 +920,24 @@ fn cache_for(suite: &SuiteConfig) -> Option<Arc<dyn DbCache>> {
         max_capacity: metadata_capacity,
         ..Default::default()
     })) as Arc<dyn DbCache>);
-    Some(Arc::new(
+    Arc::new(
         SplitCache::new()
             .with_block_cache(block_cache)
             .with_meta_cache(metadata_cache)
             .build(),
-    ))
+    )
+}
+
+fn object_store_cache_directory(suite: &SuiteConfig) -> Result<Option<tempfile::TempDir>> {
+    suite
+        .object_store_cache_bytes
+        .map(|_| {
+            tempfile::Builder::new()
+                .prefix("slatedb-benchmark-object-store-cache-")
+                .tempdir()
+                .context("creating temporary object-store cache")
+        })
+        .transpose()
 }
 
 async fn wait_for_compaction(
@@ -1008,12 +1050,12 @@ fn average_database_bytes(
 mod tests {
     use super::{
         average_database_bytes, bulk_load_settings, execute_rocks_variant, lsm_digest,
-        open_database,
+        object_store_cache_directory, open_database,
     };
     use crate::cli::RunArgs;
     use crate::config::{
-        ProbeConfig, SuiteConfig, SuiteExecution, VariantConfig, VariantDefinition, WorkloadConfig,
-        WorkloadKind,
+        BenchmarkConfig, ProbeConfig, SuiteConfig, SuiteExecution, VariantConfig,
+        VariantDefinition, WorkloadConfig, WorkloadKind,
     };
     use crate::instrumented_store::InstrumentedStore;
     use crate::model::{TimeseriesFile, TimeseriesSample};
@@ -1070,6 +1112,24 @@ mod tests {
         assert_eq!(settings.l0_max_ssts_per_key, u32::MAX as usize);
         assert!(suite_settings.wal_enabled);
         assert!(suite_settings.compactor_options.is_some());
+    }
+
+    #[test]
+    fn object_store_cache_directory_is_temporary() -> Result<()> {
+        let benchmark = BenchmarkConfig::load_from(std::path::Path::new("config"))?;
+        let suite = benchmark
+            .suites
+            .iter()
+            .find(|suite| suite.name == "smoke")
+            .expect("smoke suite");
+        let path = {
+            let cache = object_store_cache_directory(suite)?.expect("object-store cache");
+            let path = cache.path().to_path_buf();
+            assert!(path.is_dir());
+            path
+        };
+        assert!(!path.exists());
+        Ok(())
     }
 
     #[tokio::test]
@@ -1171,6 +1231,7 @@ mod tests {
             value_bytes: 64,
             block_cache_bytes: Some(1024 * 1024),
             metadata_cache_bytes: Some(1024 * 1024),
+            object_store_cache_bytes: None,
             warmup_ms: 0,
             measurement_ms: 200,
             sst_block_bytes: None,

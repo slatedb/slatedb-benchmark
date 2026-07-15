@@ -52,14 +52,17 @@ runner clones the suite settings, disables the WAL and compactor, and sets
 `l0_max_ssts` and `l0_max_ssts_per_key` to `u32::MAX`. After loading and
 flushing the complete dataset, it reopens the database with the original
 suite settings and waits for compaction to finish. Every result records the
-effective `Settings` object used for its measured workload.
+resolved `Settings`; the ephemeral object-store cache root is omitted while its
+capacity is recorded explicitly.
 
-Dataset sizes, operation mixes, timings, durability behavior, cache capacity,
+Dataset sizes, operation mixes, timings, durability behavior, cache capacities,
 SST block size, object-store probe parameters, release eligibility, workloads,
-variants, and execution model live in `suite.toml`. Cache and SST block size
-are attached as `DbBuilder` components and are not fields in SlateDB's
-`Settings` type. Human-readable durations in TOML are resolved to milliseconds
-internally and nanoseconds in result records.
+variants, and execution model live in `suite.toml`. Block and metadata caches
+are attached as `DbBuilder` components; SlateDB's metadata cache includes SST
+indexes, filters, and statistics. The runner applies the object-store cache
+capacity to `Settings` and supplies its local root at execution time.
+Human-readable durations in TOML are resolved to milliseconds internally and
+nanoseconds in result records.
 
 The `smoke.suite.toml` file defines an ordinary suite with `release = false`.
 Its few purpose-built workloads cover the important runner paths with small
@@ -157,12 +160,15 @@ runner deletes them. The small session state and result bundles remain so a
 later process can reconstruct the complete local output without repeating
 measurements. Isolated and sequential suites use the same session protocol.
 
-Each published variant runs in a fresh worker process with a newly constructed
-cache, matching `db_bench` process isolation; in-memory smoke runs reopen the
-database with a new cache in the parent process because their object store
-cannot cross a process boundary. Tests that require an empty or custom dataset
-create their own golden database. A cold read clears SlateDB's local caches;
-the runner cannot clear caches managed inside Tigris.
+Each published variant runs in a fresh worker process with newly constructed
+block and metadata caches, matching `db_bench` process isolation. Its local
+object-store cache uses a fresh temporary directory that survives warmup and
+measurement but is not shared with another variant or included in result
+artifacts. In-memory smoke runs reopen the database with new caches in the
+parent process because their object store cannot cross a process boundary.
+Tests that require an empty or custom dataset create their own golden database.
+A cold read starts with empty local caches; the runner cannot clear caches
+managed inside Tigris.
 
 ### Object-store baseline
 
@@ -426,12 +432,12 @@ aesthetic, layout, and CSS styling.
 
 The layout favors density. A slim header contains the SlateDB wordmark. On wide
 screens, a sticky context rail groups the version, suite, workload, and
-variant selectors with machine, object-store, dataset, cache, and durability
-facts. The results canvas beside it starts with an active chart description and
-a right-aligned chart dropdown. A download icon beside the dropdown links to
-the selected chart's raw data. Payload MiB/s is selected by default. The other
-views are return latency over time, whole-run tail latency, and, where
-applicable, durability lag over time.
+variant selectors with machine, object-store, dataset, cache capacities, and
+durability facts. The results canvas beside it starts with an active chart
+description and a right-aligned chart dropdown. A download icon beside the
+dropdown links to the selected chart's raw data. Payload MiB/s is selected by
+default. The other views are return latency over time, whole-run tail latency,
+and, where applicable, durability lag over time.
 The rail and results collapse to one column on smaller screens. A table below
 the charts exposes all percentiles, durability, resource, storage, and
 object-store baseline fields. Raw object-store counts appear in their own

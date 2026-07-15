@@ -1,8 +1,8 @@
 use super::{
     bulk_load_settings, clone_database, execute_isolated_variant, execute_rocks_variant,
-    golden_key, lsm_digest, manifest_lsm_digest, open_database, prefix_size,
-    prepare_golden_database, wait_for_compaction, write_json, write_variant_result, GoldenDatabase,
-    ResultContext,
+    golden_key, lsm_digest, manifest_lsm_digest, object_store_cache_directory,
+    open_database_with_object_store_cache, prefix_size, prepare_golden_database,
+    wait_for_compaction, write_json, write_variant_result, GoldenDatabase, ResultContext,
 };
 use crate::cli::RunArgs;
 use crate::config::{BenchmarkConfig, SuiteConfig, SuiteExecution, VariantConfig, WorkloadKind};
@@ -425,12 +425,14 @@ async fn execute_bulk_load(
 ) -> Result<(String, DatabaseCheckpoint)> {
     let mut bulk_variant = variant.clone();
     bulk_variant.slate_settings = bulk_load_settings(&bulk_variant.slate_settings);
+    let object_store_cache = object_store_cache_directory(&bulk_variant.suite)?;
     let bulk_recorder = Arc::new(BenchmarkMetricsRecorder::new());
-    let bulk_db = open_database(
+    let bulk_db = open_database_with_object_store_cache(
         database_path.clone(),
         Arc::clone(&store),
         &bulk_variant.suite,
         &bulk_variant.slate_settings,
+        object_store_cache.as_ref().map(|cache| cache.path()),
         Arc::clone(&bulk_recorder),
     )
     .await?;
@@ -479,11 +481,12 @@ async fn execute_bulk_load(
         .await
         .context("closing resumable bulk-load database")?;
 
-    let compaction_db = open_database(
+    let compaction_db = open_database_with_object_store_cache(
         database_path.clone(),
         Arc::clone(&store),
         &bulk_variant.suite,
         &variant.slate_settings,
+        object_store_cache.as_ref().map(|cache| cache.path()),
         Arc::clone(&recorder),
     )
     .await?;
