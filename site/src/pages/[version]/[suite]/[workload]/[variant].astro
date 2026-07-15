@@ -32,7 +32,7 @@ const cacheSummary = [
   ['block', result.configuration.block_cache_bytes],
   ['metadata/index', result.configuration.metadata_cache_bytes],
   ['object store', result.configuration.object_store_cache_bytes],
-].map(([name, bytes]) => bytes == null ? `${name} disabled` : `${formatBytes(bytes)} ${name}`).join(' · ');
+].map(([name, bytes]) => bytes == null ? `${name} disabled` : `${formatBytes(bytes)} ${name}`);
 
 const {
   object_store_requests: objectStoreRequests,
@@ -82,15 +82,28 @@ const tables = [
         <div><dt>Machine</dt><dd>{result.environment.runner_type}</dd></div>
         <div><dt>Object store</dt><dd>{result.environment.object_store} · {result.environment.region}</dd></div>
         <div><dt>Dataset</dt><dd>{result.configuration.record_count.toLocaleString()} × ({formatBytes(result.configuration.key_bytes)} key + {formatBytes(result.configuration.value_bytes)} value)</dd></div>
-        <div><dt>Cache</dt><dd>{cacheSummary}</dd></div>
+        <div><dt>Cache</dt><dd><ul class="cache-list">{cacheSummary.map((item) => <li>{item}</li>)}</ul></dd></div>
         <div><dt>Durability</dt><dd>{result.durability.lag ? 'Async + tracked' : 'Awaited / read-only'}</dd></div>
       </dl>
 
-      <nav class="config-links" aria-label="Suite configuration files">
-        <span>Configuration</span>
-        <a href={`${configBase}/${suiteConfig}`}>{suiteConfig}<span aria-hidden="true">↗</span></a>
-        <a href={`${configBase}/${settingsConfig}`}>{settingsConfig}<span aria-hidden="true">↗</span></a>
-      </nav>
+      <div class="context-links">
+        <nav aria-label="Suite configuration files">
+          <span>Configuration</span>
+          <a href={`${configBase}/${suiteConfig}`}>{suiteConfig}<span aria-hidden="true">↗</span></a>
+          <a href={`${configBase}/${settingsConfig}`}>{settingsConfig}<span aria-hidden="true">↗</span></a>
+        </nav>
+        <nav aria-label="Raw benchmark files">
+          <span>Raw files</span>
+          <a href={`${rawBase}/result.json`}>result.json</a>
+          <a href={`${rawBase}/histograms.json`}>histograms.json</a>
+          <a href={`${rawBase}/timeseries.json`}>timeseries.json</a>
+        </nav>
+        <nav aria-label="Benchmark source commits">
+          <span>Source</span>
+          <a href={`https://github.com/slatedb/slatedb/commit/${result.identity.slate_commit}`}>SlateDB commit<span aria-hidden="true">↗</span></a>
+          <a href={`https://github.com/slatedb/slatedb-benchmark/commit/${result.identity.runner_commit}`}>Runner commit<span aria-hidden="true">↗</span></a>
+        </nav>
+      </div>
     </aside>
 
     <div class="result-content">
@@ -112,10 +125,6 @@ const tables = [
 
       <CostCalculator result={result} pricing={pricing} />
 
-      <footer class="result-footer">
-        <div><span>Raw files</span><a href={`${rawBase}/result.json`}>result.json</a><a href={`${rawBase}/histograms.json`}>histograms.json</a><a href={`${rawBase}/timeseries.json`}>timeseries.json</a></div>
-        <div><span>Source</span><a href={`https://github.com/slatedb/slatedb/commit/${result.identity.slate_commit}`}>SlateDB commit</a><a href={`https://github.com/slatedb/slatedb-benchmark/commit/${result.identity.runner_commit}`}>Runner commit</a></div>
-      </footer>
     </div>
   </main>
 </Base>
