@@ -29,7 +29,7 @@ const operationLabel = (operation: string) => operation.replaceAll('_', ' ');
   <div class="section-heading cost-heading">
     <div>
       <h2 id="cost-title">Cost</h2>
-      <p>30-day estimate using this run’s request rate and final storage footprint.</p>
+      <p>Projected 30-day object-storage bill based on this run.</p>
     </div>
     <div class="cost-controls">
       <label>
@@ -41,46 +41,85 @@ const operationLabel = (operation: string) => operation.replaceAll('_', ' ');
     </div>
   </div>
 
-  <div class="cost-output" aria-live="polite">
-    <div class="cost-total">
-      <span>Estimated monthly total</span>
-      <strong data-cost-total>$0.000000</strong>
-      <small>per 30-day month</small>
-    </div>
-    <dl class="cost-breakdown">
-      <div><dt>Requests</dt><dd data-cost-requests>$0.000000</dd></div>
-      <div><dt>Storage</dt><dd data-cost-storage>$0.000000</dd></div>
-    </dl>
-  </div>
+  <div class="cost-statement">
+    <header class="cost-statement-meta">
+      <div><span>Service</span><strong data-cost-basis>—</strong></div>
+      <div><span>Billing period</span><strong>{pricing.units.month_days} days</strong></div>
+    </header>
 
-  <div class="cost-request-detail">
-    <h3>Request cost by operation</h3>
-    <div class="table-scroll">
-      <table class="cost-request-table">
-        <thead>
-          <tr>
-            <th scope="col">Operation</th>
-            <th scope="col">Monthly requests</th>
-            <th scope="col">Rate / 1k</th>
-            <th scope="col">Monthly cost</th>
-          </tr>
-        </thead>
-        <tbody>
-          {requestEntries.map(([operation, count]) => (
-            <tr data-cost-operation={operation} data-request-count={count}>
-              <th scope="row">{operationLabel(operation)}</th>
-              <td data-cost-monthly-requests>—</td>
-              <td data-cost-operation-rate>—</td>
-              <td data-cost-operation-total>—</td>
+    <section class="cost-line-group" aria-labelledby="request-charges-title">
+      <div class="cost-line-heading">
+        <h3 id="request-charges-title">Request charges</h3>
+        <p>Measured request volume projected over the billing period</p>
+      </div>
+      <div class="table-scroll">
+        <table class="cost-line-table">
+          <thead>
+            <tr>
+              <th scope="col">Operation</th>
+              <th scope="col">Monthly requests</th>
+              <th scope="col">Rate / 1k</th>
+              <th scope="col">Amount</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+          </thead>
+          <tbody>
+            {requestEntries.map(([operation, count]) => (
+              <tr data-cost-operation={operation} data-request-count={count}>
+                <th scope="row">{operationLabel(operation)}</th>
+                <td data-label="Monthly usage" data-cost-monthly-requests>—</td>
+                <td data-label="Rate / 1k" data-cost-operation-rate>—</td>
+                <td data-label="Amount" data-cost-operation-total>—</td>
+              </tr>
+            ))}
+          </tbody>
+          <tfoot>
+            <tr><th scope="row" colspan="3">Request subtotal</th><td data-cost-requests>—</td></tr>
+          </tfoot>
+        </table>
+      </div>
+    </section>
+
+    <section class="cost-line-group" aria-labelledby="storage-charges-title">
+      <div class="cost-line-heading">
+        <h3 id="storage-charges-title">Storage charges</h3>
+        <p>Final database footprint retained for the billing period</p>
+      </div>
+      <div class="table-scroll">
+        <table class="cost-line-table">
+          <thead>
+            <tr>
+              <th scope="col">Item</th>
+              <th scope="col">Stored</th>
+              <th scope="col">Rate / GiB-month</th>
+              <th scope="col">Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th scope="row">Database storage</th>
+              <td data-label="Stored" data-cost-storage-usage>—</td>
+              <td data-label="Rate / GiB-month" data-cost-storage-rate>—</td>
+              <td data-label="Amount" data-cost-storage>—</td>
+            </tr>
+          </tbody>
+          <tfoot>
+            <tr><th scope="row" colspan="3">Storage subtotal</th><td data-cost-storage>—</td></tr>
+          </tfoot>
+        </table>
+      </div>
+    </section>
+
+    <footer class="cost-grand-total">
+      <div>
+        <span>Estimated monthly total</span>
+        <small>{pricing.currency} · {pricing.units.month_days}-day month</small>
+      </div>
+      <strong data-cost-total aria-live="polite">—</strong>
+    </footer>
   </div>
 
   <div class="cost-context">
-    <span data-cost-basis></span>
+    <span>Request volume is extrapolated from the measured rate; storage uses the final database size.</span>
     <span>Free tiers, credits, discounts, and taxes are excluded.</span>
     <span>Compute and storage are assumed to share a region.</span>
     <a data-cost-source href={pricing.providers[0]?.source}>Provider pricing</a>
@@ -115,7 +154,9 @@ const operationLabel = (operation: string) => operation.replaceAll('_', ' ');
     const providerSelect = section.querySelector<HTMLSelectElement>('[data-cost-provider]');
     const totalOutput = section.querySelector<HTMLElement>('[data-cost-total]');
     const requestOutput = section.querySelector<HTMLElement>('[data-cost-requests]');
-    const storageOutput = section.querySelector<HTMLElement>('[data-cost-storage]');
+    const storageOutputs = [...section.querySelectorAll<HTMLElement>('[data-cost-storage]')];
+    const storageUsageOutput = section.querySelector<HTMLElement>('[data-cost-storage-usage]');
+    const storageRateOutput = section.querySelector<HTMLElement>('[data-cost-storage-rate]');
     const basisOutput = section.querySelector<HTMLElement>('[data-cost-basis]');
     const sourceLink = section.querySelector<HTMLAnchorElement>('[data-cost-source]');
     const operationRows = [...section.querySelectorAll<HTMLTableRowElement>('[data-cost-operation]')];
@@ -137,6 +178,10 @@ const operationLabel = (operation: string) => operation.replaceAll('_', ' ');
     }).format(value);
     const requestCount = (value: number) => new Intl.NumberFormat('en-US', {
       maximumFractionDigits: 0,
+    }).format(value);
+    const storageQuantity = (value: number) => new Intl.NumberFormat('en-US', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
     }).format(value);
 
     const render = () => {
@@ -164,9 +209,11 @@ const operationLabel = (operation: string) => operation.replaceAll('_', ' ');
 
       if (totalOutput) totalOutput.textContent = currency(requestCost + storageCost);
       if (requestOutput) requestOutput.textContent = currency(requestCost);
-      if (storageOutput) storageOutput.textContent = currency(storageCost);
+      storageOutputs.forEach((output) => { output.textContent = currency(storageCost); });
+      if (storageUsageOutput) storageUsageOutput.textContent = `${storageQuantity(storageGib)} GiB`;
+      if (storageRateOutput) storageRateOutput.textContent = rate(provider.storage_per_gib_month);
       if (basisOutput) {
-        basisOutput.textContent = `${provider.storage_class} · ${provider.region} (${provider.region_id}) · ${rate(provider.storage_per_gib_month)}/GiB-month`;
+        basisOutput.textContent = `${provider.name} · ${provider.storage_class} · ${provider.region} (${provider.region_id})`;
       }
       if (sourceLink) sourceLink.href = provider.source;
     };
