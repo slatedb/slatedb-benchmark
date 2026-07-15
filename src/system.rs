@@ -1,3 +1,4 @@
+use crate::database_size::live_database_size_bytes;
 use crate::histogram::HistogramSet;
 use crate::instrumented_store::{StoreMetrics, StoreSnapshot};
 use crate::model::{
@@ -6,6 +7,7 @@ use crate::model::{
 };
 use anyhow::{bail, ensure, Result};
 use object_store::path::Path;
+use slatedb::Db;
 use slatedb_common::metrics::{
     CounterFn, DefaultMetricsRecorder, GaugeFn, HistogramFn, MetricValue as SlateMetricValue,
     Metrics, MetricsRecorder, UpDownCounterFn,
@@ -501,13 +503,12 @@ pub fn verify_environment(environment: &Environment, smoke: bool) -> anyhow::Res
     Ok(())
 }
 
-pub async fn sample_until_stopped(
+pub(crate) async fn sample_until_stopped(
     started: Instant,
     counters: Arc<ApplicationCounters>,
     store_metrics: Arc<StoreMetrics>,
     slate_metrics: Arc<BenchmarkMetricsRecorder>,
-    database_path: Path,
-    shared_database_bytes: u64,
+    database_size: DatabaseSizeSource,
     mut stop: watch::Receiver<bool>,
 ) -> Result<SampledTimeseries> {
     let mut sampler = HostSampler::new();
@@ -516,8 +517,7 @@ pub async fn sample_until_stopped(
         &counters,
         &store_metrics,
         &slate_metrics,
-        &database_path,
-        shared_database_bytes,
+        database_size.bytes(&store_metrics),
     )];
     let mut application_windows = Vec::new();
     let mut histograms = HistogramSet::default();
@@ -528,7 +528,13 @@ pub async fn sample_until_stopped(
     loop {
         tokio::select! {
             _ = interval.tick() => {
-                let sample = sampler.sample(started, &counters, &store_metrics, &slate_metrics, &database_path, shared_database_bytes);
+                let sample = sampler.sample(
+                    started,
+                    &counters,
+                    &store_metrics,
+                    &slate_metrics,
+                    database_size.bytes(&store_metrics),
+                );
                 if sample.offset_ns > window_start_ns {
                     let (window, window_histograms) = counters.drain_window(
                         window_start_ns,
@@ -542,7 +548,13 @@ pub async fn sample_until_stopped(
             }
             changed = stop.changed() => {
                 if changed.is_err() || *stop.borrow() {
-                    let sample = sampler.sample(started, &counters, &store_metrics, &slate_metrics, &database_path, shared_database_bytes);
+                    let sample = sampler.sample(
+                        started,
+                        &counters,
+                        &store_metrics,
+                        &slate_metrics,
+                        database_size.bytes(&store_metrics),
+                    );
                     if sample.offset_ns > window_start_ns {
                         let (window, window_histograms) = counters.drain_window(
                             window_start_ns,
@@ -562,6 +574,20 @@ pub async fn sample_until_stopped(
         application_windows,
         histograms,
     })
+}
+
+pub(crate) enum DatabaseSizeSource {
+    LiveDatabase(Arc<Db>),
+    TrackedPrefix(Path),
+}
+
+impl DatabaseSizeSource {
+    fn bytes(&self, store_metrics: &StoreMetrics) -> u64 {
+        match self {
+            Self::LiveDatabase(db) => live_database_size_bytes(&db.manifest()),
+            Self::TrackedPrefix(path) => store_metrics.prefix_bytes(path),
+        }
+    }
 }
 
 pub fn compact_timeseries(mut samples: Vec<TimeseriesSample>) -> Result<TimeseriesFile> {
@@ -715,8 +741,7 @@ impl HostSampler {
         counters: &ApplicationCounters,
         store_metrics: &StoreMetrics,
         slate_metrics: &BenchmarkMetricsRecorder,
-        database_path: &Path,
-        shared_database_bytes: u64,
+        database_size_bytes: u64,
     ) -> TimeseriesSample {
         self.system.refresh_processes_specifics(
             ProcessesToUpdate::Some(&[self.pid]),
@@ -773,8 +798,7 @@ impl HostSampler {
             disk_bytes_written,
             disk_read_operations,
             disk_write_operations,
-            database_size_bytes: shared_database_bytes
-                .saturating_add(store_metrics.prefix_bytes(database_path)),
+            database_size_bytes,
             object_store_operations: operations,
             object_store_requests: requests,
             object_store_successful_requests: successful_requests,

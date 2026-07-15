@@ -13,7 +13,6 @@ use crate::model::{
 use crate::system::{self, ApplicationCounters, BenchmarkMetricsRecorder};
 use anyhow::{Context, Result};
 use durability::DurabilityTracker;
-use object_store::path::Path;
 use serde::{Deserialize, Serialize};
 use slatedb::Db;
 use slatedb_common::metrics::{MetricValue as SlateMetricValue, Metrics};
@@ -80,8 +79,6 @@ pub async fn execute_variant(
     variant: &VariantConfig,
     store_metrics: Arc<StoreMetrics>,
     slate_metrics: Arc<BenchmarkMetricsRecorder>,
-    database_path: Path,
-    shared_database_bytes: u64,
 ) -> Result<WorkloadOutcome> {
     let closed_state = closed::ClosedLoopState::new(variant.record_count());
     let warmup = Duration::from_millis(variant.warmup_ms());
@@ -115,8 +112,7 @@ pub async fn execute_variant(
         Arc::clone(&counters),
         Arc::clone(&store_metrics),
         Arc::clone(&slate_metrics),
-        database_path,
-        shared_database_bytes,
+        system::DatabaseSizeSource::LiveDatabase(Arc::clone(&db)),
         stop_rx,
     ));
 

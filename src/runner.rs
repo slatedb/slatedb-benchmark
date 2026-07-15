@@ -2,6 +2,7 @@ mod session;
 
 use crate::cli::{RunArgs, WorkerArgs};
 use crate::config::{BenchmarkConfig, SuiteConfig, SuiteExecution, VariantConfig, WorkloadKind};
+use crate::database_size::live_database_size_bytes;
 use crate::instrumented_store::{StoreMetrics, StoreSnapshot};
 use crate::model::{
     BenchmarkConfiguration, EncodedHistogram, Environment, Identity, InitialState,
@@ -10,7 +11,7 @@ use crate::model::{
 use crate::object_store_probe::{delete_prefix, probe, ObjectStoreContext};
 use crate::system::{
     inspect_environment, sample_until_stopped, verify_environment, ApplicationCounters,
-    BenchmarkMetricsRecorder, SampledTimeseries,
+    BenchmarkMetricsRecorder, DatabaseSizeSource, SampledTimeseries,
 };
 use crate::validation::{validate_result, validate_run};
 use crate::workloads::{
@@ -19,7 +20,6 @@ use crate::workloads::{
 };
 use anyhow::{bail, Context, Result};
 use chrono::Utc;
-use futures::TryStreamExt;
 use object_store::path::Path;
 use object_store::ObjectStore;
 use serde::Serialize;
@@ -105,8 +105,7 @@ impl CompactionMeasurement {
             counters,
             Arc::clone(&store_metrics),
             Arc::clone(&recorder),
-            database_path,
-            0,
+            DatabaseSizeSource::TrackedPrefix(database_path),
             stop_rx,
         ));
         Self {
@@ -360,6 +359,7 @@ async fn execute_isolated_variant(
             manifest_id: Some(golden.manifest_id),
             lsm_digest_sha256: clone_digest,
         };
+        let initial_database_bytes = live_database_size_bytes(&db.manifest());
         db.close()
             .await
             .context("closing clone validation handle")?;
@@ -367,7 +367,6 @@ async fn execute_isolated_variant(
             execute_variant_in_fresh_process(
                 variant,
                 &clone_path,
-                golden.size_bytes,
                 &golden.lsm_digest,
                 result_context.args,
             )
@@ -384,21 +383,24 @@ async fn execute_isolated_variant(
                 Arc::clone(&recorder),
             )
             .await?;
-            let outcome = execute_variant(
-                Arc::clone(&db),
-                variant,
-                store_metrics,
-                recorder,
-                clone_path.clone(),
-                golden.size_bytes,
-            )
-            .await;
+            let outcome = execute_variant(Arc::clone(&db), variant, store_metrics, recorder).await;
             db.close().await.context("closing benchmark clone")?;
             outcome?
         };
-        let clone_size = prefix_size(Arc::clone(&store), &clone_path).await?;
-        outcome.storage.database_size_bytes = golden.size_bytes.saturating_add(clone_size);
-        write_variant_result(variant, outcome, initial, golden.size_bytes, result_context)
+        let final_manifest = AdminBuilder::new(clone_path.clone(), Arc::clone(&store))
+            .build()
+            .read_manifest(None)
+            .await
+            .context("reading final isolated benchmark manifest")?
+            .context("final isolated benchmark manifest does not exist")?;
+        outcome.storage.database_size_bytes = live_database_size_bytes(&final_manifest);
+        write_variant_result(
+            variant,
+            outcome,
+            initial,
+            initial_database_bytes,
+            result_context,
+        )
     }
     .await;
     let cleanup = delete_prefix(store, &clone_path).await;
@@ -443,8 +445,6 @@ pub async fn execute_worker(args: WorkerArgs) -> Result<()> {
         &variant,
         context.instrumented.metrics(),
         recorder,
-        database_path,
-        args.shared_database_bytes,
     )
     .await;
     db.close()
@@ -456,7 +456,6 @@ pub async fn execute_worker(args: WorkerArgs) -> Result<()> {
 async fn execute_variant_in_fresh_process(
     variant: &VariantConfig,
     database_path: &Path,
-    shared_database_bytes: u64,
     expected_lsm_digest: &str,
     args: &RunArgs,
 ) -> Result<WorkloadOutcome> {
@@ -474,8 +473,6 @@ async fn execute_variant_in_fresh_process(
         .arg(&variant.variant)
         .arg("--database-path")
         .arg(database_path.to_string())
-        .arg("--shared-database-bytes")
-        .arg(shared_database_bytes.to_string())
         .arg("--expected-lsm-digest")
         .arg(expected_lsm_digest)
         .arg("--output")
@@ -600,7 +597,7 @@ async fn prepare_golden_database(
         checkpoint_id: checkpoint.id,
         manifest_id: checkpoint.manifest_id,
         lsm_digest: manifest_lsm_digest(&checkpoint_manifest)?,
-        size_bytes: prefix_size(store, &path).await?,
+        size_bytes: live_database_size_bytes(&checkpoint_manifest),
     })
 }
 
@@ -647,8 +644,6 @@ async fn execute_bulk_load_and_compact(
                     bulk_variant,
                     Arc::clone(&store_metrics),
                     Arc::clone(&bulk_recorder),
-                    database_path.clone(),
-                    0,
                 )
                 .await?,
             )
@@ -763,7 +758,13 @@ async fn run_sequential_suite(
         selected_bulk,
     )
     .await?;
-    let compacted_size = prefix_size(Arc::clone(&store), &path).await?;
+    let compacted_manifest = AdminBuilder::new(path.clone(), Arc::clone(&store))
+        .build()
+        .read_manifest(None)
+        .await
+        .context("reading compacted bulk-load manifest")?
+        .context("compacted bulk-load manifest does not exist")?;
+    let compacted_size = live_database_size_bytes(&compacted_manifest);
     let mut paths = Vec::new();
     if let Some(mut outcome) = bulk_outcome.take() {
         outcome.storage.database_size_bytes = compacted_size;
@@ -780,18 +781,15 @@ async fn run_sequential_suite(
         .iter()
         .filter(|variant| variant.workload.kind != WorkloadKind::BulkLoad)
     {
-        let initial_size = prefix_size(Arc::clone(&store), &path).await?;
-        let (mut outcome, initial) = execute_rocks_variant(
+        let (outcome, initial, initial_size) = execute_rocks_variant(
             variant,
             &path,
             Arc::clone(&store),
             Arc::clone(&store_metrics),
             fresh_process_variants,
-            0,
             result_context.args,
         )
         .await?;
-        outcome.storage.database_size_bytes = prefix_size(Arc::clone(&store), &path).await?;
         paths.push(write_variant_result(
             variant,
             outcome,
@@ -819,9 +817,8 @@ async fn execute_rocks_variant(
     store: Arc<dyn ObjectStore>,
     store_metrics: Arc<StoreMetrics>,
     fresh_process: bool,
-    shared_database_bytes: u64,
     args: &RunArgs,
-) -> Result<(WorkloadOutcome, InitialState)> {
+) -> Result<(WorkloadOutcome, InitialState, u64)> {
     let admin = AdminBuilder::new(database_path.clone(), Arc::clone(&store)).build();
     let manifest = admin
         .read_manifest(None)
@@ -833,22 +830,17 @@ async fn execute_rocks_variant(
         manifest_id: Some(manifest.id()),
         lsm_digest_sha256: manifest_lsm_digest(&manifest)?,
     };
+    let initial_database_bytes = live_database_size_bytes(&manifest);
 
-    let outcome = if fresh_process {
-        execute_variant_in_fresh_process(
-            variant,
-            database_path,
-            shared_database_bytes,
-            &initial.lsm_digest_sha256,
-            args,
-        )
-        .await?
+    let mut outcome = if fresh_process {
+        execute_variant_in_fresh_process(variant, database_path, &initial.lsm_digest_sha256, args)
+            .await?
     } else {
         let object_store_cache = object_store_cache_directory(&variant.suite)?;
         let recorder = Arc::new(BenchmarkMetricsRecorder::new());
         let db = open_database_with_object_store_cache(
             database_path.clone(),
-            store,
+            Arc::clone(&store),
             &variant.suite,
             &variant.slate_settings,
             object_store_cache.as_ref().map(|cache| cache.path()),
@@ -858,21 +850,19 @@ async fn execute_rocks_variant(
         if lsm_digest(&db)? != initial.lsm_digest_sha256 {
             bail!("reopened RocksDB suite database has an unexpected LSM state");
         }
-        let outcome = execute_variant(
-            Arc::clone(&db),
-            variant,
-            store_metrics,
-            recorder,
-            database_path.clone(),
-            shared_database_bytes,
-        )
-        .await;
+        let outcome = execute_variant(Arc::clone(&db), variant, store_metrics, recorder).await;
         db.close()
             .await
             .context("closing RocksDB suite variant database")?;
         outcome?
     };
-    Ok((outcome, initial))
+    let final_manifest = admin
+        .read_manifest(None)
+        .await
+        .context("reading final RocksDB suite manifest")?
+        .context("final RocksDB suite manifest does not exist")?;
+    outcome.storage.database_size_bytes = live_database_size_bytes(&final_manifest);
+    Ok((outcome, initial, initial_database_bytes))
 }
 
 fn enabled_features() -> Vec<String> {
@@ -1127,17 +1117,6 @@ fn settings_digest(settings: &Settings) -> Result<String> {
         "{:x}",
         Sha256::digest(serde_json::to_vec(settings)?)
     ))
-}
-
-async fn prefix_size(store: Arc<dyn ObjectStore>, path: &Path) -> Result<u64> {
-    store
-        .list(Some(path))
-        .map_ok(|meta| meta.size)
-        .try_fold(0_u64, |total, size| async move {
-            Ok(total.saturating_add(size))
-        })
-        .await
-        .context("measuring database size")
 }
 
 fn write_json(path: &FsPath, value: &impl Serialize) -> Result<()> {
@@ -1470,23 +1449,21 @@ mod tests {
         populate_dataset(Arc::clone(&db), 8, 16, 64, false).await?;
         db.close().await?;
 
-        let (first, before_overwrite) = execute_rocks_variant(
+        let (first, before_overwrite, initial_overwrite_size) = execute_rocks_variant(
             &variant(overwrite),
             &path,
             Arc::clone(&store),
             instrumented.metrics(),
             false,
-            0,
             &args,
         )
         .await?;
-        let (second, before_read) = execute_rocks_variant(
+        let (second, before_read, initial_read_size) = execute_rocks_variant(
             &variant(random_read),
             &path,
             store,
             instrumented.metrics(),
             false,
-            0,
             &args,
         )
         .await?;
@@ -1498,6 +1475,8 @@ mod tests {
             before_overwrite.lsm_digest_sha256,
             before_read.lsm_digest_sha256
         );
+        assert!(initial_overwrite_size > 0);
+        assert_eq!(first.storage.database_size_bytes, initial_read_size);
         Ok(())
     }
 }

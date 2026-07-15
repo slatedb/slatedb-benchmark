@@ -1,5 +1,6 @@
 pub mod cli;
 pub mod config;
+mod database_size;
 mod histogram;
 mod instrumented_http;
 mod instrumented_store;

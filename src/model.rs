@@ -139,7 +139,9 @@ pub struct ResourceUse {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct StoragePerformance {
+    /// Estimated compressed bytes of unique SSTs in the final live LSM.
     pub database_size_bytes: u64,
+    /// Time-weighted average of the live LSM size during measurement.
     pub average_database_size_bytes: u64,
     /// Logical calls made through the `ObjectStore` trait.
     #[serde(default)]
@@ -274,6 +276,7 @@ pub struct TimeseriesSample {
     pub disk_bytes_written: u64,
     pub disk_read_operations: u64,
     pub disk_write_operations: u64,
+    /// Estimated compressed bytes of unique SSTs in the live LSM.
     pub database_size_bytes: u64,
     #[serde(default)]
     pub object_store_operations: BTreeMap<String, u64>,

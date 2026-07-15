@@ -1,10 +1,11 @@
 use super::{
     bulk_load_settings, clone_database, execute_bulk_load_and_compact, execute_isolated_variant,
-    execute_rocks_variant, golden_key, manifest_lsm_digest, prefix_size, prepare_golden_database,
-    write_json, write_variant_result, GoldenDatabase, ResultContext,
+    execute_rocks_variant, golden_key, manifest_lsm_digest, prepare_golden_database, write_json,
+    write_variant_result, GoldenDatabase, ResultContext,
 };
 use crate::cli::RunArgs;
 use crate::config::{BenchmarkConfig, SuiteConfig, SuiteExecution, VariantConfig, WorkloadKind};
+use crate::database_size::live_database_size_bytes;
 use crate::model::{EncodedHistogram, Environment, InitialState, ObjectStoreBaseline, RunManifest};
 use crate::object_store_probe::{delete_prefix, probe, ObjectStoreContext};
 use crate::validation::{validate_output, validate_run};
@@ -366,16 +367,12 @@ async fn execute_sequential_workload(
     .await?;
     let mut results = Vec::with_capacity(variants.len());
     for (index, variant) in variants.iter().enumerate() {
-        let initial_database_bytes = head
-            .size_bytes
-            .saturating_add(prefix_size(Arc::clone(&store), &database_path).await?);
-        let (mut outcome, initial) = execute_rocks_variant(
+        let (outcome, initial, initial_database_bytes) = execute_rocks_variant(
             variant,
             &database_path,
             Arc::clone(&store),
             Arc::clone(&store_metrics),
             fresh_process,
-            head.size_bytes,
             result_context.args,
         )
         .await?;
@@ -389,9 +386,6 @@ async fn execute_sequential_workload(
             checkpoint_id: (index == 0).then(|| head.checkpoint_id.to_string()),
             ..initial
         };
-        outcome.storage.database_size_bytes = head
-            .size_bytes
-            .saturating_add(prefix_size(Arc::clone(&store), &database_path).await?);
         results.push(write_variant_result(
             variant,
             outcome,
@@ -403,7 +397,6 @@ async fn execute_sequential_workload(
     let checkpoint = checkpoint_database(
         database_path,
         store,
-        head.size_bytes,
         &format!("benchmark-{session}-{}", first.workload.name),
     )
     .await?;
@@ -437,7 +430,6 @@ async fn execute_bulk_load(
     let checkpoint = checkpoint_database(
         database_path,
         Arc::clone(&store),
-        0,
         &format!("benchmark-{session}-bulk-load"),
     )
     .await?;
@@ -449,7 +441,6 @@ async fn execute_bulk_load(
 async fn checkpoint_database(
     path: Path,
     store: Arc<dyn ObjectStore>,
-    shared_database_bytes: u64,
     name: &str,
 ) -> Result<DatabaseCheckpoint> {
     let admin = AdminBuilder::new(path.clone(), Arc::clone(&store)).build();
@@ -471,7 +462,7 @@ async fn checkpoint_database(
         checkpoint_id: checkpoint.id,
         manifest_id: checkpoint.manifest_id,
         lsm_digest_sha256: manifest_lsm_digest(&manifest)?,
-        size_bytes: shared_database_bytes.saturating_add(prefix_size(store, &path).await?),
+        size_bytes: live_database_size_bytes(&manifest),
     })
 }
 
@@ -861,7 +852,7 @@ mod tests {
         db.flush().await.expect("flush committed database");
         db.close().await.expect("close committed database");
         let committed =
-            checkpoint_database(committed_path.clone(), Arc::clone(&store), 0, "committed")
+            checkpoint_database(committed_path.clone(), Arc::clone(&store), "committed")
                 .await
                 .expect("checkpoint committed database");
 
@@ -901,6 +892,59 @@ mod tests {
             Some(Bytes::from_static(b"committed"))
         );
         retry.close().await.expect("close retry candidate");
+    }
+
+    #[tokio::test]
+    async fn checkpoint_clone_hops_do_not_inflate_live_database_size() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let source_path = Path::from("sessions/size/source");
+        let db = slatedb::Db::open(source_path.clone(), Arc::clone(&store))
+            .await
+            .expect("open source database");
+        for index in 0..32 {
+            db.put(
+                format!("key-{index:04}"),
+                Bytes::from(vec![index as u8; 256]),
+            )
+            .await
+            .expect("write source value");
+        }
+        db.flush().await.expect("flush source database");
+        db.close().await.expect("close source database");
+        let source = checkpoint_database(source_path.clone(), Arc::clone(&store), "source")
+            .await
+            .expect("checkpoint source database");
+
+        let first_clone_path = Path::from("sessions/size/first-clone");
+        clone_database(
+            Arc::clone(&store),
+            &first_clone_path,
+            &source_path,
+            source.checkpoint_id,
+        )
+        .await
+        .expect("create first clone");
+        let first_clone =
+            checkpoint_database(first_clone_path.clone(), Arc::clone(&store), "first-clone")
+                .await
+                .expect("checkpoint first clone");
+
+        let second_clone_path = Path::from("sessions/size/second-clone");
+        clone_database(
+            Arc::clone(&store),
+            &second_clone_path,
+            &first_clone_path,
+            first_clone.checkpoint_id,
+        )
+        .await
+        .expect("create second clone");
+        let second_clone = checkpoint_database(second_clone_path, store, "second-clone")
+            .await
+            .expect("checkpoint second clone");
+
+        assert!(source.size_bytes > 0);
+        assert_eq!(source.size_bytes, first_clone.size_bytes);
+        assert_eq!(first_clone.size_bytes, second_clone.size_bytes);
     }
 
     #[test]

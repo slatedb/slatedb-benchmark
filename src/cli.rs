@@ -82,8 +82,6 @@ pub struct WorkerArgs {
     #[arg(long)]
     pub database_path: String,
     #[arg(long)]
-    pub shared_database_bytes: u64,
-    #[arg(long)]
     pub expected_lsm_digest: String,
     #[arg(long)]
     pub object_store_cache_root: Option<PathBuf>,
