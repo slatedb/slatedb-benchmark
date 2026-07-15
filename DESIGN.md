@@ -72,9 +72,14 @@ continues to name `rocksdb`, `ycsb`, and `slatedb`.
 
 ## Execution
 
-A release workflow accepts a SlateDB tag or commit, builds the runner once, and
-then runs one job per release suite. Suite jobs have no dependencies on one
-another and therefore run in parallel:
+A release workflow accepts a SlateDB tag or commit and builds the runner once.
+It derives the result version from the selected source: a release tag such as
+`v0.14.1` becomes `0.14.1`, while branches and commit hashes become
+`sha-<12-character resolved commit>`. This version is used for result paths,
+object-store prefixes, artifacts, and the website version selector.
+
+The workflow then runs one job per release suite. Suite jobs have no
+dependencies on one another and therefore run in parallel:
 
 ```text
                          /-> rocksdb job: workload -> publish -> workload -> publish ...

@@ -8,10 +8,6 @@ on:
         description: SlateDB tag or commit
         required: true
         default: v0.14.1
-      slate_version:
-        description: Version used in result paths
-        required: true
-        default: 0.14.1
 
 permissions:
   contents: write
@@ -23,8 +19,8 @@ concurrency:
 jobs:
   build-runner:
     runs-on: warp-ubuntu-latest-x64-16x
-    env:
-      SLATEDB_VERSION: ${{ inputs.slate_version }}
+    outputs:
+      slate_version: ${{ steps.selected-source.outputs.version }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
@@ -35,8 +31,20 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.89.0
       - name: Configure selected SlateDB source
         run: scripts/select-slate-source.sh "$GITHUB_WORKSPACE/.slatedb-source"
-      - name: Record selected commit
-        run: echo "SLATEDB_COMMIT=$(git -C .slatedb-source rev-parse HEAD)" >> "$GITHUB_ENV"
+      - name: Record selected source
+        id: selected-source
+        env:
+          SLATE_REF: ${{ inputs.slate_ref }}
+        run: |
+          commit="$(git -C .slatedb-source rev-parse HEAD)"
+          if [[ "$SLATE_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            version="${SLATE_REF#v}"
+          else
+            version="sha-${commit:0:12}"
+          fi
+          echo "SLATEDB_COMMIT=$commit" >> "$GITHUB_ENV"
+          echo "SLATEDB_VERSION=$version" >> "$GITHUB_ENV"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
       - name: Check selected SlateDB source
         run: cargo check --locked
       - name: Build runner
@@ -61,7 +69,7 @@ jobs:
       AWS_REGION: auto
       AWS_ENDPOINT_URL_S3: https://fly.storage.tigris.dev
       SLATEDB_BENCH_BUCKET: ${{ vars.TIGRIS_BUCKET_PREFIX }}-rocksdb
-      SLATEDB_BENCH_PREFIX: release/${{ inputs.slate_version }}
+      SLATEDB_BENCH_PREFIX: release/${{ needs.build-runner.outputs.slate_version }}
       SLATEDB_BENCH_REGION: fra
       SLATEDB_BENCH_RUNNER_TYPE: warp-ubuntu-latest-x64-16x
     steps:
@@ -96,7 +104,7 @@ jobs:
         run: |
           ./scripts/publish-results.sh \
             ".runs/rocksdb" \
-            "${{ inputs.slate_version }}" \
+            "${{ needs.build-runner.outputs.slate_version }}" \
             "rocksdb" \
             "bulk-load" \
             publish
@@ -112,7 +120,7 @@ jobs:
         run: |
           ./scripts/publish-results.sh \
             ".runs/rocksdb" \
-            "${{ inputs.slate_version }}" \
+            "${{ needs.build-runner.outputs.slate_version }}" \
             "rocksdb" \
             "random-read" \
             publish
@@ -128,7 +136,7 @@ jobs:
         run: |
           ./scripts/publish-results.sh \
             ".runs/rocksdb" \
-            "${{ inputs.slate_version }}" \
+            "${{ needs.build-runner.outputs.slate_version }}" \
             "rocksdb" \
             "multi-random-read" \
             publish
@@ -144,7 +152,7 @@ jobs:
         run: |
           ./scripts/publish-results.sh \
             ".runs/rocksdb" \
-            "${{ inputs.slate_version }}" \
+            "${{ needs.build-runner.outputs.slate_version }}" \
             "rocksdb" \
             "forward-range" \
             publish
@@ -160,7 +168,7 @@ jobs:
         run: |
           ./scripts/publish-results.sh \
             ".runs/rocksdb" \
-            "${{ inputs.slate_version }}" \
+            "${{ needs.build-runner.outputs.slate_version }}" \
             "rocksdb" \
             "reverse-range" \
             publish
@@ -176,7 +184,7 @@ jobs:
         run: |
           ./scripts/publish-results.sh \
             ".runs/rocksdb" \
-            "${{ inputs.slate_version }}" \
+            "${{ needs.build-runner.outputs.slate_version }}" \
             "rocksdb" \
             "overwrite" \
             publish
@@ -192,7 +200,7 @@ jobs:
         run: |
           ./scripts/publish-results.sh \
             ".runs/rocksdb" \
-            "${{ inputs.slate_version }}" \
+            "${{ needs.build-runner.outputs.slate_version }}" \
             "rocksdb" \
             "read-while-writing" \
             publish
@@ -208,7 +216,7 @@ jobs:
         run: |
           ./scripts/publish-results.sh \
             ".runs/rocksdb" \
-            "${{ inputs.slate_version }}" \
+            "${{ needs.build-runner.outputs.slate_version }}" \
             "rocksdb" \
             "forward-range-while-writing" \
             publish
@@ -224,7 +232,7 @@ jobs:
         run: |
           ./scripts/publish-results.sh \
             ".runs/rocksdb" \
-            "${{ inputs.slate_version }}" \
+            "${{ needs.build-runner.outputs.slate_version }}" \
             "rocksdb" \
             "reverse-range-while-writing" \
             publish
@@ -232,7 +240,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: benchmark-${{ inputs.slate_version }}-rocksdb
+          name: benchmark-${{ needs.build-runner.outputs.slate_version }}-rocksdb
           path: .runs/rocksdb
           if-no-files-found: ignore
           overwrite: true
@@ -249,7 +257,7 @@ jobs:
       AWS_REGION: auto
       AWS_ENDPOINT_URL_S3: https://fly.storage.tigris.dev
       SLATEDB_BENCH_BUCKET: ${{ vars.TIGRIS_BUCKET_PREFIX }}-slatedb
-      SLATEDB_BENCH_PREFIX: release/${{ inputs.slate_version }}
+      SLATEDB_BENCH_PREFIX: release/${{ needs.build-runner.outputs.slate_version }}
       SLATEDB_BENCH_REGION: fra
       SLATEDB_BENCH_RUNNER_TYPE: warp-ubuntu-latest-x64-16x
     steps:
@@ -284,7 +292,7 @@ jobs:
         run: |
           ./scripts/publish-results.sh \
             ".runs/slatedb" \
-            "${{ inputs.slate_version }}" \
+            "${{ needs.build-runner.outputs.slate_version }}" \
             "slatedb" \
             "cold-read" \
             publish
@@ -300,7 +308,7 @@ jobs:
         run: |
           ./scripts/publish-results.sh \
             ".runs/slatedb" \
-            "${{ inputs.slate_version }}" \
+            "${{ needs.build-runner.outputs.slate_version }}" \
             "slatedb" \
             "open-loop-read" \
             publish
@@ -316,7 +324,7 @@ jobs:
         run: |
           ./scripts/publish-results.sh \
             ".runs/slatedb" \
-            "${{ inputs.slate_version }}" \
+            "${{ needs.build-runner.outputs.slate_version }}" \
             "slatedb" \
             "open-loop-read-update" \
             publish
@@ -332,7 +340,7 @@ jobs:
         run: |
           ./scripts/publish-results.sh \
             ".runs/slatedb" \
-            "${{ inputs.slate_version }}" \
+            "${{ needs.build-runner.outputs.slate_version }}" \
             "slatedb" \
             "prefix-scan" \
             publish
@@ -348,7 +356,7 @@ jobs:
         run: |
           ./scripts/publish-results.sh \
             ".runs/slatedb" \
-            "${{ inputs.slate_version }}" \
+            "${{ needs.build-runner.outputs.slate_version }}" \
             "slatedb" \
             "sustained-ingest" \
             publish
@@ -364,7 +372,7 @@ jobs:
         run: |
           ./scripts/publish-results.sh \
             ".runs/slatedb" \
-            "${{ inputs.slate_version }}" \
+            "${{ needs.build-runner.outputs.slate_version }}" \
             "slatedb" \
             "transaction-contention" \
             publish
@@ -372,7 +380,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: benchmark-${{ inputs.slate_version }}-slatedb
+          name: benchmark-${{ needs.build-runner.outputs.slate_version }}-slatedb
           path: .runs/slatedb
           if-no-files-found: ignore
           overwrite: true
@@ -389,7 +397,7 @@ jobs:
       AWS_REGION: auto
       AWS_ENDPOINT_URL_S3: https://fly.storage.tigris.dev
       SLATEDB_BENCH_BUCKET: ${{ vars.TIGRIS_BUCKET_PREFIX }}-ycsb
-      SLATEDB_BENCH_PREFIX: release/${{ inputs.slate_version }}
+      SLATEDB_BENCH_PREFIX: release/${{ needs.build-runner.outputs.slate_version }}
       SLATEDB_BENCH_REGION: fra
       SLATEDB_BENCH_RUNNER_TYPE: warp-ubuntu-latest-x64-16x
     steps:
@@ -424,7 +432,7 @@ jobs:
         run: |
           ./scripts/publish-results.sh \
             ".runs/ycsb" \
-            "${{ inputs.slate_version }}" \
+            "${{ needs.build-runner.outputs.slate_version }}" \
             "ycsb" \
             "ycsb-a" \
             publish
@@ -440,7 +448,7 @@ jobs:
         run: |
           ./scripts/publish-results.sh \
             ".runs/ycsb" \
-            "${{ inputs.slate_version }}" \
+            "${{ needs.build-runner.outputs.slate_version }}" \
             "ycsb" \
             "ycsb-b" \
             publish
@@ -456,7 +464,7 @@ jobs:
         run: |
           ./scripts/publish-results.sh \
             ".runs/ycsb" \
-            "${{ inputs.slate_version }}" \
+            "${{ needs.build-runner.outputs.slate_version }}" \
             "ycsb" \
             "ycsb-c" \
             publish
@@ -472,7 +480,7 @@ jobs:
         run: |
           ./scripts/publish-results.sh \
             ".runs/ycsb" \
-            "${{ inputs.slate_version }}" \
+            "${{ needs.build-runner.outputs.slate_version }}" \
             "ycsb" \
             "ycsb-d" \
             publish
@@ -488,7 +496,7 @@ jobs:
         run: |
           ./scripts/publish-results.sh \
             ".runs/ycsb" \
-            "${{ inputs.slate_version }}" \
+            "${{ needs.build-runner.outputs.slate_version }}" \
             "ycsb" \
             "ycsb-e" \
             publish
@@ -504,7 +512,7 @@ jobs:
         run: |
           ./scripts/publish-results.sh \
             ".runs/ycsb" \
-            "${{ inputs.slate_version }}" \
+            "${{ needs.build-runner.outputs.slate_version }}" \
             "ycsb" \
             "ycsb-f" \
             publish
@@ -512,7 +520,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: benchmark-${{ inputs.slate_version }}-ycsb
+          name: benchmark-${{ needs.build-runner.outputs.slate_version }}-ycsb
           path: .runs/ycsb
           if-no-files-found: ignore
           overwrite: true

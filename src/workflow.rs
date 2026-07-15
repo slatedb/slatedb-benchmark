@@ -14,10 +14,6 @@ on:
         description: SlateDB tag or commit
         required: true
         default: v0.14.1
-      slate_version:
-        description: Version used in result paths
-        required: true
-        default: 0.14.1
 
 permissions:
   contents: write
@@ -29,8 +25,8 @@ concurrency:
 jobs:
   build-runner:
     runs-on: warp-ubuntu-latest-x64-16x
-    env:
-      SLATEDB_VERSION: ${{ inputs.slate_version }}
+    outputs:
+      slate_version: ${{ steps.selected-source.outputs.version }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
@@ -41,8 +37,20 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.89.0
       - name: Configure selected SlateDB source
         run: scripts/select-slate-source.sh "$GITHUB_WORKSPACE/.slatedb-source"
-      - name: Record selected commit
-        run: echo "SLATEDB_COMMIT=$(git -C .slatedb-source rev-parse HEAD)" >> "$GITHUB_ENV"
+      - name: Record selected source
+        id: selected-source
+        env:
+          SLATE_REF: ${{ inputs.slate_ref }}
+        run: |
+          commit="$(git -C .slatedb-source rev-parse HEAD)"
+          if [[ "$SLATE_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            version="${SLATE_REF#v}"
+          else
+            version="sha-${commit:0:12}"
+          fi
+          echo "SLATEDB_COMMIT=$commit" >> "$GITHUB_ENV"
+          echo "SLATEDB_VERSION=$version" >> "$GITHUB_ENV"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
       - name: Check selected SlateDB source
         run: cargo check --locked
       - name: Build runner
@@ -129,7 +137,9 @@ pub fn render(benchmark: &BenchmarkConfig) -> Result<String> {
         output.push_str("      SLATEDB_BENCH_BUCKET: ${{ vars.TIGRIS_BUCKET_PREFIX }}-");
         output.push_str(&suite.name);
         output.push('\n');
-        output.push_str("      SLATEDB_BENCH_PREFIX: release/${{ inputs.slate_version }}\n");
+        output.push_str(
+            "      SLATEDB_BENCH_PREFIX: release/${{ needs.build-runner.outputs.slate_version }}\n",
+        );
         output.push_str(SUITE_STEPS);
         for workload in &suite.workloads {
             writeln!(
@@ -158,7 +168,7 @@ pub fn render(benchmark: &BenchmarkConfig) -> Result<String> {
             output.push_str("        run: |\n");
             output.push_str("          ./scripts/publish-results.sh \\\n");
             writeln!(output, "            \".runs/{}\" \\", suite.name)?;
-            output.push_str("            \"${{ inputs.slate_version }}\" \\\n");
+            output.push_str("            \"${{ needs.build-runner.outputs.slate_version }}\" \\\n");
             writeln!(output, "            \"{}\" \\", suite.name)?;
             writeln!(output, "            \"{}\" \\", workload.name)?;
             output.push_str("            publish\n");
@@ -167,7 +177,8 @@ pub fn render(benchmark: &BenchmarkConfig) -> Result<String> {
         output.push_str("        if: always()\n");
         output.push_str("        uses: actions/upload-artifact@v4\n");
         output.push_str("        with:\n");
-        output.push_str("          name: benchmark-${{ inputs.slate_version }}-");
+        output
+            .push_str("          name: benchmark-${{ needs.build-runner.outputs.slate_version }}-");
         output.push_str(&suite.name);
         output.push('\n');
         output.push_str("          path: .runs/");
