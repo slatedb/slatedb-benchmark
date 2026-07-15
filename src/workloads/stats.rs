@@ -2,6 +2,7 @@ use crate::histogram::HistogramSet;
 use crate::model::ApplicationPerformance;
 use crate::system::{duration_ns, ApplicationWindowRecorder};
 use anyhow::Result;
+use std::future::Future;
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Default)]
@@ -121,6 +122,28 @@ impl WorkerStats {
         }
     }
 
+    pub async fn measure_api<T>(&mut self, api: &str, future: impl Future<Output = T>) -> T {
+        let started = Instant::now();
+        let result = future.await;
+        self.record_api_latency(api, started.elapsed());
+        result
+    }
+
+    pub fn measure_api_sync<T>(&mut self, api: &str, call: impl FnOnce() -> T) -> T {
+        let started = Instant::now();
+        let result = call();
+        self.record_api_latency(api, started.elapsed());
+        result
+    }
+
+    pub fn record_api_latency(&mut self, api: &str, latency: Duration) {
+        if let Some(recorder) = &self.window_recorder {
+            recorder.record_api_latency(api, latency);
+        } else {
+            self.histograms.record(format!("api/{api}"), latency);
+        }
+    }
+
     pub fn record_write(&mut self, returned_at: Instant, sequence: u64) {
         self.writes += 1;
         self.first_write_return = Some(
@@ -212,6 +235,7 @@ impl WorkerStats {
             errors: self.errors,
             return_latency,
             return_latency_by_operation: self.histograms.summaries_with_prefix("return/"),
+            api_latency: self.histograms.summaries_with_prefix("api/"),
             response_latency,
             scheduling_delay,
             batch_latency,

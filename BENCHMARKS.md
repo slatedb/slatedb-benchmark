@@ -32,7 +32,8 @@ apply.
   cache sizes, SlateDB settings, build profile, and enabled features
 - Application performance: total operations, accepted ops/s, payload MiB/s,
   errors, and p50, p95, p99, p99.9, and maximum return latency overall and per
-  operation type. One-second application windows report the same return
+  operation type. The same percentiles are recorded for each SlateDB API used
+  during measurement. One-second application windows report return and API
   latency, successful-operation counts, and logical read, write, and total
   payload bytes over time.
 - Durability performance: p50, p95, p99, p99.9, and maximum durability lag,

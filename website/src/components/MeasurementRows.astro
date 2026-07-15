@@ -52,7 +52,10 @@ const flatten = (candidate: unknown, path: string[]): MeasurementRow[] => {
   if (isRecord(candidate)) {
     const entries = Object.entries(candidate);
     if (entries.length === 0) return [{ path, value: '—', empty: true }];
-    return entries.flatMap(([key, nested]) => flatten(nested, [...path, label(key)]));
+    return entries.flatMap(([key, nested]) => flatten(nested, [
+      ...path,
+      path.length === 1 && path[0] === 'api latency' ? `${key}()` : label(key),
+    ]));
   }
   return [{ path, value: formatScalar(candidate) }];
 };

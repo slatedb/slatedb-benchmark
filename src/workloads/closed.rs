@@ -6,7 +6,7 @@ use super::util::{
 use crate::config::{VariantConfig, WorkloadKind};
 use crate::system::{measure_backpressure, ApplicationCounters};
 use anyhow::{bail, Context, Result};
-use futures::future::try_join_all;
+use futures::future::join_all;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
@@ -118,6 +118,7 @@ async fn worker_loop(
             &next_insert,
             &insert_lock,
             &mut rng,
+            &mut stats,
         ))
         .await;
         stats.record_backpressure(backpressure);
@@ -187,12 +188,13 @@ async fn execute_operation(
     next_insert: &AtomicU64,
     insert_lock: &Mutex<()>,
     rng: &mut StdRng,
+    stats: &mut WorkerStats,
 ) -> std::result::Result<OperationOutcome, OperationError> {
     let kind = variant.workload.kind;
     match kind {
         WorkloadKind::YcsbA => {
             if rng.random_bool(0.5) {
-                read(db, variant, selector.sample(rng), "read").await
+                read(db, variant, selector.sample(rng), "read", stats).await
             } else {
                 update(
                     db,
@@ -201,13 +203,14 @@ async fn execute_operation(
                     write_options,
                     rng,
                     "update",
+                    stats,
                 )
                 .await
             }
         }
         WorkloadKind::YcsbB => {
             if rng.random_bool(0.95) {
-                read(db, variant, selector.sample(rng), "read").await
+                read(db, variant, selector.sample(rng), "read", stats).await
             } else {
                 update(
                     db,
@@ -216,23 +219,24 @@ async fn execute_operation(
                     write_options,
                     rng,
                     "update",
+                    stats,
                 )
                 .await
             }
         }
         WorkloadKind::YcsbC | WorkloadKind::ColdRead | WorkloadKind::RandomRead => {
-            read(db, variant, selector.sample(rng), "read").await
+            read(db, variant, selector.sample(rng), "read", stats).await
         }
         WorkloadKind::YcsbD => {
             if rng.random_bool(0.95) {
                 let latest = next_insert.load(Ordering::Acquire).max(1);
                 let window = latest.min(10_000);
                 let id = latest.saturating_sub(1 + rng.random_range(0..window));
-                read(db, variant, id, "read").await
+                read(db, variant, id, "read", stats).await
             } else {
                 let _guard = insert_lock.lock().await;
                 let id = next_insert.load(Ordering::Relaxed);
-                let outcome = update(db, variant, id, write_options, rng, "insert").await?;
+                let outcome = update(db, variant, id, write_options, rng, "insert", stats).await?;
                 next_insert.store(id.saturating_add(1), Ordering::Release);
                 Ok(outcome)
             }
@@ -240,27 +244,44 @@ async fn execute_operation(
         WorkloadKind::YcsbE => {
             if rng.random_bool(0.95) {
                 let length = rng.random_range(1..=100);
-                scan(db, variant, selector.sample(rng), length, false, "scan").await
+                scan(
+                    db,
+                    variant,
+                    selector.sample(rng),
+                    length,
+                    false,
+                    "scan",
+                    stats,
+                )
+                .await
             } else {
                 let id = next_insert.fetch_add(1, Ordering::Relaxed);
-                update(db, variant, id, write_options, rng, "insert").await
+                update(db, variant, id, write_options, rng, "insert", stats).await
             }
         }
         WorkloadKind::YcsbF => {
             if rng.random_bool(0.5) {
-                read(db, variant, selector.sample(rng), "read").await
+                read(db, variant, selector.sample(rng), "read", stats).await
             } else {
                 let id = selector.sample(rng);
                 let key = key_for_id(id, variant.key_bytes());
-                let previous = db
-                    .get(key.clone())
+                let previous = stats
+                    .measure_api("get", db.get(key.clone()))
                     .await
                     .map_err(|error| OperationError::Other(error.into()))?
                     .context("read-modify-write key not found")
                     .map_err(OperationError::Other)?;
                 let value = random_value(variant.value_bytes(), rng);
-                let handle = db
-                    .put_with_options(key, value.clone(), &PutOptions::default(), write_options)
+                let handle = stats
+                    .measure_api(
+                        "put",
+                        db.put_with_options(
+                            key,
+                            value.clone(),
+                            &PutOptions::default(),
+                            write_options,
+                        ),
+                    )
                     .await
                     .map_err(|error| OperationError::Other(error.into()))?;
                 Ok(OperationOutcome {
@@ -272,12 +293,12 @@ async fn execute_operation(
                 })
             }
         }
-        WorkloadKind::MultiRandomRead => multi_read(db, variant, selector, rng).await,
+        WorkloadKind::MultiRandomRead => multi_read(db, variant, selector, rng, stats).await,
         WorkloadKind::ForwardRange => {
-            scan(db, variant, selector.sample(rng), 10, false, "scan").await
+            scan(db, variant, selector.sample(rng), 10, false, "scan", stats).await
         }
         WorkloadKind::ReverseRange => {
-            scan(db, variant, selector.sample(rng), 10, true, "scan").await
+            scan(db, variant, selector.sample(rng), 10, true, "scan", stats).await
         }
         WorkloadKind::Overwrite => {
             update(
@@ -287,6 +308,7 @@ async fn execute_operation(
                 write_options,
                 rng,
                 "update",
+                stats,
             )
             .await
         }
@@ -294,8 +316,11 @@ async fn execute_operation(
             let id = next_insert.fetch_add(1, Ordering::Relaxed);
             let key = random_unique_key(id, variant.key_bytes(), rng);
             let value = random_value(variant.value_bytes(), rng);
-            let handle = db
-                .put_with_options(key, value.clone(), &PutOptions::default(), write_options)
+            let handle = stats
+                .measure_api(
+                    "put",
+                    db.put_with_options(key, value.clone(), &PutOptions::default(), write_options),
+                )
                 .await
                 .map_err(|error| OperationError::Other(error.into()))?;
             Ok(OperationOutcome {
@@ -306,8 +331,10 @@ async fn execute_operation(
                 transaction_commit: false,
             })
         }
-        WorkloadKind::TransactionContention => transaction(db, variant, write_options, rng).await,
-        WorkloadKind::PrefixScan => prefix_scan(db, variant, rng).await,
+        WorkloadKind::TransactionContention => {
+            transaction(db, variant, write_options, rng, stats).await
+        }
+        WorkloadKind::PrefixScan => prefix_scan(db, variant, rng, stats).await,
         other => Err(OperationError::Other(anyhow::anyhow!(
             "unsupported closed-loop operation {other:?}"
         ))),
@@ -319,9 +346,10 @@ async fn read(
     variant: &VariantConfig,
     id: u64,
     name: &'static str,
+    stats: &mut WorkerStats,
 ) -> std::result::Result<OperationOutcome, OperationError> {
-    let value = db
-        .get(key_for_id(id, variant.key_bytes()))
+    let value = stats
+        .measure_api("get", db.get(key_for_id(id, variant.key_bytes())))
         .await
         .map_err(|error| OperationError::Other(error.into()))?
         .context("benchmark read key not found")
@@ -342,14 +370,18 @@ async fn update(
     write_options: &WriteOptions,
     rng: &mut StdRng,
     name: &'static str,
+    stats: &mut WorkerStats,
 ) -> std::result::Result<OperationOutcome, OperationError> {
     let value = random_value(variant.value_bytes(), rng);
-    let handle = db
-        .put_with_options(
-            key_for_id(id, variant.key_bytes()),
-            value.clone(),
-            &PutOptions::default(),
-            write_options,
+    let handle = stats
+        .measure_api(
+            "put",
+            db.put_with_options(
+                key_for_id(id, variant.key_bytes()),
+                value.clone(),
+                &PutOptions::default(),
+                write_options,
+            ),
         )
         .await
         .map_err(|error| OperationError::Other(error.into()))?;
@@ -367,17 +399,23 @@ async fn multi_read(
     variant: &VariantConfig,
     selector: &KeySelector,
     rng: &mut StdRng,
+    stats: &mut WorkerStats,
 ) -> std::result::Result<OperationOutcome, OperationError> {
     let keys = (0..10)
         .map(|_| key_for_id(selector.sample(rng), variant.key_bytes()))
         .collect::<Vec<_>>();
-    let values = try_join_all(keys.into_iter().map(|key| db.get(key)))
-        .await
-        .map_err(|error| OperationError::Other(error.into()))?;
+    let values = join_all(keys.into_iter().map(|key| async {
+        let started = Instant::now();
+        let result = db.get(key).await;
+        (result, started.elapsed())
+    }))
+    .await;
     let mut bytes = 0_u64;
-    for value in values {
+    for (value, latency) in values {
+        stats.record_api_latency("get", latency);
         bytes = bytes.saturating_add(
             value
+                .map_err(|error| OperationError::Other(error.into()))?
                 .context("multi-random-read key not found")
                 .map_err(OperationError::Other)?
                 .len() as u64,
@@ -399,75 +437,89 @@ async fn scan(
     limit: usize,
     reverse: bool,
     name: &'static str,
+    stats: &mut WorkerStats,
 ) -> std::result::Result<OperationOutcome, OperationError> {
-    let key = key_for_id(start_id, variant.key_bytes());
-    let mut iterator = if reverse {
-        db.scan_with_options(
-            ..=key,
-            &ScanOptions::default().with_order(IterationOrder::Descending),
-        )
-        .await
-    } else {
-        db.scan(key..).await
-    }
-    .map_err(|error| OperationError::Other(error.into()))?;
-    let mut bytes = 0_u64;
-    let mut keys = 0_u64;
-    while keys < limit as u64 {
-        match iterator
-            .next()
+    let started = Instant::now();
+    let result = async {
+        let key = key_for_id(start_id, variant.key_bytes());
+        let mut iterator = if reverse {
+            db.scan_with_options(
+                ..=key,
+                &ScanOptions::default().with_order(IterationOrder::Descending),
+            )
             .await
-            .map_err(|error| OperationError::Other(error.into()))?
-        {
-            Some(value) => {
-                bytes = bytes.saturating_add((value.key.len() + value.value.len()) as u64);
-                keys += 1;
-            }
-            None => break,
+        } else {
+            db.scan(key..).await
         }
+        .map_err(|error| OperationError::Other(error.into()))?;
+        let mut bytes = 0_u64;
+        let mut keys = 0_u64;
+        while keys < limit as u64 {
+            match iterator
+                .next()
+                .await
+                .map_err(|error| OperationError::Other(error.into()))?
+            {
+                Some(value) => {
+                    bytes = bytes.saturating_add((value.key.len() + value.value.len()) as u64);
+                    keys += 1;
+                }
+                None => break,
+            }
+        }
+        Ok(OperationOutcome {
+            name,
+            payload: Payload::read(bytes),
+            batch_keys: keys,
+            write_handle: None,
+            transaction_commit: false,
+        })
     }
-    Ok(OperationOutcome {
-        name,
-        payload: Payload::read(bytes),
-        batch_keys: keys,
-        write_handle: None,
-        transaction_commit: false,
-    })
+    .await;
+    stats.record_api_latency("scan", started.elapsed());
+    result
 }
 
 async fn prefix_scan(
     db: &Db,
     variant: &VariantConfig,
     rng: &mut StdRng,
+    stats: &mut WorkerStats,
 ) -> std::result::Result<OperationOutcome, OperationError> {
-    let prefix_count = (variant.record_count() / 10).max(1);
-    let prefix = rng.random_range(0..prefix_count).to_be_bytes();
-    let mut iterator = db
-        .scan_prefix(prefix, ..)
-        .await
-        .map_err(|error| OperationError::Other(error.into()))?;
-    let mut keys = 0_u64;
-    let mut bytes = 0_u64;
-    while let Some(value) = iterator
-        .next()
-        .await
-        .map_err(|error| OperationError::Other(error.into()))?
-    {
-        keys += 1;
-        bytes = bytes.saturating_add((value.key.len() + value.value.len()) as u64);
+    let started = Instant::now();
+    let result = async {
+        let prefix_count = (variant.record_count() / 10).max(1);
+        let prefix = rng.random_range(0..prefix_count).to_be_bytes();
+        let mut iterator = db
+            .scan_prefix(prefix, ..)
+            .await
+            .map_err(|error| OperationError::Other(error.into()))?;
+        let mut keys = 0_u64;
+        let mut bytes = 0_u64;
+        while let Some(value) = iterator
+            .next()
+            .await
+            .map_err(|error| OperationError::Other(error.into()))?
+        {
+            keys += 1;
+            bytes = bytes.saturating_add((value.key.len() + value.value.len()) as u64);
+        }
+        if keys != 10 {
+            return Err(OperationError::Other(anyhow::anyhow!(
+                "prefix scan returned {keys} records instead of 10"
+            )));
+        }
+        Ok(OperationOutcome {
+            name: "prefix-scan",
+            payload: Payload::read(bytes),
+            batch_keys: keys,
+            write_handle: None,
+            transaction_commit: false,
+        })
     }
-    if keys != 10 {
-        return Err(OperationError::Other(anyhow::anyhow!(
-            "prefix scan returned {keys} records instead of 10"
-        )));
-    }
-    Ok(OperationOutcome {
-        name: "prefix-scan",
-        payload: Payload::read(bytes),
-        batch_keys: keys,
-        write_handle: None,
-        transaction_commit: false,
-    })
+    .await;
+    stats.record_api_latency("scan", started.elapsed());
+    result
 }
 
 async fn transaction(
@@ -475,9 +527,13 @@ async fn transaction(
     variant: &VariantConfig,
     write_options: &WriteOptions,
     rng: &mut StdRng,
+    stats: &mut WorkerStats,
 ) -> std::result::Result<OperationOutcome, OperationError> {
-    let transaction = db
-        .begin(IsolationLevel::SerializableSnapshot)
+    let transaction = stats
+        .measure_api(
+            "transaction.begin",
+            db.begin(IsolationLevel::SerializableSnapshot),
+        )
         .await
         .map_err(|error| OperationError::Other(error.into()))?;
     let mut read_payload_bytes = 0_u64;
@@ -490,8 +546,8 @@ async fn transaction(
         let id = rng.random_range(0..variant.record_count().max(1));
         let key = key_for_id(id, variant.key_bytes());
         if read_operation {
-            let value = transaction
-                .get(key)
+            let value = stats
+                .measure_api("transaction.get", transaction.get(key))
                 .await
                 .map_err(|error| OperationError::Other(error.into()))?
                 .context("transaction read key not found")
@@ -500,12 +556,18 @@ async fn transaction(
         } else {
             let value = random_value(variant.value_bytes(), rng);
             write_payload_bytes = write_payload_bytes.saturating_add(value.len() as u64);
-            transaction
-                .put(key, value)
+            stats
+                .measure_api_sync("transaction.put", || transaction.put(key, value))
                 .map_err(|error| OperationError::Other(error.into()))?;
         }
     }
-    match transaction.commit_with_options(write_options).await {
+    match stats
+        .measure_api(
+            "transaction.commit",
+            transaction.commit_with_options(write_options),
+        )
+        .await
+    {
         Ok(handle) => Ok(OperationOutcome {
             name: "transaction",
             payload: Payload::read_write(read_payload_bytes, write_payload_bytes),
@@ -552,11 +614,9 @@ async fn run_bulk_load(
         let key = key_for_id(id, variant.key_bytes());
         let value = random_value(variant.value_bytes(), &mut rng);
         let started = Instant::now();
-        let (result, backpressure) = measure_backpressure(db.put_with_options(
-            key,
-            value.clone(),
-            &PutOptions::default(),
-            &write_options,
+        let (result, backpressure) = measure_backpressure(stats.measure_api(
+            "put",
+            db.put_with_options(key, value.clone(), &PutOptions::default(), &write_options),
         ))
         .await;
         stats.record_backpressure(backpressure);
@@ -661,11 +721,14 @@ async fn capped_writer(
         ticker.tick().await;
         let started = Instant::now();
         let value = random_value(variant.value_bytes(), &mut rng);
-        let (result, backpressure) = measure_backpressure(db.put_with_options(
-            key_for_id(selector.sample(&mut rng), variant.key_bytes()),
-            value.clone(),
-            &PutOptions::default(),
-            &options,
+        let (result, backpressure) = measure_backpressure(stats.measure_api(
+            "put",
+            db.put_with_options(
+                key_for_id(selector.sample(&mut rng), variant.key_bytes()),
+                value.clone(),
+                &PutOptions::default(),
+                &options,
+            ),
         ))
         .await;
         stats.record_backpressure(backpressure);

@@ -45,6 +45,7 @@ export type BenchmarkResult = {
     errors: number;
     return_latency: Latency;
     return_latency_by_operation: Record<string, Latency>;
+    api_latency: Record<string, Latency>;
   };
   durability: Record<string, unknown> & {
     lag: Latency | null;
@@ -102,6 +103,7 @@ export type ApplicationWindow = {
   dropped_operations: number | null;
   return_latency: Latency | null;
   return_latency_by_operation: Record<string, Latency>;
+  api_latency: Record<string, Latency>;
   response_latency: Latency | null;
   scheduling_delay: Latency | null;
   batch_latency: Latency | null;

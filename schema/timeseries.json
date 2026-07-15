@@ -53,7 +53,7 @@
     },
     "applicationWindow": {
       "type": "object", "additionalProperties": false,
-      "required": ["start_offset_ns", "duration_ns", "completed_operations", "successful_operations", "errors", "read_payload_bytes", "write_payload_bytes", "payload_bytes", "offered_operations", "dropped_operations", "return_latency", "return_latency_by_operation", "response_latency", "scheduling_delay", "batch_latency"],
+      "required": ["start_offset_ns", "duration_ns", "completed_operations", "successful_operations", "errors", "read_payload_bytes", "write_payload_bytes", "payload_bytes", "offered_operations", "dropped_operations", "return_latency", "return_latency_by_operation", "api_latency", "response_latency", "scheduling_delay", "batch_latency"],
       "properties": {
         "start_offset_ns": { "type": "integer", "minimum": 0 },
         "duration_ns": { "type": "integer", "exclusiveMinimum": 0 },
@@ -67,6 +67,7 @@
         "dropped_operations": { "anyOf": [{ "type": "integer", "minimum": 0 }, { "type": "null" }] },
         "return_latency": { "$ref": "#/$defs/nullableLatency" },
         "return_latency_by_operation": { "type": "object", "additionalProperties": { "$ref": "#/$defs/latency" } },
+        "api_latency": { "type": "object", "additionalProperties": { "$ref": "#/$defs/latency" } },
         "response_latency": { "$ref": "#/$defs/nullableLatency" },
         "scheduling_delay": { "$ref": "#/$defs/nullableLatency" },
         "batch_latency": { "$ref": "#/$defs/nullableLatency" }

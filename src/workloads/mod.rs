@@ -146,10 +146,12 @@ pub async fn execute_variant(
     };
     let generation_stopped = Instant::now();
     let measurement_elapsed = generation_stopped.saturating_duration_since(measured_started);
+    let final_api_recorder = counters.register_window_recorder();
     let (durability, durability_windows) = finish_durability(
         &db,
         &mut stats,
         tracker,
+        &final_api_recorder,
         measured_started,
         generation_stopped,
     )
@@ -200,6 +202,7 @@ async fn finish_durability(
     db: &Db,
     stats: &mut WorkerStats,
     tracker: Option<DurabilityTracker>,
+    api_recorder: &system::ApplicationWindowRecorder,
     measured_started: Instant,
     generation_stopped: Instant,
 ) -> Result<(DurabilityPerformance, Option<Vec<DurabilityWindow>>)> {
@@ -215,7 +218,10 @@ async fn finish_durability(
         return Ok((durability, windows));
     }
 
-    db.flush().await.context("final benchmark flush")?;
+    let flush_started = Instant::now();
+    let flush = db.flush().await;
+    api_recorder.record_api_latency("flush", flush_started.elapsed());
+    flush.context("final benchmark flush")?;
     let drained_at = Instant::now();
     durability.final_flush_drain_ns = Some(system::duration_ns(
         drained_at.saturating_duration_since(generation_stopped),

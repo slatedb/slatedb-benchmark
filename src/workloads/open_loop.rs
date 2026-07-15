@@ -118,11 +118,9 @@ async fn open_worker(
         let key = key_for_id(id, variant.key_bytes());
         if update {
             let value = random_value(variant.value_bytes(), &mut rng);
-            let (result, backpressure) = measure_backpressure(db.put_with_options(
-                key,
-                value.clone(),
-                &PutOptions::default(),
-                &write_options,
+            let (result, backpressure) = measure_backpressure(stats.measure_api(
+                "put",
+                db.put_with_options(key, value.clone(), &PutOptions::default(), &write_options),
             ))
             .await;
             stats.record_backpressure(backpressure);
@@ -145,7 +143,7 @@ async fn open_worker(
                 }
             }
         } else {
-            match db.get(key).await {
+            match stats.measure_api("get", db.get(key)).await {
                 Ok(Some(value)) => stats.record_success(
                     "read",
                     invoked.elapsed(),

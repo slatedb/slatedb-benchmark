@@ -270,6 +270,14 @@ impl ApplicationWindowRecorder {
             .record("batch", latency);
     }
 
+    pub fn record_api_latency(&self, api: &str, latency: Duration) {
+        self.inner
+            .lock()
+            .expect("application window lock poisoned")
+            .histograms
+            .record(format!("api/{api}"), latency);
+    }
+
     pub fn record_offered(&self, offered: u64, dropped: u64) {
         let mut window = self.inner.lock().expect("application window lock poisoned");
         window.offered_operations = window.offered_operations.saturating_add(offered);
@@ -353,6 +361,7 @@ impl ApplicationCounters {
             dropped_operations: self.open_loop.then_some(merged.dropped_operations),
             return_latency: summary("return"),
             return_latency_by_operation: merged.histograms.summaries_with_prefix("return/"),
+            api_latency: merged.histograms.summaries_with_prefix("api/"),
             response_latency: summary("response"),
             scheduling_delay: summary("scheduling_delay"),
             batch_latency: summary("batch"),
@@ -859,6 +868,7 @@ mod tests {
         worker.record_error("read", Duration::from_millis(4));
         worker.record_open_loop_timing(Duration::from_millis(5), Duration::from_millis(1));
         worker.record_open_loop_timing(Duration::from_millis(7), Duration::from_millis(1));
+        worker.record_api_latency("get", Duration::from_millis(3));
         worker.record_offered(3, 1);
 
         let (window, histograms) = counters
@@ -875,7 +885,9 @@ mod tests {
         assert_eq!(window.dropped_operations, Some(1));
         assert_eq!(window.return_latency.expect("return latency").count, 2);
         assert_eq!(window.response_latency.expect("response latency").count, 2);
+        assert_eq!(window.api_latency["get"].count, 1);
         assert_eq!(histograms.get("return").expect("return histogram").len(), 2);
+        assert_eq!(histograms.get("api/get").expect("API histogram").len(), 1);
     }
 
     #[tokio::test]

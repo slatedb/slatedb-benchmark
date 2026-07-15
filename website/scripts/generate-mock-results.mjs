@@ -123,6 +123,59 @@ function payloadPerOperation(workload, keyBytes, valueBytes, throughput) {
   }
 }
 
+function apiCallsForWorkload(workload) {
+  switch (workload) {
+    case 'ycsb-a': return { get: 0.5, put: 0.5 };
+    case 'ycsb-b':
+    case 'ycsb-d': return { get: 0.95, put: 0.05 };
+    case 'ycsb-e': return { scan: 0.95, put: 0.05 };
+    case 'ycsb-f': return { get: 1, put: 0.5 };
+    case 'open-loop-read-update': return { get: 0.5, put: 0.5 };
+    case 'multi-random-read': return { get: 10 };
+    case 'forward-range':
+    case 'reverse-range':
+    case 'prefix-scan': return { scan: 1 };
+    case 'read-while-writing': return { get: 1, put: 0.1 };
+    case 'forward-range-while-writing':
+    case 'reverse-range-while-writing': return { scan: 1, put: 0.1 };
+    case 'bulk-load':
+    case 'overwrite':
+    case 'sustained-ingest': return { put: 1 };
+    case 'transaction-contention': return {
+      'transaction.begin': 1,
+      'transaction.get': 5,
+      'transaction.put': 5,
+      'transaction.commit': 1,
+    };
+    default: return { get: 1 };
+  }
+}
+
+function apiLatencyFactor(api) {
+  return {
+    get: 1,
+    put: 1.4,
+    scan: 8,
+    'transaction.begin': 0.8,
+    'transaction.get': 0.7,
+    'transaction.put': 0.1,
+    'transaction.commit': 2.2,
+    flush: 20,
+  }[api] ?? 1;
+}
+
+function latencySummary(summary, count, factor = 1) {
+  const scale = (value) => Math.max(1, Math.round(value * factor));
+  return {
+    count,
+    p50_ns: scale(summary.p50_ns),
+    p95_ns: scale(summary.p95_ns),
+    p99_ns: scale(summary.p99_ns),
+    p999_ns: scale(summary.p999_ns),
+    max_ns: scale(summary.max_ns),
+  };
+}
+
 function machineTraffic(readBytes, writeBytes) {
   return {
     upload: Math.round(writeBytes * 1.25 + readBytes * 0.025),
@@ -145,7 +198,7 @@ function windowLatency(summary, count, index, extra = 1) {
   };
 }
 
-function mockTimeseries({ throughput, payload, databaseSize, isWrite, awaitDurable, openLoop, latency }) {
+function mockTimeseries({ throughput, payload, databaseSize, isWrite, awaitDurable, openLoop, latency, apiCalls }) {
   const windowCount = 60;
   let cumulativeOperations = 0;
   let networkBytesSent = 0;
@@ -159,6 +212,18 @@ function mockTimeseries({ throughput, payload, databaseSize, isWrite, awaitDurab
     const offered = openLoop ? Math.round(throughput / 0.96) : null;
     const dropped = openLoop ? Math.max(0, offered - successful) : null;
     const returnLatency = windowLatency(latency.summary, successful, index);
+    const apiLatency = Object.fromEntries(Object.entries(apiCalls).map(([api, multiplier]) => [
+      api,
+      windowLatency(
+        latency.summary,
+        Math.max(1, Math.round(successful * multiplier)),
+        index,
+        apiLatencyFactor(api),
+      ),
+    ]));
+    if (isWrite && index === windowCount - 1) {
+      apiLatency.flush = windowLatency(latency.summary, 1, index, apiLatencyFactor('flush'));
+    }
     const readPayloadBytes = Math.round(successful * payload.read);
     const writePayloadBytes = Math.round(successful * payload.write);
     const network = machineTraffic(readPayloadBytes, writePayloadBytes);
@@ -178,6 +243,7 @@ function mockTimeseries({ throughput, payload, databaseSize, isWrite, awaitDurab
       dropped_operations: dropped,
       return_latency: returnLatency,
       return_latency_by_operation: { operation: returnLatency },
+      api_latency: apiLatency,
       response_latency: openLoop ? windowLatency(latency.summary, successful, index, 1.08) : null,
       scheduling_delay: openLoop
         ? windowLatency({ p50_ns: 40_000, p95_ns: 90_000, p99_ns: 180_000, p999_ns: 400_000, max_ns: 700_000 }, successful, index)
@@ -224,6 +290,7 @@ for (const suite of published.suites) {
       const keyBytes = workload.key_bytes ?? suite.key_bytes;
       const valueBytes = workload.value_bytes ?? suite.value_bytes;
       const payload = payloadPerOperation(workload.name, keyBytes, valueBytes, throughput);
+      const apiCalls = apiCallsForWorkload(workload.name);
       const aggregateMachineTraffic = machineTraffic(
         operations * payload.read,
         operations * payload.write,
@@ -310,6 +377,17 @@ for (const suite of published.suites) {
           errors: 0,
           return_latency: latency.summary,
           return_latency_by_operation: { operation: latency.summary },
+          api_latency: {
+            ...Object.fromEntries(Object.entries(apiCalls).map(([api, multiplier]) => [
+              api,
+              latencySummary(
+                latency.summary,
+                Math.max(1, Math.round(operations * multiplier)),
+                apiLatencyFactor(api),
+              ),
+            ])),
+            ...(isWrite ? { flush: latencySummary(latency.summary, 1, apiLatencyFactor('flush')) } : {}),
+          },
           response_latency: openLoop ? latency.summary : null,
           scheduling_delay: openLoop ? latency.summary : null,
           batch_latency: null,
@@ -384,13 +462,18 @@ for (const suite of published.suites) {
         histograms: {
           return: latency.histogram,
           'return/operation': latency.histogram,
+          ...Object.fromEntries(Object.entries(apiCalls).map(([api, multiplier]) => [
+            `api/${api}`,
+            { ...latency.histogram, count: Math.max(1, Math.round(operations * multiplier)) },
+          ])),
+          ...(isWrite ? { 'api/flush': { ...latency.histogram, count: 1 } } : {}),
           ...objectStoreHistograms,
           ...(openLoop ? { response: latency.histogram, scheduling_delay: latency.histogram } : {}),
           ...(durabilityLag ? { durability_lag: latency.histogram } : {}),
         },
       };
       const windowed = mockTimeseries({
-        throughput, payload, databaseSize, isWrite, awaitDurable, openLoop, latency,
+        throughput, payload, databaseSize, isWrite, awaitDurable, openLoop, latency, apiCalls,
       });
       const timeseries = {
         interval_ns: 1_000_000_000,

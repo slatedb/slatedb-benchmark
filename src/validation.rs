@@ -111,6 +111,23 @@ fn validate_invariants(
     for (operation, summary) in &result.application.return_latency_by_operation {
         validate_histogram_summary(histograms, &format!("return/{operation}"), summary)?;
     }
+    let histogram_apis = histograms
+        .histograms
+        .keys()
+        .filter_map(|name| name.strip_prefix("api/"))
+        .collect::<BTreeSet<_>>();
+    let result_apis = result
+        .application
+        .api_latency
+        .keys()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    if histogram_apis != result_apis {
+        bail!("API latency summaries do not match encoded histograms");
+    }
+    for (api, summary) in &result.application.api_latency {
+        validate_histogram_summary(histograms, &format!("api/{api}"), summary)?;
+    }
     for (name, summary) in [
         ("response", result.application.response_latency.as_ref()),
         (
@@ -388,6 +405,29 @@ fn validate_application_windows(
             .sum::<u64>();
         if actual != expected {
             bail!("application window {name} count {actual} does not match histogram count {expected}");
+        }
+    }
+    for (api, summary) in &result.application.api_latency {
+        let actual = timeseries
+            .application_windows
+            .iter()
+            .filter_map(|window| window.api_latency.get(api))
+            .map(|latency| latency.count)
+            .sum::<u64>();
+        if actual != summary.count {
+            bail!(
+                "application window api/{api} count {actual} does not match histogram count {}",
+                summary.count
+            );
+        }
+    }
+    for api in timeseries
+        .application_windows
+        .iter()
+        .flat_map(|window| window.api_latency.keys())
+    {
+        if !result.application.api_latency.contains_key(api) {
+            bail!("application window contains unknown API latency {api}");
         }
     }
     Ok(())

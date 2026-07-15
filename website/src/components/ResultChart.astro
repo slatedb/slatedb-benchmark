@@ -7,14 +7,14 @@ interface Props {
   variant: string;
 }
 
-type Point = { x: number | string; y: number };
+type Point = { x: number; y: number };
 type ChartDefinition = {
   key: string;
   title: string;
   description: string;
   unit: string;
   digits: number;
-  mode: 'time' | 'percentiles';
+  showPoints?: boolean;
   datasets: Array<{
     label: string;
     color: string;
@@ -50,23 +50,8 @@ const latencyDatasets = (rows: Array<{ x: number; latency: Latency }>) => [
   color,
   points: rows.map(({ x, latency }) => ({ x, y: value(latency) / 1e6 })),
 }));
-const slateSettings = result.configuration.slate_settings as Record<string, unknown> | undefined;
-const awaitsDurability = slateSettings?.await_durable === true;
-
-const latencyRows = application
-  .filter((window) => window.return_latency !== null)
-  .map((window) => ({ x: atEnd(window), latency: window.return_latency! }));
-const latencyChart: ChartDefinition = {
-  key: 'return-latency',
-  title: 'Return latency over time',
-  description: awaitsDurability
-    ? 'SlateDB invocation to API return · includes durability'
-    : 'SlateDB invocation to API return',
-  unit: 'Milliseconds',
-  digits: 3,
-  mode: 'time',
-  datasets: latencyDatasets(latencyRows),
-};
+const awaitsDurability = result.durability.final_flush_drain_ns !== null
+  && result.durability.lag === null;
 
 const throughputChart: ChartDefinition = {
   key: 'payload-throughput',
@@ -74,7 +59,6 @@ const throughputChart: ChartDefinition = {
   description: 'Logical application payload and host-wide network traffic',
   unit: 'MiB / second',
   digits: 2,
-  mode: 'time',
   datasets: [
     {
       label: 'Application read',
@@ -109,42 +93,66 @@ const throughputChart: ChartDefinition = {
   ],
 };
 
-const wholeRunLatency = result.application.return_latency;
-const tailLatencyChart: ChartDefinition = {
-  key: 'tail-latency',
-  title: 'Tail latency',
-  description: awaitsDurability
-    ? 'Whole-run return latency percentiles · includes durability'
-    : 'Whole-run return latency percentiles',
-  unit: 'ms',
-  digits: 3,
-  mode: 'percentiles',
-  datasets: [{
-    label: 'Return latency',
-    color: '#b26844',
-    points: [
-      { x: 'p50', y: wholeRunLatency.p50_ns / 1e6 },
-      { x: 'p95', y: wholeRunLatency.p95_ns / 1e6 },
-      { x: 'p99', y: wholeRunLatency.p99_ns / 1e6 },
-      { x: 'p99.9', y: wholeRunLatency.p999_ns / 1e6 },
-    ],
-  }],
+const apiOrder = [
+  'get',
+  'put',
+  'scan',
+  'transaction.begin',
+  'transaction.get',
+  'transaction.put',
+  'transaction.commit',
+  'flush',
+];
+const apiLabel = (api: string) => `${api}()`;
+const apiDescription = (api: string) => {
+  if (api === 'scan') return 'SlateDB scan invocation through iterator exhaustion';
+  if (api === 'flush') return 'SlateDB flush() invocation through durable completion';
+  const durability = ['put', 'transaction.commit'].includes(api) && awaitsDurability
+    ? ' · includes durability'
+    : '';
+  return `SlateDB ${apiLabel(api)} invocation to API return${durability}`;
 };
+const apiCharts: ChartDefinition[] = [...new Set(application.flatMap((window) =>
+  Object.keys(window.api_latency),
+))]
+  .sort((left, right) => {
+    const leftIndex = apiOrder.indexOf(left);
+    const rightIndex = apiOrder.indexOf(right);
+    return (leftIndex < 0 ? apiOrder.length : leftIndex)
+      - (rightIndex < 0 ? apiOrder.length : rightIndex)
+      || left.localeCompare(right);
+  })
+  .flatMap((api) => {
+    const rows = application.flatMap((window) => {
+      const latency = window.api_latency[api];
+      return latency ? [{ x: atEnd(window), latency }] : [];
+    });
+    const calls = rows.reduce((count, row) => count + row.latency.count, 0);
+    if (api === 'flush' && calls < 2) return [];
+    return [{
+      key: `api-${api.replaceAll('.', '-')}`,
+      title: `${apiLabel(api)} latency`,
+      description: apiDescription(api),
+      unit: 'Milliseconds',
+      digits: 3,
+      showPoints: rows.length < 3,
+      datasets: latencyDatasets(rows),
+    }];
+  });
 
 const durabilityRows = (timeseries.durability_windows || [])
   .filter((window) => window.durability_lag !== null)
   .map((window) => ({ x: atEnd(window), latency: window.durability_lag! }));
 const durabilityChart: ChartDefinition | null = durabilityRows.length > 0 ? {
-  key: 'durability-lag',
-  title: 'Durability lag over time',
+  key: 'durability-latency',
+  title: 'Durability latency',
   description: 'API return to durable frontier coverage',
   unit: 'Milliseconds',
   digits: 3,
-  mode: 'time',
   datasets: latencyDatasets(durabilityRows),
 } : null;
 
-const charts = [throughputChart, latencyChart, tailLatencyChart, durabilityChart]
+const charts = [throughputChart, ...apiCharts, durabilityChart]
   .filter((chart): chart is ChartDefinition => chart !== null);
 ---
 
@@ -191,20 +199,18 @@ const charts = [throughputChart, latencyChart, tailLatencyChart, durabilityChart
       return;
     }
     const chart = JSON.parse(canvas.dataset.timeChart || '{}');
-    const percentiles = chart.mode === 'percentiles';
     new Chart(canvas, {
       type: 'line',
       data: {
-        labels: percentiles ? chart.datasets[0]?.points.map((point: { x: string }) => point.x) : undefined,
-        datasets: chart.datasets.map((dataset: { label: string; color: string; points: Array<{ x: number | string; y: number }>; dash?: number[]; width?: number }) => ({
+        datasets: chart.datasets.map((dataset: { label: string; color: string; points: Array<{ x: number; y: number }>; dash?: number[]; width?: number }) => ({
           label: dataset.label,
-          data: percentiles ? dataset.points.map((point) => point.y) : dataset.points,
+          data: dataset.points,
           borderColor: dataset.color,
           backgroundColor: dataset.color,
           borderWidth: dataset.width ?? 1.8,
           borderDash: dataset.dash ?? [],
-          pointRadius: percentiles ? 3 : 0,
-          pointHoverRadius: percentiles ? 5 : 3,
+          pointRadius: chart.showPoints ? 3 : 0,
+          pointHoverRadius: chart.showPoints ? 5 : 3,
           tension: 0.16,
         })),
       },
@@ -215,9 +221,9 @@ const charts = [throughputChart, latencyChart, tailLatencyChart, durabilityChart
         interaction: { mode: 'index', intersect: false },
         scales: {
           x: {
-            type: percentiles ? 'category' : 'linear',
+            type: 'linear',
             grid: { display: false },
-            title: { display: true, text: percentiles ? 'Percentile' : 'Elapsed seconds' },
+            title: { display: true, text: 'Elapsed seconds' },
             ticks: { maxTicksLimit: 8 },
           },
           y: {
@@ -235,9 +241,7 @@ const charts = [throughputChart, latencyChart, tailLatencyChart, durabilityChart
           },
           tooltip: {
             callbacks: {
-              title: (items) => percentiles
-                ? String(items[0]?.label || '')
-                : `${Number(items[0]?.parsed.x || 0).toFixed(2)} seconds`,
+              title: (items) => `${Number(items[0]?.parsed.x || 0).toFixed(2)} seconds`,
               label: (context) => `${context.dataset.label}: ${Number(context.parsed.y).toFixed(chart.digits)} ${chart.unit}`,
             },
           },

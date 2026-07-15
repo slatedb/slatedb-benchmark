@@ -329,13 +329,14 @@ them.
 
 ## Metrics and results
 
-The runner uses HDR histograms for return latency, open-loop response latency,
-scheduling delay, durability lag, and direct object-store latency. Histograms
-use microsecond resolution and retain three significant digits. Each workload
-worker records into a private shard. The one-second sampler swaps those shards,
-merges their completed histograms, and emits application windows without a
-global per-operation lock. Those same windows are merged into the aggregate
-histograms, so the summary and time series describe the same observations.
+The runner uses HDR histograms for return latency, SlateDB API latency,
+open-loop response latency, scheduling delay, durability lag, and direct
+object-store latency. Histograms use microsecond resolution and retain three
+significant digits. Each workload worker records into a private shard. The
+one-second sampler swaps those shards, merges their completed histograms, and
+emits application windows without a global per-operation lock. Those same
+windows are merged into the aggregate histograms, so the summary and time
+series describe the same observations.
 
 Application windows also contain successful-operation counts and logical read
 and write payload bytes; their sum is retained as total payload bytes. Reads
@@ -343,8 +344,12 @@ count bytes returned by SlateDB, writes count bytes submitted to SlateDB, and
 read-modify-write and transaction operations contribute to both. The website
 derives ops/s and MiB/s using each window's actual duration. Its payload chart
 also derives machine upload and download MiB/s from consecutive host-wide
-network counter samples. Return latency always means SlateDB invocation through
-API return.
+network counter samples. Return latency covers a complete workload operation.
+API latency covers one measured SlateDB call from invocation through return.
+Multi-read records each `get()` separately, read-modify-write separates `get()`
+and `put()`, and transaction methods retain distinct latency histograms. Scan
+variants share a `scan()` histogram that includes iterator exhaustion. Setup,
+warmup, database open, and database close are excluded.
 For asynchronous writes, a separate durability series measures API return
 through durable-frontier coverage. Its windows may extend through the final
 flush and drain. Open-loop response latency and scheduling delay are retained
@@ -439,10 +444,11 @@ The layout favors density. A slim header contains the SlateDB wordmark. On wide
 screens, a sticky context rail groups the version, suite, workload, and
 variant selectors with machine, object-store, dataset, cache capacities, and
 durability facts. The results canvas beside it starts with an active chart
-description and a right-aligned chart dropdown. A download icon beside the
-dropdown links to the selected chart's raw data. Payload MiB/s is selected by
-default. The other views are return latency over time, whole-run tail latency,
-and, where applicable, durability lag over time.
+description and a right-aligned chart dropdown. Payload MiB/s is selected by
+default. Each SlateDB API exercised by the selected run gets its own p50, p95,
+and p99 latency-over-time chart. A `flush()` chart appears only when at least
+two calls were measured. Asynchronous write workloads also expose durability
+latency.
 The rail and results collapse to one column on smaller screens. A table below
 the charts exposes all percentiles, durability, resource, storage, and
 object-store baseline fields. Raw object-store counts appear in their own
@@ -456,9 +462,8 @@ one-value-per-row presentation rather than using JSON or nested layouts.
 The header wordmark uses Marcellus, matching `slatedb.io`. Body text uses Inter
 and numeric tables use JetBrains Mono. The website reuses SlateDB's ink,
 off-white, and terracotta color tokens. Time-series charts use elapsed time on
-the x-axis, while tail latency uses percentile on the x-axis and milliseconds
-on the y-axis. Each chart links directly to its underlying raw JSON. Result
-charts use a browser charting library instead of Mermaid. The website needs client
+the x-axis and milliseconds on latency-chart y-axes. Result charts use a
+browser charting library instead of Mermaid. The website needs client
 JavaScript only for selectors, chart selection, and chart rendering.
 
 ## Validation and publication
