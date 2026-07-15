@@ -40,7 +40,7 @@ jobs:
           path: .slatedb-source
       - uses: dtolnay/rust-toolchain@1.89.0
       - name: Configure selected SlateDB source
-        run: ./scripts/use-local-slatedb.sh "$GITHUB_WORKSPACE/.slatedb-source"
+        run: scripts/select-slate-source.sh "$GITHUB_WORKSPACE/.slatedb-source"
       - name: Record selected commit
         run: echo "SLATEDB_COMMIT=$(git -C .slatedb-source rev-parse HEAD)" >> "$GITHUB_ENV"
       - name: Check selected SlateDB source

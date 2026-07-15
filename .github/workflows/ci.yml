@@ -34,9 +34,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.89.0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
       - run: ./scripts/smoke.sh
 
   slatedb-compatibility:
@@ -52,5 +49,5 @@ jobs:
           ref: ${{ matrix.slate-ref }}
           path: .slatedb-source
       - uses: dtolnay/rust-toolchain@1.89.0
-      - run: ./scripts/use-local-slatedb.sh "$GITHUB_WORKSPACE/.slatedb-source"
+      - run: scripts/select-slate-source.sh "$GITHUB_WORKSPACE/.slatedb-source"
       - run: cargo check --workspace --locked

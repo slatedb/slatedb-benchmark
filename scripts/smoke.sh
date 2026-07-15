@@ -19,8 +19,6 @@ for workload in "${workloads[@]}"; do
     --workload "$workload" \
     --session docker-smoke \
     --output /output/docker-smoke
-  docker compose run --rm --entrypoint slatedb-benchmark runner \
-    validate --output /output/docker-smoke
 done
 
 # A job retry starts its steps from the beginning. Verify the first completed
@@ -31,4 +29,5 @@ docker compose run --rm --entrypoint slatedb-benchmark runner \
   --workload "${workloads[0]}" \
   --session docker-smoke \
   --output /output/docker-smoke
-node scripts/verify-smoke.mjs .runs/docker-smoke
+docker compose run --rm --entrypoint slatedb-benchmark runner \
+  validate --output /output/docker-smoke
