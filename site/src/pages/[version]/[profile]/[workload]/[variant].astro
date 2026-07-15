@@ -37,42 +37,46 @@ const tables = [
     <label class="version-control"><span>Version</span><select id="version-select" aria-label="SlateDB version"></select></label>
   </header>
   <main class="result-shell" data-catalog={JSON.stringify(catalog)} data-current={JSON.stringify({ version: route.version, profile: route.profile, workload: route.workload, variant: route.variant })}>
-    <section class="selector-row" aria-label="Benchmark selection">
-      <div class="selectors">
-        <label><span>Profile</span><select id="profile-select"></select></label>
-        <label><span>Workload</span><select id="workload-select"></select></label>
-        <label><span>Variant</span><select id="variant-select"></select></label>
-      </div>
-    </section>
-
-    <dl class="metadata-row">
-      <div><dt>Machine</dt><dd>{result.environment.runner_type}</dd></div>
-      <div><dt>Object store</dt><dd>{result.environment.object_store} · {result.environment.region}</dd></div>
-      <div><dt>Dataset</dt><dd>{result.configuration.record_count.toLocaleString()} × {formatBytes(result.configuration.value_bytes)}</dd></div>
-      <div><dt>Cache</dt><dd>{formatBytes(result.configuration.block_cache_bytes)}</dd></div>
-      <div><dt>Durability</dt><dd>{result.durability.lag ? 'Async + tracked' : 'Awaited / read-only'}</dd></div>
-    </dl>
-
-    <ResultChart result={result} timeseries={timeseries} variant={route.variant} rawBase={rawBase} />
-
-    <section class="detail-region" aria-labelledby="detail-title">
-      <div class="section-heading"><div><h2 id="detail-title">Measurements</h2></div></div>
-      {tables.map(([name, values]) => (
-        <div class="metric-group">
-          <h3>{name}</h3>
-          <div class="table-scroll"><table><tbody>
-            {Object.entries(values).map(([key, value]) => (
-              <tr><th scope="row">{key.replaceAll('_', ' ')}</th><td><code>{typeof value === 'object' ? JSON.stringify(value) : String(value)}</code></td></tr>
-            ))}
-          </tbody></table></div>
+    <aside class="result-context" aria-label="Benchmark context">
+      <nav class="selector-panel" aria-label="Benchmark selection">
+        <div class="selectors">
+          <label><span>Profile</span><select id="profile-select"></select></label>
+          <label><span>Workload</span><select id="workload-select"></select></label>
+          <label><span>Variant</span><select id="variant-select"></select></label>
         </div>
-      ))}
-    </section>
+      </nav>
 
-    <footer class="result-footer">
-      <div><span>Raw files</span><a href={`${rawBase}/result.json`}>result.json</a><a href={`${rawBase}/histograms.json`}>histograms.json</a><a href={`${rawBase}/timeseries.json`}>timeseries.json</a></div>
-      <div><span>Source</span><a href={`https://github.com/slatedb/slatedb/commit/${result.identity.slate_commit}`}>SlateDB commit</a><a href={`https://github.com/slatedb/slatedb-benchmark/commit/${result.identity.runner_commit}`}>Runner commit</a></div>
-    </footer>
+      <dl class="metadata-list">
+        <div><dt>Machine</dt><dd>{result.environment.runner_type}</dd></div>
+        <div><dt>Object store</dt><dd>{result.environment.object_store} · {result.environment.region}</dd></div>
+        <div><dt>Dataset</dt><dd>{result.configuration.record_count.toLocaleString()} × {formatBytes(result.configuration.value_bytes)}</dd></div>
+        <div><dt>Cache</dt><dd>{formatBytes(result.configuration.block_cache_bytes)}</dd></div>
+        <div><dt>Durability</dt><dd>{result.durability.lag ? 'Async + tracked' : 'Awaited / read-only'}</dd></div>
+      </dl>
+    </aside>
+
+    <div class="result-content">
+      <ResultChart result={result} timeseries={timeseries} variant={route.variant} rawBase={rawBase} />
+
+      <section class="detail-region" aria-labelledby="detail-title">
+        <div class="section-heading"><div><h2 id="detail-title">Measurements</h2></div></div>
+        {tables.map(([name, values]) => (
+          <div class="metric-group">
+            <h3>{name}</h3>
+            <div class="table-scroll"><table><tbody>
+              {Object.entries(values).map(([key, value]) => (
+                <tr><th scope="row">{key.replaceAll('_', ' ')}</th><td><code>{typeof value === 'object' ? JSON.stringify(value) : String(value)}</code></td></tr>
+              ))}
+            </tbody></table></div>
+          </div>
+        ))}
+      </section>
+
+      <footer class="result-footer">
+        <div><span>Raw files</span><a href={`${rawBase}/result.json`}>result.json</a><a href={`${rawBase}/histograms.json`}>histograms.json</a><a href={`${rawBase}/timeseries.json`}>timeseries.json</a></div>
+        <div><span>Source</span><a href={`https://github.com/slatedb/slatedb/commit/${result.identity.slate_commit}`}>SlateDB commit</a><a href={`https://github.com/slatedb/slatedb-benchmark/commit/${result.identity.runner_commit}`}>Runner commit</a></div>
+      </footer>
+    </div>
   </main>
 </Base>
 
