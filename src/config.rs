@@ -283,7 +283,14 @@ impl BenchmarkConfig {
                         workload.kind,
                         WorkloadKind::OpenLoopRead | WorkloadKind::OpenLoopReadUpdate
                     );
-                    if open_loop {
+                    if workload.kind == WorkloadKind::BulkLoad && variant.clients != Some(1) {
+                        bail!(
+                            "bulk-load variant {}/{}/{} must define exactly one client",
+                            suite.name,
+                            workload.name,
+                            variant.name
+                        );
+                    } else if open_loop {
                         if variant.clients.is_some() || variant.target_rate.is_none() {
                             bail!(
                                 "open-loop variant {}/{}/{} must define only target_rate",
@@ -668,6 +675,24 @@ mod tests {
         benchmark
             .validate()
             .expect("zero workload override should be valid");
+    }
+
+    #[test]
+    fn bulk_load_requires_the_single_loader_it_executes() {
+        let mut benchmark = BenchmarkConfig::load_from(Path::new("config")).expect("config");
+        let suite = benchmark
+            .suites
+            .iter_mut()
+            .find(|suite| suite.name == "rocksdb")
+            .expect("rocksdb suite");
+        suite.workloads[0].variants[0].clients = Some(64);
+
+        let error = benchmark
+            .validate()
+            .expect_err("multi-client bulk load should fail");
+        assert!(error.to_string().contains(
+            "bulk-load variant rocksdb/bulk-load/clients-1 must define exactly one client"
+        ));
     }
 
     #[test]

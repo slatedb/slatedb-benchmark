@@ -1,7 +1,7 @@
 # Benchmark suites
 
 Run all suites for each SlateDB release on a WarpBuild
-`warp-ubuntu-latest-x64-16x` runner against Tigris in the `auto` region.
+`warp-ubuntu-latest-x64-16x` runner against Tigris in the `fra` region.
 
 Each workload has one fixed effective configuration. SlateDB settings inherit
 from the library defaults and then the suite. Do not cross product workloads

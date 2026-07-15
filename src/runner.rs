@@ -875,6 +875,22 @@ async fn execute_rocks_variant(
     Ok((outcome, initial))
 }
 
+fn enabled_features() -> Vec<String> {
+    env!("BENCHMARK_ENABLED_FEATURES")
+        .split(',')
+        .filter(|feature| !feature.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn result_clients(variant: &VariantConfig) -> Option<usize> {
+    if variant.workload.kind == WorkloadKind::BulkLoad {
+        Some(1)
+    } else {
+        variant.clients
+    }
+}
+
 fn write_variant_result(
     variant: &VariantConfig,
     mut outcome: WorkloadOutcome,
@@ -918,7 +934,7 @@ fn write_variant_result(
         environment: context.environment.clone(),
         object_store_baseline: context.baseline.clone(),
         configuration: BenchmarkConfiguration {
-            clients: variant.clients,
+            clients: result_clients(variant),
             target_rate: variant.target_rate,
             warmup_ns: variant.warmup_ms().saturating_mul(1_000_000),
             measurement_ns: variant.measurement_ms().saturating_mul(1_000_000),
@@ -940,12 +956,7 @@ fn write_variant_result(
             } else {
                 "release".to_string()
             },
-            enabled_features: vec![
-                "aws".to_string(),
-                "foyer".to_string(),
-                "wal_disable".to_string(),
-                "zstd".to_string(),
-            ],
+            enabled_features: enabled_features(),
         },
         application: outcome.application,
         durability: outcome.durability,
@@ -1166,8 +1177,9 @@ fn average_database_bytes(
 #[cfg(test)]
 mod tests {
     use super::{
-        average_database_bytes, bulk_load_settings, close_database_after, execute_rocks_variant,
-        lsm_digest, object_store_cache_directory, open_database,
+        average_database_bytes, bulk_load_settings, close_database_after, enabled_features,
+        execute_rocks_variant, lsm_digest, object_store_cache_directory, open_database,
+        result_clients,
     };
     use crate::cli::RunArgs;
     use crate::config::{
@@ -1185,6 +1197,7 @@ mod tests {
     use slatedb::config::{PutOptions, Settings, WriteOptions};
     use slatedb::Db;
     use std::path::PathBuf;
+    use std::process::Command;
     use std::sync::Arc;
 
     #[test]
@@ -1229,6 +1242,59 @@ mod tests {
         assert_eq!(settings.l0_max_ssts_per_key, u32::MAX as usize);
         assert!(suite_settings.wal_enabled);
         assert!(suite_settings.compactor_options.is_some());
+    }
+
+    #[test]
+    fn enabled_features_match_explicit_slatedb_dependency_features() {
+        let manifest: toml::Value =
+            toml::from_str(include_str!("../Cargo.toml")).expect("parse Cargo.toml");
+        let dependency = manifest["dependencies"]["slatedb"]
+            .as_table()
+            .expect("slatedb dependency table");
+        assert_eq!(
+            dependency["default-features"].as_bool(),
+            Some(false),
+            "SlateDB defaults must not hide enabled features"
+        );
+        let mut expected = dependency["features"]
+            .as_array()
+            .expect("slatedb features")
+            .iter()
+            .map(|feature| feature.as_str().expect("feature string").to_string())
+            .collect::<Vec<_>>();
+        expected.sort();
+        expected.dedup();
+
+        assert_eq!(enabled_features(), expected);
+    }
+
+    #[test]
+    fn runner_commit_matches_checked_out_revision() {
+        let output = Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .output()
+            .expect("run git rev-parse");
+        if output.status.success() {
+            assert_eq!(
+                env!("BENCHMARK_RUNNER_COMMIT"),
+                String::from_utf8_lossy(&output.stdout).trim()
+            );
+        }
+    }
+
+    #[test]
+    fn bulk_load_result_reports_the_single_loader() {
+        let benchmark =
+            BenchmarkConfig::load_from(std::path::Path::new("config")).expect("benchmark config");
+        let mut variant = benchmark
+            .select(Some("rocksdb"), Some("bulk-load"), None)
+            .expect("bulk-load variant")
+            .pop()
+            .expect("configured bulk-load variant");
+
+        variant.clients = Some(64);
+        assert_eq!(result_clients(&variant), Some(1));
     }
 
     #[test]

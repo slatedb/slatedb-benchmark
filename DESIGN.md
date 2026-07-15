@@ -24,6 +24,10 @@ website/                Static website
 
 Each release result records its lockfile hash, the SlateDB revision under test,
 the runner revision, and the full environment described in `BENCHMARKS.md`.
+The build script reads the explicitly declared SlateDB feature list from
+`Cargo.toml` and watches Git `HEAD`, its symbolic ref, and `packed-refs`, so a
+cached build cannot retain revision or feature metadata from an earlier source
+state.
 
 Result files are the source of truth for the website. The website reads them at build
 time, so publishing needs no database or API service. Git history records any
@@ -35,8 +39,10 @@ The runner discovers a suite from each `config/*.suite.toml`; the filename
 prefix is the suite name. Each suite declares its ordered `[[workloads]]`
 array, with nested `[[workloads.variants]]` records containing a display name
 and its load control. Closed-loop variants define `clients`; open-loop variants
-define `target_rate`. Behavior is never inferred from a variant name. The
-RocksDB suite uses declaration order to preserve its stateful benchmark sequence.
+define `target_rate`. Bulk load requires exactly one client because its
+record-count-driven loader is single-threaded. Behavior is never inferred from
+a variant name. The RocksDB suite uses declaration order to preserve its
+stateful benchmark sequence.
 
 SlateDB engine settings are checked-in suite TOML rather than generated from
 benchmark configuration. SlateDB's settings loader resolves them in this order:
@@ -90,11 +96,12 @@ build runner artifact --+-> slatedb job: workload -> publish -> workload -> publ
                          \-> ycsb job:    workload -> publish -> workload -> publish ...
 ```
 
-Every suite job has its own Tigris bucket. Workloads within a job run in the
-order declared by the suite, and each workload is followed immediately by a
-publication step. A workload invocation runs all of that workload's variants,
-validates the accumulated suite output, and commits its result bundle and any
-database checkpoint to object storage before returning success:
+Every suite job has its own Tigris bucket in the `fra` region. Workloads within
+a job run in the order declared by the suite, and each workload is followed
+immediately by a publication step. A workload invocation runs all of that
+workload's variants, validates the accumulated suite output, and commits its
+result bundle and any database checkpoint to object storage before returning
+success:
 
 ```text
 restore session -> measure workload -> validate -> commit session -> publish workload
