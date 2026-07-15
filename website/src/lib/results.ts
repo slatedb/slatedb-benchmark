@@ -115,6 +115,15 @@ export type TimeseriesSample = {
   network_bytes_received: number;
 };
 
+export type MetricSeries = {
+  name: string;
+  description: string;
+  labels: Record<string, string>;
+  value_type: 'counter' | 'gauge' | 'up_down_counter' | 'histogram';
+  boundaries: number[] | null;
+  values: Array<number | Record<string, unknown> | null>;
+};
+
 export type DurabilityWindow = {
   start_offset_ns: number;
   duration_ns: number;
@@ -127,6 +136,7 @@ export type BenchmarkTimeseries = {
   samples: TimeseriesSample[];
   application_windows: ApplicationWindow[];
   durability_windows: DurabilityWindow[] | null;
+  slatedb_metrics: MetricSeries[];
 };
 
 export type ResultRoute = {

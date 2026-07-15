@@ -343,8 +343,11 @@ and write payload bytes; their sum is retained as total payload bytes. Reads
 count bytes returned by SlateDB, writes count bytes submitted to SlateDB, and
 read-modify-write and transaction operations contribute to both. The website
 derives ops/s and MiB/s using each window's actual duration. Its payload chart
-also derives machine upload and download MiB/s from consecutive host-wide
-network counter samples. Return latency covers a complete workload operation.
+also shows SlateDB compactor read and write MiB/s alongside machine upload and
+download MiB/s. Compactor read uses SlateDB's aggregate input-throughput gauge;
+compactor write sums per-worker output-byte counter deltas. Machine rates come
+from consecutive host-wide network counter samples. Return latency covers a
+complete workload operation.
 API latency covers one measured SlateDB call from invocation through return.
 Multi-read records each `get()` separately, read-modify-write separates `get()`
 and `put()`, and transaction methods retain distinct latency histograms. Scan

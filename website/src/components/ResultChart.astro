@@ -31,6 +31,7 @@ const atEnd = (window: { start_offset_ns: number; duration_ns: number }) =>
 const seconds = (window: { duration_ns: number }) => window.duration_ns / 1e9;
 const mibPerSecond = (bytes: number, durationSeconds: number) =>
   bytes / 1_048_576 / Math.max(durationSeconds, Number.EPSILON);
+const bytesPerSecondToMib = (bytes: number) => bytes / 1_048_576;
 const machineRate = (field: 'network_bytes_sent' | 'network_bytes_received') =>
   timeseries.samples.slice(1).flatMap((sample, index) => {
     const previous = timeseries.samples[index];
@@ -41,6 +42,41 @@ const machineRate = (field: 'network_bytes_sent' | 'network_bytes_received') =>
       y: mibPerSecond(Math.max(0, sample[field] - previous[field]), duration),
     }];
   });
+const scalarMetricSeries = (name: string, valueType: 'counter' | 'gauge') =>
+  timeseries.slatedb_metrics.filter((series) =>
+    series.name === name && series.value_type === valueType
+  );
+const scalarValue = (value: number | Record<string, unknown> | null | undefined) =>
+  typeof value === 'number' ? value : null;
+const compactorReadPoints = (() => {
+  const series = scalarMetricSeries('slatedb.compactor.total_throughput_bytes_per_sec', 'gauge');
+  return timeseries.samples.flatMap((sample, index) => {
+    const values = series.flatMap((metric) => {
+      const value = scalarValue(metric.values[index]);
+      return value === null ? [] : [value];
+    });
+    return values.length === 0 ? [] : [{
+      x: sample.offset_ns / 1e9,
+      y: bytesPerSecondToMib(Math.max(0, values.reduce((sum, value) => sum + value, 0))),
+    }];
+  });
+})();
+const compactorWritePoints = (() => {
+  const series = scalarMetricSeries('slatedb.compactor.bytes_compacted', 'counter');
+  return timeseries.samples.slice(1).flatMap((sample, index) => {
+    const duration = (sample.offset_ns - timeseries.samples[index].offset_ns) / 1e9;
+    if (duration <= 0) return [];
+    const deltas = series.flatMap((metric) => {
+      const previous = scalarValue(metric.values[index]);
+      const current = scalarValue(metric.values[index + 1]);
+      return previous === null || current === null ? [] : [Math.max(0, current - previous)];
+    });
+    return deltas.length === 0 ? [] : [{
+      x: sample.offset_ns / 1e9,
+      y: mibPerSecond(deltas.reduce((sum, value) => sum + value, 0), duration),
+    }];
+  });
+})();
 const latencyDatasets = (rows: Array<{ x: number; latency: Latency }>) => [
   { label: 'p50', color: '#8b94a3', value: (latency: Latency) => latency.p50_ns },
   { label: 'p95', color: '#5e6878', value: (latency: Latency) => latency.p95_ns },
@@ -56,7 +92,7 @@ const awaitsDurability = result.durability.final_flush_drain_ns !== null
 const throughputChart: ChartDefinition = {
   key: 'payload-throughput',
   title: 'Payload throughput',
-  description: 'Logical application payload and host-wide network traffic',
+  description: 'Logical application payload, SlateDB compaction, and host-wide network traffic',
   unit: 'MiB / second',
   digits: 2,
   datasets: [
@@ -77,6 +113,18 @@ const throughputChart: ChartDefinition = {
         x: atEnd(window),
         y: mibPerSecond(window.write_payload_bytes, seconds(window)),
       })),
+    },
+    {
+      label: 'Compactor read',
+      color: '#3f6f8f',
+      dash: [2, 4],
+      points: compactorReadPoints,
+    },
+    {
+      label: 'Compactor write',
+      color: '#b26844',
+      dash: [2, 4],
+      points: compactorWritePoints,
     },
     {
       label: 'Machine download',

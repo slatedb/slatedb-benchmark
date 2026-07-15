@@ -198,6 +198,42 @@ function windowLatency(summary, count, index, extra = 1) {
   };
 }
 
+function mockCompactorMetrics(samples, throughput, payload, isWrite) {
+  let readRate = 0;
+  let writtenBytes = 0;
+  const readValues = [];
+  const writeValues = [];
+  for (let index = 0; index < samples.length; index += 1) {
+    if (isWrite && index > 0) {
+      const wave = 0.88 + Math.sin(index / 6) * 0.1;
+      if (index % 10 === 0) {
+        readRate = Math.round(throughput * payload.write * 0.52 * wave);
+      }
+      writtenBytes += Math.round(throughput * payload.write * 0.39 * wave);
+    }
+    readValues.push(readRate);
+    writeValues.push(writtenBytes);
+  }
+  return [
+    {
+      name: 'slatedb.compactor.total_throughput_bytes_per_sec',
+      description: 'Aggregate compaction input throughput',
+      labels: {},
+      value_type: 'gauge',
+      boundaries: null,
+      values: readValues,
+    },
+    {
+      name: 'slatedb.compactor.bytes_compacted',
+      description: 'Bytes written to compaction output SSTs',
+      labels: { worker_id: 'mock-worker' },
+      value_type: 'counter',
+      boundaries: null,
+      values: writeValues,
+    },
+  ];
+}
+
 function mockTimeseries({ throughput, payload, databaseSize, isWrite, awaitDurable, openLoop, latency, apiCalls }) {
   const windowCount = 60;
   let cumulativeOperations = 0;
@@ -478,7 +514,7 @@ for (const suite of published.suites) {
       const timeseries = {
         interval_ns: 1_000_000_000,
         ...windowed,
-        slatedb_metrics: [],
+        slatedb_metrics: mockCompactorMetrics(windowed.samples, throughput, payload, isWrite),
       };
 
       const relativeDirectory = path.join('results', version, suite.name, workload.name, variant);

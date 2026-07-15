@@ -42,8 +42,8 @@ apply.
   not have a separate post-return lag.
 - Resources: average and peak CPU, peak RSS, host-wide network bytes sent and
   received, and disk bytes and operations read and written
-- Storage: compaction throughput, write amplification, backpressure time, and
-  compaction backlog
+- Storage: compactor read and write throughput over time, aggregate compaction
+  throughput, write amplification, backpressure time, and compaction backlog
 - Object store operations: final and time-weighted average database size,
   bytes read and written, errors, and raw request counts by operation
 - Cost: estimated 30-day request and storage cost if the displayed workload ran
