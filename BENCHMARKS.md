@@ -43,7 +43,8 @@ apply.
   bytes read and written, errors, and raw request counts by operation
 - Cost: estimated 30-day request and storage cost if the displayed workload ran
   continuously, using the selected standard regional Amazon S3, Azure Blob
-  Storage, or Google Cloud Storage bucket in US East
+  Storage, or Google Cloud Storage bucket in US East, with request costs broken
+  down by operation
 
 ## YCSB suite
 

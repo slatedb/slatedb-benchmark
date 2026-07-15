@@ -404,6 +404,8 @@ footprint stays constant rather than extrapolating database growth. It excludes
 dataset preparation, warmup, cloning, the direct object-store
 probe, compute, free tiers, discounts, and taxes. Compute and the bucket are
 assumed to share a region, so the cost section does not add transfer charges.
+The request total is also broken down by operation with each operation's
+projected monthly count, per-thousand rate, and monthly cost.
 
 ## Website
 

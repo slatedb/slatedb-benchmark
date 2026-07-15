@@ -7,11 +7,16 @@ interface Props {
 }
 
 const { result, pricing } = Astro.props;
+const requests = result.storage.object_store_requests;
 const basis = {
   elapsed_ns: result.elapsed_ns,
   database_size_bytes: result.storage.database_size_bytes,
-  requests: result.storage.object_store_requests,
 };
+const operationOrder = ['get', 'put', 'list', 'delete', 'head', 'copy', 'create_multipart', 'complete_multipart', 'abort_multipart'];
+const requestEntries = Object.entries(requests)
+  .filter(([, count]) => count > 0)
+  .sort(([left], [right]) => operationOrder.indexOf(left) - operationOrder.indexOf(right));
+const operationLabel = (operation: string) => operation.replaceAll('_', ' ');
 ---
 
 <section
@@ -48,6 +53,32 @@ const basis = {
     </dl>
   </div>
 
+  <div class="cost-request-detail">
+    <h3>Request cost by operation</h3>
+    <div class="table-scroll">
+      <table class="cost-request-table">
+        <thead>
+          <tr>
+            <th scope="col">Operation</th>
+            <th scope="col">Monthly requests</th>
+            <th scope="col">Rate / 1k</th>
+            <th scope="col">Monthly cost</th>
+          </tr>
+        </thead>
+        <tbody>
+          {requestEntries.map(([operation, count]) => (
+            <tr data-cost-operation={operation} data-request-count={count}>
+              <th scope="row">{operationLabel(operation)}</th>
+              <td data-cost-monthly-requests>—</td>
+              <td data-cost-operation-rate>—</td>
+              <td data-cost-operation-total>—</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
   <div class="cost-context">
     <span data-cost-basis></span>
     <span>Free tiers, credits, discounts, and taxes are excluded.</span>
@@ -76,7 +107,6 @@ const basis = {
   type CostBasis = {
     elapsed_ns: number;
     database_size_bytes: number;
-    requests: Record<string, number>;
   };
 
   document.querySelectorAll<HTMLElement>('[data-cost-section]').forEach((section) => {
@@ -88,6 +118,7 @@ const basis = {
     const storageOutput = section.querySelector<HTMLElement>('[data-cost-storage]');
     const basisOutput = section.querySelector<HTMLElement>('[data-cost-basis]');
     const sourceLink = section.querySelector<HTMLAnchorElement>('[data-cost-source]');
+    const operationRows = [...section.querySelectorAll<HTMLTableRowElement>('[data-cost-operation]')];
 
     const currency = (value: number) => {
       const digits = value === 0 ? 2 : value < 0.01 ? 6 : value < 1 ? 4 : 2;
@@ -104,6 +135,9 @@ const basis = {
       minimumFractionDigits: 3,
       maximumFractionDigits: 5,
     }).format(value);
+    const requestCount = (value: number) => new Intl.NumberFormat('en-US', {
+      maximumFractionDigits: 0,
+    }).format(value);
 
     const render = () => {
       const provider = pricing.providers.find((candidate) => candidate.id === providerSelect?.value)
@@ -112,11 +146,19 @@ const basis = {
       const elapsedSeconds = basis.elapsed_ns / 1e9;
       const monthSeconds = pricing.units.month_days * 86400;
       const requestScale = elapsedSeconds > 0 ? monthSeconds / elapsedSeconds : 0;
-      const requestCost = Object.entries(basis.requests).reduce(
-        (sum, [operation, count]) => sum + count * requestScale / 1000
-          * (provider.requests_per_1000[operation] || 0),
-        0,
-      );
+      const requestCost = operationRows.reduce((sum, row) => {
+        const operation = row.dataset.costOperation || '';
+        const monthlyRequests = Number(row.dataset.requestCount || 0) * requestScale;
+        const operationRate = provider.requests_per_1000[operation] || 0;
+        const operationCost = monthlyRequests / 1000 * operationRate;
+        const monthlyRequestsOutput = row.querySelector<HTMLElement>('[data-cost-monthly-requests]');
+        const rateOutput = row.querySelector<HTMLElement>('[data-cost-operation-rate]');
+        const costOutput = row.querySelector<HTMLElement>('[data-cost-operation-total]');
+        if (monthlyRequestsOutput) monthlyRequestsOutput.textContent = requestCount(monthlyRequests);
+        if (rateOutput) rateOutput.textContent = rate(operationRate);
+        if (costOutput) costOutput.textContent = currency(operationCost);
+        return sum + operationCost;
+      }, 0);
       const storageGib = basis.database_size_bytes / pricing.units.gib_bytes;
       const storageCost = storageGib * provider.storage_per_gib_month;
 
