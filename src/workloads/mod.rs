@@ -271,10 +271,18 @@ fn storage_summary(
     StoragePerformance {
         database_size_bytes: 0,
         average_database_size_bytes: 0,
+        object_store_operations: store.operations.clone(),
         object_store_requests: store.requests.clone(),
+        object_store_successful_requests: store.successful_requests.clone(),
+        object_store_request_errors: store.request_errors.clone(),
+        object_store_client_errors: store.client_errors.clone(),
+        object_store_server_errors: store.server_errors.clone(),
+        object_store_transport_errors: store.transport_errors.clone(),
         object_store_errors: store.errors,
         bytes_read: store.bytes_read,
         bytes_written: store.bytes_written,
+        object_store_operation_bytes_read: store.operation_bytes_read,
+        object_store_operation_bytes_written: store.operation_bytes_written,
         compaction_throughput_bytes_per_second: counters.compaction_throughput(elapsed),
         write_amplification: counters.write_amplification(),
         backpressure_ns,
@@ -310,14 +318,31 @@ pub fn extend_with_compaction_phase(
 ) -> Result<()> {
     let phase = storage_counters(start_metrics, end_metrics);
     outcome.storage_counters.merge(phase);
-    for (operation, count) in store.requests {
-        let current = outcome
-            .storage
-            .object_store_requests
-            .entry(operation)
-            .or_default();
-        *current = current.saturating_add(count);
-    }
+    merge_counts(
+        &mut outcome.storage.object_store_operations,
+        store.operations,
+    );
+    merge_counts(&mut outcome.storage.object_store_requests, store.requests);
+    merge_counts(
+        &mut outcome.storage.object_store_successful_requests,
+        store.successful_requests,
+    );
+    merge_counts(
+        &mut outcome.storage.object_store_request_errors,
+        store.request_errors,
+    );
+    merge_counts(
+        &mut outcome.storage.object_store_client_errors,
+        store.client_errors,
+    );
+    merge_counts(
+        &mut outcome.storage.object_store_server_errors,
+        store.server_errors,
+    );
+    merge_counts(
+        &mut outcome.storage.object_store_transport_errors,
+        store.transport_errors,
+    );
     outcome.storage.object_store_errors = outcome
         .storage
         .object_store_errors
@@ -327,6 +352,14 @@ pub fn extend_with_compaction_phase(
         .storage
         .bytes_written
         .saturating_add(store.bytes_written);
+    outcome.storage.object_store_operation_bytes_read = outcome
+        .storage
+        .object_store_operation_bytes_read
+        .saturating_add(store.operation_bytes_read);
+    outcome.storage.object_store_operation_bytes_written = outcome
+        .storage
+        .object_store_operation_bytes_written
+        .saturating_add(store.operation_bytes_written);
 
     let phase_ns = system::duration_ns(elapsed);
     let base = outcome.elapsed_ns;
@@ -347,6 +380,16 @@ pub fn extend_with_compaction_phase(
     )
     .map(|value| value.max(0) as u64);
     Ok(())
+}
+
+fn merge_counts(
+    target: &mut std::collections::BTreeMap<String, u64>,
+    source: std::collections::BTreeMap<String, u64>,
+) {
+    for (operation, count) in source {
+        let current = target.entry(operation).or_default();
+        *current = current.saturating_add(count);
+    }
 }
 
 fn ingest_windows(timeseries: &TimeseriesFile) -> Vec<IngestWindow> {

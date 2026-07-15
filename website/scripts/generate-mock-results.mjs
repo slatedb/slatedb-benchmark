@@ -79,6 +79,11 @@ function mockThroughput(suite, workload, clients, target) {
 }
 
 function sample(offset_ns, operations, throughput, databaseSize, networkBytesSent, networkBytesReceived) {
+  const objectStoreRequests = {
+    put: Math.round(operations / 100),
+    get: Math.round(operations / 20),
+    list: 4,
+  };
   return {
     offset_ns,
     operations,
@@ -92,9 +97,17 @@ function sample(offset_ns, operations, throughput, databaseSize, networkBytesSen
     disk_read_operations: Math.round(operations / 10),
     disk_write_operations: Math.round(operations / 8),
     database_size_bytes: databaseSize,
-    object_store_requests: { put: Math.round(operations / 100), get: Math.round(operations / 20), list: 4 },
+    object_store_operations: objectStoreRequests,
+    object_store_requests: objectStoreRequests,
+    object_store_successful_requests: objectStoreRequests,
+    object_store_request_errors: {},
+    object_store_client_errors: {},
+    object_store_server_errors: {},
+    object_store_transport_errors: {},
     object_store_bytes_read: Math.round(operations * 640),
     object_store_bytes_written: Math.round(operations * 1024),
+    object_store_operation_bytes_read: Math.round(operations * 576),
+    object_store_operation_bytes_written: Math.round(operations * 1024),
   };
 }
 
@@ -456,6 +469,17 @@ for (const suite of published.suites) {
         storage: {
           database_size_bytes: databaseSize,
           average_database_size_bytes: Math.round(databaseSize * (isWrite ? 1.05 : 1)),
+          object_store_operations: {
+            put: Math.round(operations / 100),
+            get: Math.round(operations / 20),
+            head: 2,
+            list: 4,
+            delete: 0,
+            copy: 0,
+            create_multipart: 0,
+            complete_multipart: 0,
+            abort_multipart: 0,
+          },
           object_store_requests: {
             put: Math.round(operations / 100),
             get: Math.round(operations / 20),
@@ -467,9 +491,26 @@ for (const suite of published.suites) {
             complete_multipart: 0,
             abort_multipart: 0,
           },
+          object_store_successful_requests: {
+            put: Math.round(operations / 100),
+            get: Math.round(operations / 20),
+            head: 2,
+            list: 4,
+            delete: 0,
+            copy: 0,
+            create_multipart: 0,
+            complete_multipart: 0,
+            abort_multipart: 0,
+          },
+          object_store_request_errors: {},
+          object_store_client_errors: {},
+          object_store_server_errors: {},
+          object_store_transport_errors: {},
           object_store_errors: 0,
           bytes_read: Math.round(operations * valueBytes * 0.64),
           bytes_written: isWrite ? operations * valueBytes : 0,
+          object_store_operation_bytes_read: Math.round(operations * valueBytes * 0.58),
+          object_store_operation_bytes_written: isWrite ? operations * valueBytes : 0,
           compaction_throughput_bytes_per_second: isWrite ? throughput * valueBytes * 0.31 : null,
           write_amplification: isWrite ? 1.18 : null,
           backpressure_ns: 0,

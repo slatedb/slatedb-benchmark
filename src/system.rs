@@ -703,9 +703,17 @@ impl HostSampler {
                 });
         let (disk_read_operations, disk_write_operations) = linux_io_operations(self.pid);
         let StoreSnapshot {
+            operations,
             requests,
+            successful_requests,
+            request_errors,
+            client_errors,
+            server_errors,
+            transport_errors,
             bytes_read,
             bytes_written,
+            operation_bytes_read,
+            operation_bytes_written,
             ..
         } = store_metrics.snapshot();
         TimeseriesSample {
@@ -722,9 +730,17 @@ impl HostSampler {
             disk_write_operations,
             database_size_bytes: shared_database_bytes
                 .saturating_add(store_metrics.prefix_bytes(database_path)),
+            object_store_operations: operations,
             object_store_requests: requests,
+            object_store_successful_requests: successful_requests,
+            object_store_request_errors: request_errors,
+            object_store_client_errors: client_errors,
+            object_store_server_errors: server_errors,
+            object_store_transport_errors: transport_errors,
             object_store_bytes_read: bytes_read,
             object_store_bytes_written: bytes_written,
+            object_store_operation_bytes_read: operation_bytes_read,
+            object_store_operation_bytes_written: operation_bytes_written,
             slatedb_metrics: slate_metrics
                 .snapshot()
                 .all()

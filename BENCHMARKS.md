@@ -45,7 +45,8 @@ apply.
 - Storage: compactor read and write throughput over time, aggregate compaction
   throughput, write amplification, backpressure time, and compaction backlog
 - Object store operations: final and time-weighted average database size,
-  bytes read and written, errors, and raw request counts by operation
+  logical operations and payload bytes, physical HTTP requests and body bytes,
+  retries, and client, server, transport, and final operation errors
 - Cost: estimated 30-day request and storage cost if the displayed workload ran
   continuously, using the selected standard regional Amazon S3, Azure Blob
   Storage, or Google Cloud Storage bucket in US East, with request costs broken
@@ -141,7 +142,8 @@ Use the YCSB suite settings unless a test specifies otherwise.
    fixed-rate arrivals scheduled independently of completions.
 
 For each open-loop test, reset to the preloaded dataset and run at fixed target
-rates of 1,000, 5,000, and 10,000 ops/s.
+rates of 1,000, 5,000, and 10,000 ops/s. The runner derives enough workers from
+each target rate to keep one second of target arrivals in flight.
 
 ## Out of scope
 

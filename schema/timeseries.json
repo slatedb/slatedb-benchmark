@@ -11,6 +11,9 @@
       "items": {
         "type": "object", "additionalProperties": false,
         "required": ["offset_ns", "operations", "errors", "cpu_percent", "rss_bytes", "network_bytes_sent", "network_bytes_received", "disk_bytes_read", "disk_bytes_written", "disk_read_operations", "disk_write_operations", "database_size_bytes", "object_store_requests", "object_store_bytes_read", "object_store_bytes_written"],
+        "dependentRequired": {
+          "object_store_operations": ["object_store_successful_requests", "object_store_request_errors", "object_store_client_errors", "object_store_server_errors", "object_store_transport_errors", "object_store_operation_bytes_read", "object_store_operation_bytes_written"]
+        },
         "properties": {
           "offset_ns": { "type": "integer", "minimum": 0 }, "operations": { "type": "integer", "minimum": 0 }, "errors": { "type": "integer", "minimum": 0 },
           "cpu_percent": { "type": "number", "minimum": 0 }, "rss_bytes": { "type": "integer", "minimum": 0 },
@@ -18,8 +21,15 @@
           "disk_bytes_read": { "type": "integer", "minimum": 0 }, "disk_bytes_written": { "type": "integer", "minimum": 0 },
           "disk_read_operations": { "type": "integer", "minimum": 0 }, "disk_write_operations": { "type": "integer", "minimum": 0 },
           "database_size_bytes": { "type": "integer", "minimum": 0 },
+          "object_store_operations": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
           "object_store_requests": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
-          "object_store_bytes_read": { "type": "integer", "minimum": 0 }, "object_store_bytes_written": { "type": "integer", "minimum": 0 }
+          "object_store_successful_requests": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
+          "object_store_request_errors": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
+          "object_store_client_errors": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
+          "object_store_server_errors": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
+          "object_store_transport_errors": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
+          "object_store_bytes_read": { "type": "integer", "minimum": 0 }, "object_store_bytes_written": { "type": "integer", "minimum": 0 },
+          "object_store_operation_bytes_read": { "type": "integer", "minimum": 0 }, "object_store_operation_bytes_written": { "type": "integer", "minimum": 0 }
         }
       }
     },

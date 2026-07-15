@@ -56,9 +56,17 @@ export type BenchmarkResult = {
   storage: Record<string, unknown> & {
     database_size_bytes: number;
     average_database_size_bytes: number;
+    object_store_operations?: Record<string, number>;
     object_store_requests: Record<string, number>;
+    object_store_successful_requests?: Record<string, number>;
+    object_store_request_errors?: Record<string, number>;
+    object_store_client_errors?: Record<string, number>;
+    object_store_server_errors?: Record<string, number>;
+    object_store_transport_errors?: Record<string, number>;
     bytes_read: number;
     bytes_written: number;
+    object_store_operation_bytes_read?: number;
+    object_store_operation_bytes_written?: number;
   };
   initial_state: Record<string, unknown>;
   source_files: { histograms: string; timeseries: string };

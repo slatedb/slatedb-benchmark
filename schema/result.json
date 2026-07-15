@@ -117,11 +117,21 @@
     "storage": {
       "type": "object", "additionalProperties": false,
       "required": ["database_size_bytes", "average_database_size_bytes", "object_store_requests", "object_store_errors", "bytes_read", "bytes_written", "compaction_throughput_bytes_per_second", "write_amplification", "backpressure_ns", "compaction_backlog_bytes", "five_minute_windows"],
+      "dependentRequired": {
+        "object_store_operations": ["object_store_successful_requests", "object_store_request_errors", "object_store_client_errors", "object_store_server_errors", "object_store_transport_errors", "object_store_operation_bytes_read", "object_store_operation_bytes_written"]
+      },
       "properties": {
         "database_size_bytes": { "type": "integer", "minimum": 0 },
         "average_database_size_bytes": { "type": "integer", "minimum": 0 },
+        "object_store_operations": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
         "object_store_requests": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
+        "object_store_successful_requests": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
+        "object_store_request_errors": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
+        "object_store_client_errors": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
+        "object_store_server_errors": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
+        "object_store_transport_errors": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
         "object_store_errors": { "type": "integer", "minimum": 0 }, "bytes_read": { "type": "integer", "minimum": 0 }, "bytes_written": { "type": "integer", "minimum": 0 },
+        "object_store_operation_bytes_read": { "type": "integer", "minimum": 0 }, "object_store_operation_bytes_written": { "type": "integer", "minimum": 0 },
         "compaction_throughput_bytes_per_second": { "$ref": "#/$defs/nullableNumber" }, "write_amplification": { "$ref": "#/$defs/nullableNumber" },
         "backpressure_ns": { "type": "integer", "minimum": 0 }, "compaction_backlog_bytes": { "$ref": "#/$defs/nullableInteger" },
         "five_minute_windows": { "type": "array", "items": { "$ref": "#/$defs/window" } }

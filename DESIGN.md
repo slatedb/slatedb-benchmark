@@ -34,9 +34,9 @@ correction to a published result.
 The runner discovers a suite from each `config/*.suite.toml`; the filename
 prefix is the suite name. Each suite declares its ordered `[[workloads]]`
 array, with nested `[[workloads.variants]]` records containing a display name
-and either `clients` or `target_rate`. Behavior is never inferred from a variant
-name. The RocksDB suite uses declaration order to preserve its stateful
-benchmark sequence.
+and its load control. Closed-loop variants define `clients`; open-loop variants
+define `target_rate`. Behavior is never inferred from a variant name. The
+RocksDB suite uses declaration order to preserve its stateful benchmark sequence.
 
 SlateDB engine settings are checked-in suite TOML rather than generated from
 benchmark configuration. SlateDB's settings loader resolves them in this order:
@@ -211,15 +211,19 @@ start, so throughput must be read with the latency distribution.
 The two open-loop workloads use a monotonic fixed-rate scheduler. The scheduler
 creates arrivals at 1,000, 5,000, and 10,000 ops/s without waiting for earlier
 requests to finish. A bounded queue holds up to one second of target traffic;
-the runner counts arrivals that exceed the bound as dropped. It records:
+the runner counts arrivals that exceed the bound as dropped. Each shipped
+variant derives one worker per operation in that one-second arrival window from
+the target rate, so the harness can keep operations in flight without imposing
+a hidden 256-worker ceiling or requiring a separate concurrency setting. It
+records:
 
 - response latency from scheduled arrival to completion
 - return latency from SlateDB invocation to completion
 - scheduling delay, offered ops/s, completed ops/s, and the scheduler's dropped operation count and rate
 
-The runner uses enough asynchronous workers to keep its own queue and CPU from
-limiting an otherwise healthy test. A result fails validation if the scheduler
-cannot sustain the target rate while SlateDB has capacity.
+Open-loop results record the offered rate as `configuration.target_rate`; their
+`configuration.clients` field is `null`. A result fails validation if the
+scheduler cannot sustain the target rate while SlateDB has capacity.
 
 ### Durability
 
@@ -389,10 +393,13 @@ zero. Task-local timing keeps concurrent writers from attributing one another's
 waits.
 
 SlateDB metrics supply DB activity, WAL and L0 flush bytes, L0 stalls,
-backpressure, compaction, and internal object-store request counts, errors, and
-latency. A runner-side wrapper adds transferred byte counts, which SlateDB does
-not currently expose. A host sampler collects CPU, RSS, network, and local disk
-statistics. Time-series JSON stores host samples as rows and SlateDB metrics as
+backpressure, compaction, and internal object-store operation counts, errors,
+and latency. A runner-side object-store wrapper records logical operations and
+payload bytes. An HTTP transport wrapper separately records physical requests,
+response status classes, retries, attempted request-body bytes, and consumed
+response-body bytes after range coalescing, bulk deletion, and pagination. A
+host sampler collects CPU, RSS, network, and local disk statistics. Time-series
+JSON stores host samples as rows and SlateDB metrics as
 columnar series: metric names, descriptions, labels, types, and histogram
 boundaries appear once, while an aligned value array carries each one-second
 snapshot. A `null` value means that a dynamically registered metric was absent
@@ -427,11 +434,15 @@ Cloud Standard regional storage. The table links to each provider's source and
 does not include Tigris pricing.
 
 Results store the raw inputs rather than a price-dependent estimate: elapsed
-time, request counts by object-store operation, and the final database size. The
-website's cost section applies the selected provider's current
-table entry to the exact workload and variant being viewed. Request counts are
-scaled from the measured elapsed time to a 30-day month; storage uses the final
-database size at the provider's monthly rate. The estimate assumes that the final
+time, logical object-store operations, physical HTTP requests by operation and
+status class, transferred body bytes, and the final database size. The
+website's cost section applies the selected provider's current table entry to
+the exact workload and variant being viewed. Successful physical requests are
+scaled from the measured elapsed time to a 30-day month; failed attempts remain
+visible in the measurements but are excluded from the projection because their
+billing differs by provider. Historical results without wire-level metrics do
+not project request charges. Storage uses the final database size at the
+provider's monthly rate. The estimate assumes that the final
 footprint stays constant rather than extrapolating database growth. It excludes
 dataset preparation, warmup, cloning, the direct object-store
 probe, compute, free tiers, discounts, and taxes. Compute and the bucket are

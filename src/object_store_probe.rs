@@ -1,6 +1,7 @@
 use crate::config::ProbeConfig;
 use crate::histogram::LatencyHistogram;
-use crate::instrumented_store::InstrumentedStore;
+use crate::instrumented_http::InstrumentedHttpConnector;
+use crate::instrumented_store::{InstrumentedStore, StoreMetrics};
 use crate::model::{EncodedHistogram, ObjectStoreBaseline};
 use anyhow::{bail, Context, Result};
 use bytes::Bytes;
@@ -30,6 +31,13 @@ pub struct ObjectStoreContext {
 impl ObjectStoreContext {
     pub fn load() -> Result<Self> {
         let provider = env::var("CLOUD_PROVIDER").unwrap_or_else(|_| "aws".to_string());
+        let configured_endpoint = env::var("AWS_ENDPOINT_URL_S3")
+            .or_else(|_| env::var("AWS_ENDPOINT"))
+            .ok();
+        let endpoint = configured_endpoint
+            .clone()
+            .unwrap_or_else(|| "https://fly.storage.tigris.dev".to_string());
+        let metrics = Arc::new(StoreMetrics::default());
         let raw: Arc<dyn ObjectStore> = match provider.to_ascii_lowercase().as_str() {
             "aws" => {
                 let bucket = env::var("SLATEDB_BENCH_BUCKET")
@@ -38,6 +46,10 @@ impl ObjectStoreContext {
                 Arc::new(
                     AmazonS3Builder::from_env()
                         .with_bucket_name(bucket)
+                        .with_http_connector(InstrumentedHttpConnector::new(
+                            Arc::clone(&metrics),
+                            configured_endpoint.as_deref(),
+                        ))
                         .build()
                         .context("building S3-compatible object store")?,
                 )
@@ -53,13 +65,10 @@ impl ObjectStoreContext {
             other => bail!("unsupported CLOUD_PROVIDER {other}; expected aws, memory, or local"),
         };
         let prefix = env::var("SLATEDB_BENCH_PREFIX").unwrap_or_else(|_| "manual".to_string());
-        let endpoint = env::var("AWS_ENDPOINT_URL_S3")
-            .or_else(|_| env::var("AWS_ENDPOINT"))
-            .unwrap_or_else(|_| "https://fly.storage.tigris.dev".to_string());
         let region = env::var("SLATEDB_BENCH_REGION")
             .or_else(|_| env::var("AWS_REGION"))
             .unwrap_or_else(|_| "fra".to_string());
-        let instrumented = Arc::new(InstrumentedStore::new(Arc::clone(&raw)));
+        let instrumented = Arc::new(InstrumentedStore::with_metrics(Arc::clone(&raw), metrics));
         Ok(Self {
             raw,
             instrumented,

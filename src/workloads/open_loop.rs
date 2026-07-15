@@ -31,19 +31,25 @@ pub async fn run_open_phase(
     if target_rate == 0 {
         bail!("open-loop target rate must be positive");
     }
-    let worker_count = (target_rate as usize / 100).clamp(32, 256);
-    let (sender, receiver) = async_channel::bounded::<Arrival>(target_rate as usize);
+    let worker_count = worker_count(target_rate)?;
+    let queue_capacity = worker_count;
+    let (sender, receiver) = async_channel::bounded::<Arrival>(queue_capacity);
     let scheduler_window = counters
         .as_ref()
         .map(|counters| counters.register_window_recorder());
     let mut tasks = JoinSet::new();
+    let variant = Arc::new(variant.clone());
+    let mut seed_rng = StdRng::from_os_rng();
     for _ in 0..worker_count {
         let db = Arc::clone(&db);
         let receiver = receiver.clone();
-        let variant = variant.clone();
+        let variant = Arc::clone(&variant);
         let durability = durability.clone();
         let counters = counters.clone();
-        tasks.spawn(async move { open_worker(db, receiver, variant, durability, counters).await });
+        let rng_seed = seed_rng.random();
+        tasks.spawn(async move {
+            open_worker(db, receiver, variant, durability, counters, rng_seed).await
+        });
     }
     drop(receiver);
 
@@ -93,11 +99,16 @@ pub async fn run_open_phase(
 async fn open_worker(
     db: Arc<Db>,
     receiver: async_channel::Receiver<Arrival>,
-    variant: VariantConfig,
+    variant: Arc<VariantConfig>,
     durability: Option<DurabilitySender>,
     counters: Option<Arc<ApplicationCounters>>,
+    rng_seed: u64,
 ) -> Result<WorkerStats> {
-    let mut rng = StdRng::from_os_rng();
+    let mut arrival = match receiver.recv().await {
+        Ok(arrival) => arrival,
+        Err(_) => return Ok(WorkerStats::default()),
+    };
+    let mut rng = StdRng::seed_from_u64(rng_seed);
     let selector = KeySelector::uniform(variant.record_count());
     let write_options = WriteOptions {
         await_durable: false,
@@ -108,7 +119,7 @@ async fn open_worker(
             .as_ref()
             .map(|counters| counters.register_window_recorder()),
     );
-    while let Ok(arrival) = receiver.recv().await {
+    loop {
         let errors_before = stats.errors;
         let invoked = Instant::now();
         let scheduling_delay = invoked.saturating_duration_since(arrival.scheduled);
@@ -167,6 +178,37 @@ async fn open_worker(
                 counters.errors.fetch_add(1, Ordering::Relaxed);
             }
         }
+        match receiver.recv().await {
+            Ok(next) => arrival = next,
+            Err(_) => break,
+        }
     }
     Ok(stats)
+}
+
+fn worker_count(target_rate: u64) -> Result<usize> {
+    usize::try_from(target_rate).context("open-loop target rate exceeds platform capacity")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::worker_count;
+    use crate::config::BenchmarkConfig;
+    use std::path::Path;
+
+    #[test]
+    fn worker_pool_scales_with_target_rate() {
+        let benchmark = BenchmarkConfig::load_from(Path::new("config")).expect("config");
+        let variant = benchmark
+            .select(Some("slatedb"), Some("open-loop-read"), Some("rate-10000"))
+            .expect("variant")
+            .pop()
+            .expect("configured variant");
+
+        assert_eq!(variant.clients, None);
+        assert_eq!(
+            worker_count(variant.target_rate.expect("target rate")).expect("worker count"),
+            10_000
+        );
+    }
 }

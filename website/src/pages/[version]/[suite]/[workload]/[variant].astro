@@ -40,30 +40,53 @@ const durabilityMode = result.durability.final_flush_drain_ns == null
   : result.durability.lag ? 'Async' : 'Sync';
 
 const {
+  object_store_operations: logicalObjectStoreOperations,
   object_store_requests: objectStoreRequests,
+  object_store_successful_requests: successfulObjectStoreRequests,
+  object_store_request_errors: objectStoreRequestErrors,
+  object_store_client_errors: objectStoreClientErrors,
+  object_store_server_errors: objectStoreServerErrors,
+  object_store_transport_errors: objectStoreTransportErrors,
   database_size_bytes,
   average_database_size_bytes,
   object_store_errors,
   bytes_read,
   bytes_written,
+  object_store_operation_bytes_read: operationBytesRead,
+  object_store_operation_bytes_written: operationBytesWritten,
   ...storage
 } = result.storage;
 const operationOrder = ['get', 'put', 'list', 'delete', 'head', 'copy', 'create_multipart', 'complete_multipart', 'abort_multipart'];
-const orderedRequests = Object.fromEntries(Object.entries(objectStoreRequests).sort(
-  ([left], [right]) => operationOrder.indexOf(left) - operationOrder.indexOf(right),
-));
+const orderOperations = (operations: Record<string, number>) => Object.fromEntries(
+  Object.entries(operations).sort(
+    ([left], [right]) => operationOrder.indexOf(left) - operationOrder.indexOf(right),
+  ),
+);
+const hasWireRequestMetrics = logicalObjectStoreOperations !== undefined;
 const objectStoreOperations = {
   database_size_bytes,
   average_database_size_bytes,
-  bytes_read,
-  bytes_written,
   object_store_errors,
-  ...orderedRequests,
+  bytes_read: operationBytesRead ?? bytes_read,
+  bytes_written: operationBytesWritten ?? bytes_written,
+  ...orderOperations(logicalObjectStoreOperations ?? objectStoreRequests),
 };
-const tables = [
+const objectStoreHttp = hasWireRequestMetrics ? {
+  response_body_bytes: bytes_read,
+  request_body_bytes: bytes_written,
+  requests: orderOperations(objectStoreRequests),
+  successful_requests: orderOperations(successfulObjectStoreRequests ?? {}),
+  request_errors: orderOperations(objectStoreRequestErrors ?? {}),
+  client_errors: orderOperations(objectStoreClientErrors ?? {}),
+  server_errors: orderOperations(objectStoreServerErrors ?? {}),
+  transport_errors: orderOperations(objectStoreTransportErrors ?? {}),
+} : null;
+const tables: Array<[string, Record<string, unknown>]> = [
   ['Application', result.application], ['Durability', result.durability], ['Resources', result.resources],
-  ['Storage', storage], ['Object store operations', objectStoreOperations], ['Object-store baseline', result.object_store_baseline],
-] as const;
+  ['Storage', storage], ['Object store operations', objectStoreOperations],
+];
+if (objectStoreHttp) tables.push(['Object store HTTP', objectStoreHttp]);
+tables.push(['Object-store baseline', result.object_store_baseline]);
 ---
 
 <Base title={`${route.workload} · ${route.variant} · SlateDB ${route.version}`}>

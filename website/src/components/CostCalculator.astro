@@ -7,7 +7,10 @@ interface Props {
 }
 
 const { result, pricing } = Astro.props;
-const requests = result.storage.object_store_requests;
+const hasWireRequestMetrics = result.storage.object_store_operations !== undefined;
+const requests = hasWireRequestMetrics
+  ? (result.storage.object_store_successful_requests ?? {})
+  : {};
 const basis = {
   elapsed_ns: result.elapsed_ns,
   database_size_bytes: result.storage.database_size_bytes,
@@ -50,33 +53,37 @@ const operationLabel = (operation: string) => operation.replaceAll('_', ' ');
       <section class="cost-line-group" aria-labelledby="request-charges-title">
         <div class="cost-line-heading">
           <h3 id="request-charges-title">Request charges</h3>
-          <p>Measured request volume projected over the billing period</p>
+          <p>Successful HTTP request volume projected over the billing period</p>
         </div>
-        <div class="table-scroll">
-          <table class="cost-line-table">
-            <thead>
-              <tr>
-                <th scope="col">Operation</th>
-                <th scope="col">Monthly requests</th>
-                <th scope="col">Rate / 1k</th>
-                <th scope="col">Amount</th>
-              </tr>
-            </thead>
-            <tbody>
-              {requestEntries.map(([operation, count]) => (
-                <tr data-cost-operation={operation} data-request-count={count}>
-                  <th scope="row">{operationLabel(operation)}</th>
-                  <td data-label="Monthly usage" data-cost-monthly-requests>—</td>
-                  <td data-label="Rate / 1k" data-cost-operation-rate>—</td>
-                  <td data-label="Amount" data-cost-operation-total>—</td>
+        {hasWireRequestMetrics ? (
+          <div class="table-scroll">
+            <table class="cost-line-table">
+              <thead>
+                <tr>
+                  <th scope="col">Operation</th>
+                  <th scope="col">Monthly requests</th>
+                  <th scope="col">Rate / 1k</th>
+                  <th scope="col">Amount</th>
                 </tr>
-              ))}
-            </tbody>
-            <tfoot>
-              <tr><th scope="row" colspan="3">Request subtotal</th><td data-cost-requests>—</td></tr>
-            </tfoot>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {requestEntries.map(([operation, count]) => (
+                  <tr data-cost-operation={operation} data-request-count={count}>
+                    <th scope="row">{operationLabel(operation)}</th>
+                    <td data-label="Monthly usage" data-cost-monthly-requests>—</td>
+                    <td data-label="Rate / 1k" data-cost-operation-rate>—</td>
+                    <td data-label="Amount" data-cost-operation-total>—</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr><th scope="row" colspan="3">Request subtotal</th><td data-cost-requests>—</td></tr>
+              </tfoot>
+            </table>
+          </div>
+        ) : (
+          <p>Wire-level request metrics are unavailable for this historical result, so request charges are excluded.</p>
+        )}
       </section>
 
       <section class="cost-line-group" aria-labelledby="storage-charges-title">
@@ -119,7 +126,7 @@ const operationLabel = (operation: string) => operation.replaceAll('_', ' ');
     </div>
 
     <div class="cost-context">
-      <p>Request volume is extrapolated from the measured rate; storage uses the final database size. Free tiers, credits, discounts, and taxes are excluded. Compute and storage are assumed to share a region.</p>
+      <p>Request volume uses successful HTTP responses after client-side range coalescing, bulk deletion, pagination, and retries. Failed-attempt billing varies by provider and is excluded. Storage uses the final database size. Free tiers, credits, discounts, and taxes are excluded. Compute and storage are assumed to share a region.</p>
       <p class="cost-context-links">
         <a data-cost-source href={pricing.providers[0]?.source}>Provider pricing</a>
         <a href="/raw/prices.json">Raw price table</a>

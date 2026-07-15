@@ -141,10 +141,34 @@ pub struct ResourceUse {
 pub struct StoragePerformance {
     pub database_size_bytes: u64,
     pub average_database_size_bytes: u64,
+    /// Logical calls made through the `ObjectStore` trait.
+    #[serde(default)]
+    pub object_store_operations: BTreeMap<String, u64>,
+    /// HTTP attempts after client-side coalescing, batching, and pagination.
     pub object_store_requests: BTreeMap<String, u64>,
+    /// HTTP attempts that received a 2xx response.
+    #[serde(default)]
+    pub object_store_successful_requests: BTreeMap<String, u64>,
+    #[serde(default)]
+    pub object_store_request_errors: BTreeMap<String, u64>,
+    #[serde(default)]
+    pub object_store_client_errors: BTreeMap<String, u64>,
+    #[serde(default)]
+    pub object_store_server_errors: BTreeMap<String, u64>,
+    #[serde(default)]
+    pub object_store_transport_errors: BTreeMap<String, u64>,
+    /// Logical `ObjectStore` calls that ultimately failed after retries.
     pub object_store_errors: u64,
+    /// HTTP response-body bytes consumed across all attempts.
     pub bytes_read: u64,
+    /// HTTP request-body bytes attempted across all attempts.
     pub bytes_written: u64,
+    /// Bytes returned by logical read operations, excluding coalesced gaps.
+    #[serde(default)]
+    pub object_store_operation_bytes_read: u64,
+    /// Payload bytes submitted by logical write operations, excluding retries.
+    #[serde(default)]
+    pub object_store_operation_bytes_written: u64,
     pub compaction_throughput_bytes_per_second: Option<f64>,
     pub write_amplification: Option<f64>,
     pub backpressure_ns: u64,
@@ -251,9 +275,25 @@ pub struct TimeseriesSample {
     pub disk_read_operations: u64,
     pub disk_write_operations: u64,
     pub database_size_bytes: u64,
+    #[serde(default)]
+    pub object_store_operations: BTreeMap<String, u64>,
     pub object_store_requests: BTreeMap<String, u64>,
+    #[serde(default)]
+    pub object_store_successful_requests: BTreeMap<String, u64>,
+    #[serde(default)]
+    pub object_store_request_errors: BTreeMap<String, u64>,
+    #[serde(default)]
+    pub object_store_client_errors: BTreeMap<String, u64>,
+    #[serde(default)]
+    pub object_store_server_errors: BTreeMap<String, u64>,
+    #[serde(default)]
+    pub object_store_transport_errors: BTreeMap<String, u64>,
     pub object_store_bytes_read: u64,
     pub object_store_bytes_written: u64,
+    #[serde(default)]
+    pub object_store_operation_bytes_read: u64,
+    #[serde(default)]
+    pub object_store_operation_bytes_written: u64,
     #[serde(skip)]
     pub slatedb_metrics: Vec<MetricSnapshot>,
 }

@@ -275,7 +275,7 @@ impl BenchmarkConfig {
                         WorkloadKind::OpenLoopRead | WorkloadKind::OpenLoopReadUpdate
                     );
                     if open_loop {
-                        if variant.target_rate.is_none() || variant.clients.is_some() {
+                        if variant.clients.is_some() || variant.target_rate.is_none() {
                             bail!(
                                 "open-loop variant {}/{}/{} must define only target_rate",
                                 suite.name,
@@ -618,6 +618,19 @@ mod tests {
         assert_eq!(variant.variant, "readers-64-writer-1");
         assert_eq!(variant.clients, Some(64));
         assert_eq!(variant.target_rate, None);
+    }
+
+    #[test]
+    fn open_loop_variants_configure_only_target_rate() {
+        let benchmark = BenchmarkConfig::load_from(Path::new("config")).expect("config");
+        let variant = benchmark
+            .select(Some("slatedb"), Some("open-loop-read"), Some("rate-10000"))
+            .expect("variant")
+            .pop()
+            .expect("configured variant");
+
+        assert_eq!(variant.clients, None);
+        assert_eq!(variant.target_rate, Some(10_000));
     }
 
     #[test]
