@@ -4,14 +4,11 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn main() {
-    println!("cargo:rerun-if-changed=../Cargo.lock");
+    println!("cargo:rerun-if-changed=Cargo.lock");
     println!("cargo:rerun-if-env-changed=SLATEDB_VERSION");
     println!("cargo:rerun-if-env-changed=SLATEDB_COMMIT");
 
-    let root = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("manifest dir"))
-        .parent()
-        .expect("workspace root")
-        .to_path_buf();
+    let root = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("manifest dir"));
     let lock_hash = fs::read(root.join("Cargo.lock")).map_or_else(
         |_| "unavailable".to_string(),
         |bytes| format!("{:x}", Sha256::digest(bytes)),

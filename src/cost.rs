@@ -117,7 +117,7 @@ mod tests {
 
     #[test]
     fn estimates_tigris_list_prices_for_the_measured_window() {
-        let prices = PriceTable::load(Path::new("../schema")).expect("price table");
+        let prices = PriceTable::load(Path::new("schema")).expect("price table");
         let storage = StoragePerformance {
             object_store_requests: BTreeMap::from([
                 ("put".to_string(), 1_000),

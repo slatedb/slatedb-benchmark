@@ -1,14 +1,12 @@
-[workspace]
-members = ["runner"]
-resolver = "2"
-
-[workspace.package]
+[package]
+name = "slatedb-benchmark"
+description = "Release benchmark runner for SlateDB"
 version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/slatedb/slatedb-benchmark"
 
-[workspace.dependencies]
+[dependencies]
 anyhow = "1.0"
 async-channel = "2.5"
 async-trait = "0.1"
@@ -31,15 +29,21 @@ slatedb = { version = "=0.14.1", features = ["aws", "wal_disable", "zstd"] }
 slatedb-common = { version = "=0.14.1", features = ["serde"] }
 sysinfo = "0.35"
 tokio = { version = "1.47", features = ["full"] }
+toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
-toml = "0.8"
 uuid = { version = "1.18", features = ["serde", "v4"] }
 
-[workspace.lints.rust]
+[build-dependencies]
+sha2 = "0.10"
+
+[dev-dependencies]
+tempfile = "3.20"
+
+[lints.rust]
 unsafe_code = "forbid"
 
-[workspace.lints.clippy]
+[lints.clippy]
 dbg_macro = "deny"
 todo = "deny"
 unwrap_used = "deny"

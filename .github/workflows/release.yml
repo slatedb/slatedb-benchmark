@@ -38,9 +38,9 @@ jobs:
       - name: Record selected commit
         run: echo "SLATEDB_COMMIT=$(git -C .slatedb-source rev-parse HEAD)" >> "$GITHUB_ENV"
       - name: Check selected SlateDB source
-        run: cargo check --workspace --locked
+        run: cargo check --locked
       - name: Build runner
-        run: cargo build --release --locked --manifest-path runner/Cargo.toml
+        run: cargo build --release --locked
       - name: Preserve runner binary
         uses: actions/upload-artifact@v4
         with:

@@ -8,7 +8,6 @@ fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 slatedb_root="$(cd "$1" && pwd)"
-manifest="$repo_root/runner/Cargo.toml"
 
 for package in slatedb slatedb-common; do
   if [[ ! -f "$slatedb_root/$package/Cargo.toml" ]]; then
@@ -17,6 +16,8 @@ for package in slatedb slatedb-common; do
   fi
 done
 
+cd "$repo_root"
+
 configure() {
   local package="$1"
   local features="$2"
@@ -24,12 +25,11 @@ configure() {
 
   cargo add \
     --quiet \
-    --manifest-path "$manifest" \
     --path "$path" \
     --features "$features"
   echo "configured $package from $path"
 }
 
-echo "configuring $manifest for SlateDB at $slatedb_root"
+echo "configuring $repo_root/Cargo.toml for SlateDB at $slatedb_root"
 configure slatedb aws,wal_disable,zstd
 configure slatedb-common serde

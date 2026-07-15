@@ -563,13 +563,13 @@ mod tests {
 
     #[test]
     fn release_catalog_contains_every_documented_variant() {
-        let benchmark = BenchmarkConfig::load_from(Path::new("../config")).expect("config");
+        let benchmark = BenchmarkConfig::load_from(Path::new("config")).expect("config");
         assert_eq!(benchmark.catalog(None).expect("catalog").len(), 42);
     }
 
     #[test]
     fn smoke_is_a_small_non_release_suite() {
-        let benchmark = BenchmarkConfig::load_from(Path::new("../config")).expect("config");
+        let benchmark = BenchmarkConfig::load_from(Path::new("config")).expect("config");
         let release = benchmark.catalog(None).expect("release catalog");
         let smoke = benchmark.catalog(Some("smoke")).expect("smoke catalog");
         assert!(smoke.len() < release.len());
@@ -579,7 +579,7 @@ mod tests {
 
     #[test]
     fn catalog_has_the_documented_suite_workload_variant_counts() {
-        let benchmark = BenchmarkConfig::load_from(Path::new("../config")).expect("config");
+        let benchmark = BenchmarkConfig::load_from(Path::new("config")).expect("config");
         let mut suites = BTreeMap::new();
         let mut workloads = BTreeMap::new();
         for entry in benchmark.catalog(None).expect("catalog") {
@@ -599,7 +599,7 @@ mod tests {
 
     #[test]
     fn variants_are_explicit_configuration() {
-        let benchmark = BenchmarkConfig::load_from(Path::new("../config")).expect("config");
+        let benchmark = BenchmarkConfig::load_from(Path::new("config")).expect("config");
         let variant = benchmark
             .select(Some("rocksdb"), Some("read-while-writing"), None)
             .expect("variant")
@@ -612,7 +612,7 @@ mod tests {
 
     #[test]
     fn rocksdb_workloads_follow_declaration_order() {
-        let benchmark = BenchmarkConfig::load_from(Path::new("../config")).expect("config");
+        let benchmark = BenchmarkConfig::load_from(Path::new("config")).expect("config");
         let suite = benchmark
             .suites
             .iter()
@@ -640,7 +640,7 @@ mod tests {
 
     #[test]
     fn suite_settings_overlay_slatedb_defaults() {
-        let benchmark = BenchmarkConfig::load_from(Path::new("../config")).expect("config");
+        let benchmark = BenchmarkConfig::load_from(Path::new("config")).expect("config");
         let suite = benchmark
             .suites
             .iter()

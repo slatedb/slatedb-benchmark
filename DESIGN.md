@@ -15,7 +15,7 @@ SlateDB repository.
 The repository layout is:
 
 ```text
-runner/                 Rust benchmark runner and workload implementations
+src/                    Rust benchmark runner and workload implementations
 config/                 `<suite>.suite.toml` and `<suite>.settings.toml`
 schema/                 JSON schemas and price tables
 results/<version>/      Published result records and histograms
@@ -225,9 +225,7 @@ CI and manual runs use the same `slatedb-benchmark` binary. Build it from the
 repository root:
 
 ```console
-$ cargo build --release --locked \
-    --manifest-path runner/Cargo.toml \
-    --target-dir target
+$ cargo build --release --locked
 $ ./target/release/slatedb-benchmark --version
 slatedb-benchmark <runner-version> (slatedb <version> <commit>)
 ```
@@ -235,7 +233,7 @@ slatedb-benchmark <runner-version> (slatedb <version> <commit>)
 Compatibility and release jobs run `scripts/select-slate-source.sh` first.
 The script asks Cargo to replace the runner's SlateDB dependencies with
 absolute paths into the selected checkout and resolves the lockfile. It
-explicitly modifies `runner/Cargo.toml` and `Cargo.lock`; CI runs it only in a
+explicitly modifies `Cargo.toml` and `Cargo.lock`; CI runs it only in a
 disposable checkout. Subsequent builds use `--locked`.
 
 The binary reads S3-compatible object-store configuration from the

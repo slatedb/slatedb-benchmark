@@ -44,9 +44,9 @@ jobs:
       - name: Record selected commit
         run: echo "SLATEDB_COMMIT=$(git -C .slatedb-source rev-parse HEAD)" >> "$GITHUB_ENV"
       - name: Check selected SlateDB source
-        run: cargo check --workspace --locked
+        run: cargo check --locked
       - name: Build runner
-        run: cargo build --release --locked --manifest-path runner/Cargo.toml
+        run: cargo build --release --locked
       - name: Preserve runner binary
         uses: actions/upload-artifact@v4
         with:
@@ -188,9 +188,9 @@ mod tests {
 
     #[test]
     fn checked_in_release_workflow_matches_configuration() {
-        let benchmark = BenchmarkConfig::load_from(Path::new("../config")).expect("config");
+        let benchmark = BenchmarkConfig::load_from(Path::new("config")).expect("config");
         let expected = render(&benchmark).expect("render workflow");
-        let actual = fs::read_to_string("../.github/workflows/release.yml").expect("workflow");
+        let actual = fs::read_to_string(".github/workflows/release.yml").expect("workflow");
         assert_eq!(actual, expected);
     }
 }
