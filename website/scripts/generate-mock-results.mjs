@@ -78,15 +78,15 @@ function mockThroughput(suite, workload, clients, target) {
   return base * Math.sqrt(clients ?? 1);
 }
 
-function sample(offset_ns, operations, throughput, databaseSize) {
+function sample(offset_ns, operations, throughput, databaseSize, networkBytesSent, networkBytesReceived) {
   return {
     offset_ns,
     operations,
     errors: 0,
     cpu_percent: Math.min(1_600, 18 + throughput / 900),
     rss_bytes: 2_684_354_560,
-    network_bytes_sent: Math.round(operations * 1024),
-    network_bytes_received: Math.round(operations * 640),
+    network_bytes_sent: networkBytesSent,
+    network_bytes_received: networkBytesReceived,
     disk_bytes_read: Math.round(operations * 32),
     disk_bytes_written: Math.round(operations * 48),
     disk_read_operations: Math.round(operations / 10),
@@ -95,6 +95,38 @@ function sample(offset_ns, operations, throughput, databaseSize) {
     object_store_requests: { put: Math.round(operations / 100), get: Math.round(operations / 20), list: 4 },
     object_store_bytes_read: Math.round(operations * 640),
     object_store_bytes_written: Math.round(operations * 1024),
+  };
+}
+
+function payloadPerOperation(workload, keyBytes, valueBytes, throughput) {
+  const scan = 10 * (keyBytes + valueBytes);
+  const cappedWriter = 2 * 1024 * 1024 / throughput;
+  switch (workload) {
+    case 'ycsb-a': return { read: 0.5 * valueBytes, write: 0.5 * valueBytes };
+    case 'ycsb-b':
+    case 'ycsb-d': return { read: 0.95 * valueBytes, write: 0.05 * valueBytes };
+    case 'ycsb-e': return { read: 0.95 * 50.5 * (keyBytes + valueBytes), write: 0.05 * valueBytes };
+    case 'ycsb-f': return { read: valueBytes, write: 0.5 * valueBytes };
+    case 'open-loop-read-update': return { read: 0.5 * valueBytes, write: 0.5 * valueBytes };
+    case 'transaction-contention': return { read: 5 * valueBytes, write: 5 * valueBytes };
+    case 'multi-random-read': return { read: 10 * valueBytes, write: 0 };
+    case 'forward-range':
+    case 'reverse-range':
+    case 'prefix-scan': return { read: scan, write: 0 };
+    case 'read-while-writing': return { read: valueBytes, write: cappedWriter };
+    case 'forward-range-while-writing':
+    case 'reverse-range-while-writing': return { read: scan, write: cappedWriter };
+    case 'bulk-load':
+    case 'overwrite':
+    case 'sustained-ingest': return { read: 0, write: valueBytes };
+    default: return { read: valueBytes, write: 0 };
+  }
+}
+
+function machineTraffic(readBytes, writeBytes) {
+  return {
+    upload: Math.round(writeBytes * 1.25 + readBytes * 0.025),
+    download: Math.round(readBytes * 0.72 + writeBytes * 0.015),
   };
 }
 
@@ -113,10 +145,12 @@ function windowLatency(summary, count, index, extra = 1) {
   };
 }
 
-function mockTimeseries({ throughput, valueBytes, databaseSize, isWrite, awaitDurable, openLoop, latency }) {
+function mockTimeseries({ throughput, payload, databaseSize, isWrite, awaitDurable, openLoop, latency }) {
   const windowCount = 60;
   let cumulativeOperations = 0;
-  const samples = [sample(0, 0, throughput, databaseSize)];
+  let networkBytesSent = 0;
+  let networkBytesReceived = 0;
+  const samples = [sample(0, 0, throughput, databaseSize, 0, 0)];
   const applicationWindows = [];
   const durabilityWindows = isWrite && !awaitDurable ? [] : null;
   for (let index = 0; index < windowCount; index += 1) {
@@ -125,14 +159,21 @@ function mockTimeseries({ throughput, valueBytes, databaseSize, isWrite, awaitDu
     const offered = openLoop ? Math.round(throughput / 0.96) : null;
     const dropped = openLoop ? Math.max(0, offered - successful) : null;
     const returnLatency = windowLatency(latency.summary, successful, index);
+    const readPayloadBytes = Math.round(successful * payload.read);
+    const writePayloadBytes = Math.round(successful * payload.write);
+    const network = machineTraffic(readPayloadBytes, writePayloadBytes);
     cumulativeOperations += successful;
+    networkBytesSent += network.upload;
+    networkBytesReceived += network.download;
     applicationWindows.push({
       start_offset_ns: index * 1_000_000_000,
       duration_ns: 1_000_000_000,
       completed_operations: successful,
       successful_operations: successful,
       errors: 0,
-      payload_bytes: successful * valueBytes,
+      read_payload_bytes: readPayloadBytes,
+      write_payload_bytes: writePayloadBytes,
+      payload_bytes: readPayloadBytes + writePayloadBytes,
       offered_operations: offered,
       dropped_operations: dropped,
       return_latency: returnLatency,
@@ -155,7 +196,9 @@ function mockTimeseries({ throughput, valueBytes, databaseSize, isWrite, awaitDu
       (index + 1) * 1_000_000_000,
       cumulativeOperations,
       successful,
-      databaseSize + (isWrite ? cumulativeOperations * valueBytes : 0),
+      databaseSize + (isWrite ? Math.round(cumulativeOperations * payload.write) : 0),
+      networkBytesSent,
+      networkBytesReceived,
     ));
   }
   return { samples, application_windows: applicationWindows, durability_windows: durabilityWindows };
@@ -180,6 +223,11 @@ for (const suite of published.suites) {
       const recordCount = workload.record_count ?? suite.record_count;
       const keyBytes = workload.key_bytes ?? suite.key_bytes;
       const valueBytes = workload.value_bytes ?? suite.value_bytes;
+      const payload = payloadPerOperation(workload.name, keyBytes, valueBytes, throughput);
+      const aggregateMachineTraffic = machineTraffic(
+        operations * payload.read,
+        operations * payload.write,
+      );
       const databaseSize = Math.max(16 * 1024 * 1024, Math.round(recordCount * (keyBytes + valueBytes) * 0.42));
       const openLoop = target !== null;
       const transaction = workload.name === 'transaction-contention';
@@ -258,7 +306,7 @@ for (const suite of published.suites) {
           offered_ops_per_second: openLoop ? target : null,
           dropped_operations: openLoop ? 0 : null,
           dropped_ops_per_second: openLoop ? 0 : null,
-          payload_mib_per_second: throughput * valueBytes / 1_048_576,
+          payload_mib_per_second: throughput * (payload.read + payload.write) / 1_048_576,
           errors: 0,
           return_latency: latency.summary,
           return_latency_by_operation: { operation: latency.summary },
@@ -284,8 +332,8 @@ for (const suite of published.suites) {
           average_cpu_percent: Math.min(1_600, 12 + throughput / 1_100),
           peak_cpu_percent: Math.min(1_600, 28 + throughput / 850),
           peak_rss_bytes: 2_684_354_560 + (clients ?? 1) * 8_388_608,
-          network_bytes_sent: operations * valueBytes,
-          network_bytes_received: Math.round(operations * valueBytes * 0.64),
+          network_bytes_sent: aggregateMachineTraffic.upload,
+          network_bytes_received: aggregateMachineTraffic.download,
           disk_bytes_read: operations * 32,
           disk_bytes_written: operations * 48,
           disk_read_operations: Math.round(operations / 10),
@@ -342,7 +390,7 @@ for (const suite of published.suites) {
         },
       };
       const windowed = mockTimeseries({
-        throughput, valueBytes, databaseSize, isWrite, awaitDurable, openLoop, latency,
+        throughput, payload, databaseSize, isWrite, awaitDurable, openLoop, latency,
       });
       const timeseries = {
         interval_ns: 1_000_000_000,

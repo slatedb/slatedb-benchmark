@@ -33,13 +33,14 @@ apply.
 - Application performance: total operations, accepted ops/s, payload MiB/s,
   errors, and p50, p95, p99, p99.9, and maximum return latency overall and per
   operation type. One-second application windows report the same return
-  latency, successful-operation counts, and logical payload bytes over time.
+  latency, successful-operation counts, and logical read, write, and total
+  payload bytes over time.
 - Durability performance: p50, p95, p99, p99.9, and maximum durability lag,
   final flush/drain time, and durable ops/s. Asynchronous writes also report
   one-second durability-lag windows through the final drain; awaited writes do
   not have a separate post-return lag.
-- Resources: average and peak CPU, peak RSS, network bytes sent and received,
-  and disk bytes and operations read and written
+- Resources: average and peak CPU, peak RSS, host-wide network bytes sent and
+  received, and disk bytes and operations read and written
 - Storage: compaction throughput, write amplification, backpressure time, and
   compaction backlog
 - Object store operations: final and time-weighted average database size,

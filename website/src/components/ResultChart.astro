@@ -15,7 +15,13 @@ type ChartDefinition = {
   unit: string;
   digits: number;
   mode: 'time' | 'percentiles';
-  datasets: Array<{ label: string; color: string; points: Point[] }>;
+  datasets: Array<{
+    label: string;
+    color: string;
+    points: Point[];
+    dash?: number[];
+    width?: number;
+  }>;
 };
 
 const { result, timeseries, variant } = Astro.props;
@@ -23,6 +29,18 @@ const application = timeseries.application_windows;
 const atEnd = (window: { start_offset_ns: number; duration_ns: number }) =>
   (window.start_offset_ns + window.duration_ns) / 1e9;
 const seconds = (window: { duration_ns: number }) => window.duration_ns / 1e9;
+const mibPerSecond = (bytes: number, durationSeconds: number) =>
+  bytes / 1_048_576 / Math.max(durationSeconds, Number.EPSILON);
+const machineRate = (field: 'network_bytes_sent' | 'network_bytes_received') =>
+  timeseries.samples.slice(1).flatMap((sample, index) => {
+    const previous = timeseries.samples[index];
+    const duration = (sample.offset_ns - previous.offset_ns) / 1e9;
+    if (duration <= 0) return [];
+    return [{
+      x: sample.offset_ns / 1e9,
+      y: mibPerSecond(Math.max(0, sample[field] - previous[field]), duration),
+    }];
+  });
 const latencyDatasets = (rows: Array<{ x: number; latency: Latency }>) => [
   { label: 'p50', color: '#8b94a3', value: (latency: Latency) => latency.p50_ns },
   { label: 'p95', color: '#5e6878', value: (latency: Latency) => latency.p95_ns },
@@ -53,18 +71,42 @@ const latencyChart: ChartDefinition = {
 const throughputChart: ChartDefinition = {
   key: 'payload-throughput',
   title: 'Payload throughput',
-  description: 'Application payload returned or written during each window',
+  description: 'Logical application payload and host-wide network traffic',
   unit: 'MiB / second',
   digits: 2,
   mode: 'time',
-  datasets: [{
-    label: 'MiB/s',
-    color: '#b26844',
-    points: application.map((window) => ({
-      x: atEnd(window),
-      y: window.payload_bytes / 1_048_576 / Math.max(seconds(window), Number.EPSILON),
-    })),
-  }],
+  datasets: [
+    {
+      label: 'Application read',
+      color: '#3f6f8f',
+      width: 2.2,
+      points: application.map((window) => ({
+        x: atEnd(window),
+        y: mibPerSecond(window.read_payload_bytes, seconds(window)),
+      })),
+    },
+    {
+      label: 'Application write',
+      color: '#b26844',
+      width: 2.2,
+      points: application.map((window) => ({
+        x: atEnd(window),
+        y: mibPerSecond(window.write_payload_bytes, seconds(window)),
+      })),
+    },
+    {
+      label: 'Machine download',
+      color: '#3f6f8f',
+      dash: [7, 5],
+      points: machineRate('network_bytes_received'),
+    },
+    {
+      label: 'Machine upload',
+      color: '#b26844',
+      dash: [7, 5],
+      points: machineRate('network_bytes_sent'),
+    },
+  ],
 };
 
 const wholeRunLatency = result.application.return_latency;
@@ -154,12 +196,13 @@ const charts = [throughputChart, latencyChart, tailLatencyChart, durabilityChart
       type: 'line',
       data: {
         labels: percentiles ? chart.datasets[0]?.points.map((point: { x: string }) => point.x) : undefined,
-        datasets: chart.datasets.map((dataset: { label: string; color: string; points: Array<{ x: number | string; y: number }> }) => ({
+        datasets: chart.datasets.map((dataset: { label: string; color: string; points: Array<{ x: number | string; y: number }>; dash?: number[]; width?: number }) => ({
           label: dataset.label,
           data: percentiles ? dataset.points.map((point) => point.y) : dataset.points,
           borderColor: dataset.color,
           backgroundColor: dataset.color,
-          borderWidth: 1.8,
+          borderWidth: dataset.width ?? 1.8,
+          borderDash: dataset.dash ?? [],
           pointRadius: percentiles ? 3 : 0,
           pointHoverRadius: percentiles ? 5 : 3,
           tension: 0.16,
@@ -178,7 +221,7 @@ const charts = [throughputChart, latencyChart, tailLatencyChart, durabilityChart
             ticks: { maxTicksLimit: 8 },
           },
           y: {
-            beginAtZero: false,
+            beginAtZero: chart.key === 'payload-throughput',
             title: { display: true, text: chart.unit },
             grid: { color: 'rgba(15,22,32,.07)' },
             ticks: { maxTicksLimit: 6 },

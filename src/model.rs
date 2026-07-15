@@ -215,6 +215,8 @@ pub struct ApplicationWindow {
     pub completed_operations: u64,
     pub successful_operations: u64,
     pub errors: u64,
+    pub read_payload_bytes: u64,
+    pub write_payload_bytes: u64,
     pub payload_bytes: u64,
     pub offered_operations: Option<u64>,
     pub dropped_operations: Option<u64>,

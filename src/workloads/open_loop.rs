@@ -1,5 +1,5 @@
 use super::durability::DurabilitySender;
-use super::stats::WorkerStats;
+use super::stats::{Payload, WorkerStats};
 use super::util::{key_for_id, random_value, KeySelector};
 use crate::config::{VariantConfig, WorkloadKind};
 use crate::system::{measure_backpressure, ApplicationCounters};
@@ -129,7 +129,11 @@ async fn open_worker(
             match result {
                 Ok(handle) => {
                     let returned_at = Instant::now();
-                    stats.record_success("update", invoked.elapsed(), value.len() as u64);
+                    stats.record_success(
+                        "update",
+                        invoked.elapsed(),
+                        Payload::write(value.len() as u64),
+                    );
                     stats.record_write(returned_at, handle.seqnum());
                     if let Some(tracker) = &durability {
                         tracker.accepted(handle.seqnum(), returned_at);
@@ -142,9 +146,11 @@ async fn open_worker(
             }
         } else {
             match db.get(key).await {
-                Ok(Some(value)) => {
-                    stats.record_success("read", invoked.elapsed(), value.len() as u64)
-                }
+                Ok(Some(value)) => stats.record_success(
+                    "read",
+                    invoked.elapsed(),
+                    Payload::read(value.len() as u64),
+                ),
                 Ok(None) => stats.record_error("read", invoked.elapsed()),
                 Err(error) => {
                     stats.record_error("read", invoked.elapsed());

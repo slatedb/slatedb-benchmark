@@ -9,7 +9,8 @@ pub struct WorkerStats {
     pub total: u64,
     pub successful: u64,
     pub errors: u64,
-    pub payload_bytes: u64,
+    pub read_payload_bytes: u64,
+    pub write_payload_bytes: u64,
     pub writes: u64,
     pub offered: u64,
     pub dropped: u64,
@@ -24,6 +25,39 @@ pub struct WorkerStats {
     window_recorder: Option<ApplicationWindowRecorder>,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Payload {
+    pub read_bytes: u64,
+    pub write_bytes: u64,
+}
+
+impl Payload {
+    pub const fn read(bytes: u64) -> Self {
+        Self {
+            read_bytes: bytes,
+            write_bytes: 0,
+        }
+    }
+
+    pub const fn write(bytes: u64) -> Self {
+        Self {
+            read_bytes: 0,
+            write_bytes: bytes,
+        }
+    }
+
+    pub const fn read_write(read_bytes: u64, write_bytes: u64) -> Self {
+        Self {
+            read_bytes,
+            write_bytes,
+        }
+    }
+
+    const fn total(self) -> u64 {
+        self.read_bytes.saturating_add(self.write_bytes)
+    }
+}
+
 impl WorkerStats {
     pub fn with_window_recorder(window_recorder: Option<ApplicationWindowRecorder>) -> Self {
         Self {
@@ -32,12 +66,13 @@ impl WorkerStats {
         }
     }
 
-    pub fn record_success(&mut self, operation: &str, latency: Duration, payload_bytes: u64) {
+    pub fn record_success(&mut self, operation: &str, latency: Duration, payload: Payload) {
         self.total += 1;
         self.successful += 1;
-        self.payload_bytes = self.payload_bytes.saturating_add(payload_bytes);
+        self.read_payload_bytes = self.read_payload_bytes.saturating_add(payload.read_bytes);
+        self.write_payload_bytes = self.write_payload_bytes.saturating_add(payload.write_bytes);
         if let Some(recorder) = &self.window_recorder {
-            recorder.record_success(operation, latency, payload_bytes);
+            recorder.record_success(operation, latency, payload.read_bytes, payload.write_bytes);
         } else {
             self.histograms.record("return", latency);
             self.histograms
@@ -106,7 +141,12 @@ impl WorkerStats {
         self.total = self.total.saturating_add(other.total);
         self.successful = self.successful.saturating_add(other.successful);
         self.errors = self.errors.saturating_add(other.errors);
-        self.payload_bytes = self.payload_bytes.saturating_add(other.payload_bytes);
+        self.read_payload_bytes = self
+            .read_payload_bytes
+            .saturating_add(other.read_payload_bytes);
+        self.write_payload_bytes = self
+            .write_payload_bytes
+            .saturating_add(other.write_payload_bytes);
         self.writes = self.writes.saturating_add(other.writes);
         self.offered = self.offered.saturating_add(other.offered);
         self.dropped = self.dropped.saturating_add(other.dropped);
@@ -162,7 +202,13 @@ impl WorkerStats {
             offered_ops_per_second: open_loop.then_some(self.offered as f64 / seconds),
             dropped_operations: open_loop.then_some(self.dropped),
             dropped_ops_per_second: open_loop.then_some(self.dropped as f64 / seconds),
-            payload_mib_per_second: self.payload_bytes as f64 / (1024.0 * 1024.0) / seconds,
+            payload_mib_per_second: Payload::read_write(
+                self.read_payload_bytes,
+                self.write_payload_bytes,
+            )
+            .total() as f64
+                / (1024.0 * 1024.0)
+                / seconds,
             errors: self.errors,
             return_latency,
             return_latency_by_operation: self.histograms.summaries_with_prefix("return/"),
@@ -183,7 +229,7 @@ impl WorkerStats {
 
 #[cfg(test)]
 mod tests {
-    use super::WorkerStats;
+    use super::{Payload, WorkerStats};
     use std::time::Duration;
 
     #[test]
@@ -211,5 +257,19 @@ mod tests {
         let application = stats.application(Duration::from_secs(1), true);
 
         assert_eq!(application.dropped_operations, Some(2));
+    }
+
+    #[test]
+    fn application_payload_combines_read_and_write_bytes() {
+        let mut stats = WorkerStats::default();
+        stats.record_success(
+            "read-modify-write",
+            Duration::from_millis(1),
+            Payload::read_write(1024 * 1024, 2 * 1024 * 1024),
+        );
+
+        let application = stats.application(Duration::from_secs(1), false);
+
+        assert_eq!(application.payload_mib_per_second, 3.0);
     }
 }

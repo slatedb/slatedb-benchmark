@@ -337,9 +337,14 @@ merges their completed histograms, and emits application windows without a
 global per-operation lock. Those same windows are merged into the aggregate
 histograms, so the summary and time series describe the same observations.
 
-Application windows also contain successful-operation counts and logical
-payload bytes. The website derives ops/s and MiB/s using each window's actual
-duration. Return latency always means SlateDB invocation through API return.
+Application windows also contain successful-operation counts and logical read
+and write payload bytes; their sum is retained as total payload bytes. Reads
+count bytes returned by SlateDB, writes count bytes submitted to SlateDB, and
+read-modify-write and transaction operations contribute to both. The website
+derives ops/s and MiB/s using each window's actual duration. Its payload chart
+also derives machine upload and download MiB/s from consecutive host-wide
+network counter samples. Return latency always means SlateDB invocation through
+API return.
 For asynchronous writes, a separate durability series measures API return
 through durable-frontier coverage. Its windows may extend through the final
 flush and drain. Open-loop response latency and scheduling delay are retained

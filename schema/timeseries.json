@@ -53,13 +53,15 @@
     },
     "applicationWindow": {
       "type": "object", "additionalProperties": false,
-      "required": ["start_offset_ns", "duration_ns", "completed_operations", "successful_operations", "errors", "payload_bytes", "offered_operations", "dropped_operations", "return_latency", "return_latency_by_operation", "response_latency", "scheduling_delay", "batch_latency"],
+      "required": ["start_offset_ns", "duration_ns", "completed_operations", "successful_operations", "errors", "read_payload_bytes", "write_payload_bytes", "payload_bytes", "offered_operations", "dropped_operations", "return_latency", "return_latency_by_operation", "response_latency", "scheduling_delay", "batch_latency"],
       "properties": {
         "start_offset_ns": { "type": "integer", "minimum": 0 },
         "duration_ns": { "type": "integer", "exclusiveMinimum": 0 },
         "completed_operations": { "type": "integer", "minimum": 0 },
         "successful_operations": { "type": "integer", "minimum": 0 },
         "errors": { "type": "integer", "minimum": 0 },
+        "read_payload_bytes": { "type": "integer", "minimum": 0 },
+        "write_payload_bytes": { "type": "integer", "minimum": 0 },
         "payload_bytes": { "type": "integer", "minimum": 0 },
         "offered_operations": { "anyOf": [{ "type": "integer", "minimum": 0 }, { "type": "null" }] },
         "dropped_operations": { "anyOf": [{ "type": "integer", "minimum": 0 }, { "type": "null" }] },

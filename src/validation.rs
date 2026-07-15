@@ -305,6 +305,18 @@ fn validate_application_windows(
 
     let open_loop = result.application.offered_ops_per_second.is_some();
     for window in &timeseries.application_windows {
+        let directional_payload = window
+            .read_payload_bytes
+            .checked_add(window.write_payload_bytes)
+            .context("application window directional payload overflows u64")?;
+        if window.payload_bytes != directional_payload {
+            bail!(
+                "application window payload {} does not equal read {} plus write {} bytes",
+                window.payload_bytes,
+                window.read_payload_bytes,
+                window.write_payload_bytes
+            );
+        }
         let returns = window
             .return_latency
             .as_ref()

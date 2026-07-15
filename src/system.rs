@@ -177,7 +177,8 @@ struct ApplicationWindowDelta {
     completed_operations: u64,
     successful_operations: u64,
     errors: u64,
-    payload_bytes: u64,
+    read_payload_bytes: u64,
+    write_payload_bytes: u64,
     offered_operations: u64,
     dropped_operations: u64,
     histograms: HistogramSet,
@@ -192,7 +193,12 @@ impl ApplicationWindowDelta {
             .successful_operations
             .saturating_add(other.successful_operations);
         self.errors = self.errors.saturating_add(other.errors);
-        self.payload_bytes = self.payload_bytes.saturating_add(other.payload_bytes);
+        self.read_payload_bytes = self
+            .read_payload_bytes
+            .saturating_add(other.read_payload_bytes);
+        self.write_payload_bytes = self
+            .write_payload_bytes
+            .saturating_add(other.write_payload_bytes);
         self.offered_operations = self
             .offered_operations
             .saturating_add(other.offered_operations);
@@ -209,11 +215,20 @@ pub struct ApplicationWindowRecorder {
 }
 
 impl ApplicationWindowRecorder {
-    pub fn record_success(&self, operation: &str, latency: Duration, payload_bytes: u64) {
+    pub fn record_success(
+        &self,
+        operation: &str,
+        latency: Duration,
+        read_payload_bytes: u64,
+        write_payload_bytes: u64,
+    ) {
         let mut window = self.inner.lock().expect("application window lock poisoned");
         window.completed_operations = window.completed_operations.saturating_add(1);
         window.successful_operations = window.successful_operations.saturating_add(1);
-        window.payload_bytes = window.payload_bytes.saturating_add(payload_bytes);
+        window.read_payload_bytes = window.read_payload_bytes.saturating_add(read_payload_bytes);
+        window.write_payload_bytes = window
+            .write_payload_bytes
+            .saturating_add(write_payload_bytes);
         window.histograms.record("return", latency);
         window
             .histograms
@@ -329,7 +344,11 @@ impl ApplicationCounters {
             completed_operations: merged.completed_operations,
             successful_operations: merged.successful_operations,
             errors: merged.errors,
-            payload_bytes: merged.payload_bytes,
+            read_payload_bytes: merged.read_payload_bytes,
+            write_payload_bytes: merged.write_payload_bytes,
+            payload_bytes: merged
+                .read_payload_bytes
+                .saturating_add(merged.write_payload_bytes),
             offered_operations: self.open_loop.then_some(merged.offered_operations),
             dropped_operations: self.open_loop.then_some(merged.dropped_operations),
             return_latency: summary("return"),
@@ -836,7 +855,7 @@ mod tests {
     fn drains_application_measurements_into_one_window() {
         let counters = ApplicationCounters::new(true);
         let worker = counters.register_window_recorder();
-        worker.record_success("read", Duration::from_millis(2), 1024);
+        worker.record_success("read-modify-write", Duration::from_millis(2), 1024, 256);
         worker.record_error("read", Duration::from_millis(4));
         worker.record_open_loop_timing(Duration::from_millis(5), Duration::from_millis(1));
         worker.record_open_loop_timing(Duration::from_millis(7), Duration::from_millis(1));
@@ -849,7 +868,9 @@ mod tests {
         assert_eq!(window.completed_operations, 2);
         assert_eq!(window.successful_operations, 1);
         assert_eq!(window.errors, 1);
-        assert_eq!(window.payload_bytes, 1024);
+        assert_eq!(window.read_payload_bytes, 1024);
+        assert_eq!(window.write_payload_bytes, 256);
+        assert_eq!(window.payload_bytes, 1280);
         assert_eq!(window.offered_operations, Some(3));
         assert_eq!(window.dropped_operations, Some(1));
         assert_eq!(window.return_latency.expect("return latency").count, 2);

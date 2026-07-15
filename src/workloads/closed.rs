@@ -1,5 +1,5 @@
 use super::durability::DurabilitySender;
-use super::stats::WorkerStats;
+use super::stats::{Payload, WorkerStats};
 use super::util::{
     choose_coprime_multiplier, key_for_id, prefix_key, random_unique_key, random_value, KeySelector,
 };
@@ -124,7 +124,7 @@ async fn worker_loop(
         match result {
             Ok(outcome) => {
                 let returned_at = Instant::now();
-                stats.record_success(outcome.name, started.elapsed(), outcome.payload_bytes);
+                stats.record_success(outcome.name, started.elapsed(), outcome.payload);
                 stats.batch_keys = stats.batch_keys.saturating_add(outcome.batch_keys);
                 if outcome.batch_keys > 0 {
                     stats.record_batch_latency(started.elapsed());
@@ -162,7 +162,7 @@ async fn worker_loop(
 
 struct OperationOutcome {
     name: &'static str,
-    payload_bytes: u64,
+    payload: Payload,
     batch_keys: u64,
     write_handle: Option<WriteHandle>,
     transaction_commit: bool,
@@ -265,7 +265,7 @@ async fn execute_operation(
                     .map_err(|error| OperationError::Other(error.into()))?;
                 Ok(OperationOutcome {
                     name: "read-modify-write",
-                    payload_bytes: (previous.len() + value.len()) as u64,
+                    payload: Payload::read_write(previous.len() as u64, value.len() as u64),
                     batch_keys: 0,
                     write_handle: Some(handle),
                     transaction_commit: false,
@@ -300,7 +300,7 @@ async fn execute_operation(
                 .map_err(|error| OperationError::Other(error.into()))?;
             Ok(OperationOutcome {
                 name: "insert",
-                payload_bytes: value.len() as u64,
+                payload: Payload::write(value.len() as u64),
                 batch_keys: 0,
                 write_handle: Some(handle),
                 transaction_commit: false,
@@ -328,7 +328,7 @@ async fn read(
         .map_err(OperationError::Other)?;
     Ok(OperationOutcome {
         name,
-        payload_bytes: value.len() as u64,
+        payload: Payload::read(value.len() as u64),
         batch_keys: 0,
         write_handle: None,
         transaction_commit: false,
@@ -355,7 +355,7 @@ async fn update(
         .map_err(|error| OperationError::Other(error.into()))?;
     Ok(OperationOutcome {
         name,
-        payload_bytes: value.len() as u64,
+        payload: Payload::write(value.len() as u64),
         batch_keys: 0,
         write_handle: Some(handle),
         transaction_commit: false,
@@ -385,7 +385,7 @@ async fn multi_read(
     }
     Ok(OperationOutcome {
         name: "batch-read",
-        payload_bytes: bytes,
+        payload: Payload::read(bytes),
         batch_keys: 10,
         write_handle: None,
         transaction_commit: false,
@@ -428,7 +428,7 @@ async fn scan(
     }
     Ok(OperationOutcome {
         name,
-        payload_bytes: bytes,
+        payload: Payload::read(bytes),
         batch_keys: keys,
         write_handle: None,
         transaction_commit: false,
@@ -463,7 +463,7 @@ async fn prefix_scan(
     }
     Ok(OperationOutcome {
         name: "prefix-scan",
-        payload_bytes: bytes,
+        payload: Payload::read(bytes),
         batch_keys: keys,
         write_handle: None,
         transaction_commit: false,
@@ -480,7 +480,8 @@ async fn transaction(
         .begin(IsolationLevel::SerializableSnapshot)
         .await
         .map_err(|error| OperationError::Other(error.into()))?;
-    let mut payload = 0_u64;
+    let mut read_payload_bytes = 0_u64;
+    let mut write_payload_bytes = 0_u64;
     let mut operations = [
         true, true, true, true, true, false, false, false, false, false,
     ];
@@ -495,10 +496,10 @@ async fn transaction(
                 .map_err(|error| OperationError::Other(error.into()))?
                 .context("transaction read key not found")
                 .map_err(OperationError::Other)?;
-            payload = payload.saturating_add(value.len() as u64);
+            read_payload_bytes = read_payload_bytes.saturating_add(value.len() as u64);
         } else {
             let value = random_value(variant.value_bytes(), rng);
-            payload = payload.saturating_add(value.len() as u64);
+            write_payload_bytes = write_payload_bytes.saturating_add(value.len() as u64);
             transaction
                 .put(key, value)
                 .map_err(|error| OperationError::Other(error.into()))?;
@@ -507,7 +508,7 @@ async fn transaction(
     match transaction.commit_with_options(write_options).await {
         Ok(handle) => Ok(OperationOutcome {
             name: "transaction",
-            payload_bytes: payload,
+            payload: Payload::read_write(read_payload_bytes, write_payload_bytes),
             batch_keys: 10,
             write_handle: handle,
             transaction_commit: true,
@@ -562,7 +563,11 @@ async fn run_bulk_load(
         match result {
             Ok(handle) => {
                 let returned_at = Instant::now();
-                stats.record_success("insert", started.elapsed(), value.len() as u64);
+                stats.record_success(
+                    "insert",
+                    started.elapsed(),
+                    Payload::write(value.len() as u64),
+                );
                 stats.record_write(returned_at, handle.seqnum());
                 if let Some(tracker) = &durability {
                     tracker.accepted(handle.seqnum(), returned_at);
@@ -667,7 +672,11 @@ async fn capped_writer(
         match result {
             Ok(handle) => {
                 let returned_at = Instant::now();
-                stats.record_success("writer-update", started.elapsed(), value.len() as u64);
+                stats.record_success(
+                    "writer-update",
+                    started.elapsed(),
+                    Payload::write(value.len() as u64),
+                );
                 stats.record_write(returned_at, handle.seqnum());
                 if let Some(tracker) = &durability {
                     tracker.accepted(handle.seqnum(), returned_at);

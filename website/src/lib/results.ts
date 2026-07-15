@@ -95,6 +95,8 @@ export type ApplicationWindow = {
   completed_operations: number;
   successful_operations: number;
   errors: number;
+  read_payload_bytes: number;
+  write_payload_bytes: number;
   payload_bytes: number;
   offered_operations: number | null;
   dropped_operations: number | null;
@@ -103,6 +105,12 @@ export type ApplicationWindow = {
   response_latency: Latency | null;
   scheduling_delay: Latency | null;
   batch_latency: Latency | null;
+};
+
+export type TimeseriesSample = {
+  offset_ns: number;
+  network_bytes_sent: number;
+  network_bytes_received: number;
 };
 
 export type DurabilityWindow = {
@@ -114,6 +122,7 @@ export type DurabilityWindow = {
 
 export type BenchmarkTimeseries = {
   interval_ns: number;
+  samples: TimeseriesSample[];
   application_windows: ApplicationWindow[];
   durability_windows: DurabilityWindow[] | null;
 };
