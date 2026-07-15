@@ -28,6 +28,7 @@ const formatBytes = (value: unknown) => {
   while (amount >= 1024 && index < units.length - 1) { amount /= 1024; index += 1; }
   return `${amount.toFixed(index === 0 ? 0 : 2)} ${units[index]}`;
 };
+const datasetSizeBytes = result.configuration.record_count * (result.configuration.key_bytes + result.configuration.value_bytes);
 const cacheSummary = [
   ['block', result.configuration.block_cache_bytes],
   ['metadata/index', result.configuration.metadata_cache_bytes],
@@ -81,7 +82,14 @@ const tables = [
       <dl class="metadata-list">
         <div><dt>Machine</dt><dd>{result.environment.runner_type}</dd></div>
         <div><dt>Object store</dt><dd>{result.environment.object_store} · {result.environment.region}</dd></div>
-        <div><dt>Dataset</dt><dd>{result.configuration.record_count.toLocaleString()} × ({formatBytes(result.configuration.key_bytes)} key + {formatBytes(result.configuration.value_bytes)} value)</dd></div>
+        <div>
+          <dt>Dataset</dt>
+          <dd class="dataset-equation">
+            <span>{result.configuration.record_count.toLocaleString()}</span>
+            <span>× ({formatBytes(result.configuration.key_bytes)} key + {formatBytes(result.configuration.value_bytes)} value)</span>
+            <span>= {formatBytes(datasetSizeBytes)}</span>
+          </dd>
+        </div>
         <div><dt>Cache</dt><dd><ul class="cache-list">{cacheSummary.map((item) => <li>{item}</li>)}</ul></dd></div>
         <div><dt>Durability</dt><dd>{result.durability.lag ? 'Async + tracked' : 'Awaited / read-only'}</dd></div>
       </dl>
