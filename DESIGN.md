@@ -1,9 +1,9 @@
 # Design
 
 This repository owns the SlateDB benchmark runner, its published results, and
-the site at `benchmark.slatedb.io`. [`BENCHMARKS.md`](BENCHMARKS.md) defines the
+the website at `benchmark.slatedb.io`. [`BENCHMARKS.md`](BENCHMARKS.md) defines the
 workloads and fixed parameters. This document defines how the runner prepares
-data, executes those workloads, records results, and publishes the site.
+data, executes those workloads, records results, and publishes the website.
 
 The suite is for users evaluating SlateDB. It reports latency, throughput,
 durability, resource use, and cost for one SlateDB version at a time. Criterion
@@ -19,13 +19,13 @@ src/                    Rust benchmark runner and workload implementations
 config/                 `<suite>.suite.toml` and `<suite>.settings.toml`
 schema/                 JSON schemas and price tables
 results/<version>/      Published result records and histograms
-site/                   Static website
+website/                Static website
 ```
 
 Each release result records its lockfile hash, the SlateDB revision under test,
 the runner revision, and the full environment described in `BENCHMARKS.md`.
 
-Result files are the source of truth for the site. The site reads them at build
+Result files are the source of truth for the website. The website reads them at build
 time, so publishing needs no database or API service. Git history records any
 correction to a published result.
 
@@ -338,12 +338,12 @@ global per-operation lock. Those same windows are merged into the aggregate
 histograms, so the summary and time series describe the same observations.
 
 Application windows also contain successful-operation counts and logical
-payload bytes. The site derives ops/s and MiB/s using each window's actual
+payload bytes. The website derives ops/s and MiB/s using each window's actual
 duration. Return latency always means SlateDB invocation through API return.
 For asynchronous writes, a separate durability series measures API return
 through durable-frontier coverage. Its windows may extend through the final
 flush and drain. Open-loop response latency and scheduling delay are retained
-as diagnostics but are not primary site charts. Sustained-ingest results also
+as diagnostics but are not primary website charts. Sustained-ingest results also
 include the five-minute windows required by `BENCHMARKS.md`.
 
 ### SlateDB metrics
@@ -384,12 +384,12 @@ results/<version>/<suite>/<workload>/<variant>/
 
 The `variant` path component names the configured concurrency or target rate.
 The repository publishes one result per variant. JSON stores durations in
-nanoseconds, sizes in bytes, and counts as integers; the site converts them for
+nanoseconds, sizes in bytes, and counts as integers; the website converts them for
 display. Fields that do not apply are present with `null`, as required by the
 result schema.
 
 The schema keeps summary values and source measurements together. Percentiles
-can therefore be checked against the encoded histogram, and a future site can
+can therefore be checked against the encoded histogram, and a future website can
 render a different percentile without rerunning the workload. CI logs and
 crash dumps remain workflow artifacts rather than permanent result files.
 
@@ -402,7 +402,7 @@ does not include Tigris pricing.
 
 Results store the raw inputs rather than a price-dependent estimate: elapsed
 time, request counts by object-store operation, and the final database size. The
-site's cost section applies the selected provider's current
+website's cost section applies the selected provider's current
 table entry to the exact workload and variant being viewed. Request counts are
 scaled from the measured elapsed time to a 30-day month; storage uses the final
 database size at the provider's monthly rate. The estimate assumes that the final
@@ -427,7 +427,7 @@ The page displays one version and never computes a delta against another
 version. Suite, workload, concurrency, and target-rate controls select result
 variants within that version.
 
-Use `~/Code/slatedb/website` as the visual reference for the site's design
+Use `~/Code/slatedb/website` as the visual reference for the website's design
 aesthetic, layout, and CSS styling.
 
 The layout favors density. A slim header contains the SlateDB wordmark. On wide
@@ -449,11 +449,11 @@ per-operation maps, and sustained-ingest windows therefore follow the same
 one-value-per-row presentation rather than using JSON or nested layouts.
 
 The header wordmark uses Marcellus, matching `slatedb.io`. Body text uses Inter
-and numeric tables use JetBrains Mono. The site reuses SlateDB's ink,
+and numeric tables use JetBrains Mono. The website reuses SlateDB's ink,
 off-white, and terracotta color tokens. Time-series charts use elapsed time on
 the x-axis, while tail latency uses percentile on the x-axis and milliseconds
 on the y-axis. Each chart links directly to its underlying raw JSON. Result
-charts use a browser charting library instead of Mermaid. The site needs client
+charts use a browser charting library instead of Mermaid. The website needs client
 JavaScript only for selectors, chart selection, and chart rendering.
 
 ## Validation and publication
@@ -473,7 +473,7 @@ same behavior applies to isolated and sequential suites.
 Publication replaces only that workload's destination with its validated
 variant results in a fresh checkout of `main`, commits only that result subtree,
 and rebases before pushing. A non-fast-forward push refetches, rebases, rebuilds
-the site, and retries instead of pushing from the benchmark's original stale
+the website, and retries instead of pushing from the benchmark's original stale
 checkout. A separate Pages workflow deploys after each results push, so every
 successful workload becomes visible without waiting for the rest of its suite
 or release. Failed and interrupted jobs keep their local output as CI

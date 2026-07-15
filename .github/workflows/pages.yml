@@ -1,4 +1,4 @@
-name: Deploy benchmark site
+name: Deploy benchmark website
 
 on:
   workflow_dispatch:
@@ -6,7 +6,7 @@ on:
     branches: [main]
     paths:
       - results/**
-      - site/**
+      - website/**
 
 permissions:
   contents: read
@@ -29,16 +29,16 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: site/package-lock.json
-      - name: Install site dependencies
-        working-directory: site
+          cache-dependency-path: website/package-lock.json
+      - name: Install website dependencies
+        working-directory: website
         run: npm ci
-      - name: Build site
-        working-directory: site
+      - name: Build website
+        working-directory: website
         run: npm run build
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: site/dist
-      - name: Deploy site
+          path: website/dist
+      - name: Deploy website
         id: deployment
         uses: actions/deploy-pages@v4

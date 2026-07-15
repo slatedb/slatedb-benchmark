@@ -88,7 +88,7 @@ const SUITE_STEPS: &str = r#"      SLATEDB_BENCH_REGION: fra
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: publish/site/package-lock.json
+          cache-dependency-path: publish/website/package-lock.json
 "#;
 
 pub fn generate(args: GenerateWorkflowArgs) -> Result<()> {
