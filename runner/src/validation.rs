@@ -21,15 +21,15 @@ pub fn validate_result(
 ) -> Result<()> {
     validate_schema(
         &serde_json::to_value(result)?,
-        &schema_dir.join("result-v1.json"),
+        &schema_dir.join("result.json"),
     )?;
     validate_schema(
         &serde_json::to_value(histograms)?,
-        &schema_dir.join("histograms-v1.json"),
+        &schema_dir.join("histograms.json"),
     )?;
     validate_schema(
         &serde_json::to_value(timeseries)?,
-        &schema_dir.join("timeseries-v1.json"),
+        &schema_dir.join("timeseries.json"),
     )?;
     validate_invariants(result, histograms, timeseries)?;
     reject_secrets(&serde_json::to_value(result)?, "result")?;
@@ -40,7 +40,7 @@ pub fn validate_result(
 
 pub fn validate_run(run: &RunManifest, schema_dir: &Path) -> Result<()> {
     let value = serde_json::to_value(run)?;
-    validate_schema(&value, &schema_dir.join("run-v1.json"))?;
+    validate_schema(&value, &schema_dir.join("run.json"))?;
     reject_secrets(&value, "run")
 }
 

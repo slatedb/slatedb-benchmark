@@ -131,7 +131,6 @@ impl HistogramSet {
             histograms.insert(name.clone(), histogram.encode()?);
         }
         Ok(HistogramsFile {
-            schema_version: 1,
             encoding: "hdrhistogram-v2-deflate-base64".to_string(),
             significant_digits: SIGNIFICANT_DIGITS,
             histograms,

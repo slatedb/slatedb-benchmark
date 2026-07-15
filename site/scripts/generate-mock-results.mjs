@@ -190,7 +190,6 @@ for (const suite of published.suites) {
       const durabilityLag = isWrite && !awaitDurable ? latency.summary : null;
 
       const result = {
-        schema_version: 1,
         identity: {
           slate_version: version,
           slate_commit: zeroCommit,
@@ -334,7 +333,6 @@ for (const suite of published.suites) {
       };
 
       const histograms = {
-        schema_version: 1,
         encoding: 'hdrhistogram-v2-deflate-base64',
         significant_digits: 3,
         histograms: {
@@ -349,7 +347,6 @@ for (const suite of published.suites) {
         throughput, valueBytes, databaseSize, isWrite, awaitDurable, openLoop, latency,
       });
       const timeseries = {
-        schema_version: 1,
         interval_ns: 1_000_000_000,
         ...windowed,
         slatedb_metrics: [],
@@ -369,7 +366,6 @@ for (const suite of published.suites) {
 }
 
 const run = {
-  schema_version: 1,
   status: 'ok',
   started_at: timestamp,
   finished_at: timestamp,
@@ -425,7 +421,7 @@ async function loadReleaseConfiguration(configRoot) {
       workloads,
     });
   }
-  return { schema_version: 1, suites };
+  return { suites };
 }
 
 function durationMs(value) {

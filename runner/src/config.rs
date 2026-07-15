@@ -7,7 +7,6 @@ use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct BenchmarkConfig {
-    pub schema_version: u32,
     pub suites: Vec<SuiteConfig>,
     #[serde(skip)]
     config_dir: PathBuf,
@@ -111,7 +110,6 @@ pub enum WorkloadKind {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SuiteFile {
-    schema_version: u32,
     release: bool,
     execution: SuiteExecution,
     object_store_probe: ProbeFile,
@@ -210,7 +208,6 @@ impl BenchmarkConfig {
             .map(|suite_path| load_suite(suite_path))
             .collect::<Result<Vec<_>>>()?;
         let benchmark = Self {
-            schema_version: 1,
             suites,
             config_dir: config_dir.to_path_buf(),
         };
@@ -429,14 +426,6 @@ fn load_suite(suite_path: &Path) -> Result<SuiteConfig> {
         .with_context(|| format!("invalid suite file name {}", suite_path.display()))?
         .to_string();
     let file: SuiteFile = read_toml(suite_path)?;
-    if file.schema_version != 1 {
-        bail!(
-            "unsupported configuration schema {} in {}",
-            file.schema_version,
-            suite_path.display()
-        );
-    }
-
     let workloads = file
         .workloads
         .into_iter()

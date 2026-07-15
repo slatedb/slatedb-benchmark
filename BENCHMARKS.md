@@ -19,8 +19,7 @@ it is not a reduced rewrite of the release catalog.
 Every workload emits the same result record. Use `null` for fields that do not
 apply.
 
-- Identity: schema version, SlateDB version and commit, timestamp, suite, and
-  workload
+- Identity: SlateDB version and commit, timestamp, suite, and workload
 - Environment: runner type, CPU model and core count, RAM, local disk, OS and
   kernel, object store, endpoint, and region
 - Object-store baseline: direct upload and download MiB/s and p50, p95, p99,

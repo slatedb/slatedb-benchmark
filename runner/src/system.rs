@@ -523,7 +523,6 @@ pub fn compact_timeseries(mut samples: Vec<TimeseriesSample>) -> Result<Timeseri
         }
     }
     Ok(TimeseriesFile {
-        schema_version: 1,
         interval_ns: 1_000_000_000,
         samples,
         application_windows: Vec::new(),
@@ -533,10 +532,6 @@ pub fn compact_timeseries(mut samples: Vec<TimeseriesSample>) -> Result<Timeseri
 }
 
 pub fn append_timeseries(target: &mut TimeseriesFile, mut phase: TimeseriesFile) -> Result<()> {
-    ensure!(
-        target.schema_version == phase.schema_version,
-        "cannot append time series with different schema versions"
-    );
     ensure!(
         target.interval_ns == phase.interval_ns,
         "cannot append time series with different intervals"

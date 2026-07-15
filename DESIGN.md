@@ -17,14 +17,13 @@ The repository layout is:
 ```text
 runner/                 Rust benchmark runner and workload implementations
 config/                 `<suite>.suite.toml` and `<suite>.settings.toml`
-schema/                 Versioned JSON schemas and price tables
+schema/                 JSON schemas and price tables
 results/<version>/      Published result records and histograms
 site/                   Static website
 ```
 
 Each release result records its lockfile hash, the SlateDB revision under test,
-the runner revision, the result schema version, and the full environment
-described in `BENCHMARKS.md`.
+the runner revision, and the full environment described in `BENCHMARKS.md`.
 
 Result files are the source of truth for the site. The site reads them at build
 time, so publishing needs no database or API service. Git history records any

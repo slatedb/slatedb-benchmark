@@ -4,7 +4,6 @@ use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunManifest {
-    pub schema_version: u32,
     pub status: String,
     pub started_at: String,
     pub finished_at: String,
@@ -21,7 +20,6 @@ pub struct RunManifest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResultRecord {
-    pub schema_version: u32,
     pub identity: Identity,
     pub environment: Environment,
     pub object_store_baseline: ObjectStoreBaseline,
@@ -201,7 +199,6 @@ pub struct LatencySummary {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HistogramsFile {
-    pub schema_version: u32,
     pub encoding: String,
     pub significant_digits: u8,
     pub histograms: BTreeMap<String, EncodedHistogram>,
@@ -218,7 +215,6 @@ pub struct EncodedHistogram {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimeseriesFile {
-    pub schema_version: u32,
     pub interval_ns: u64,
     pub samples: Vec<TimeseriesSample>,
     pub application_windows: Vec<ApplicationWindow>,

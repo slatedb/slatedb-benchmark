@@ -136,7 +136,6 @@ async fn execute_inner(args: &RunArgs) -> Result<()> {
     }
 
     let run = RunManifest {
-        schema_version: 1,
         status: "ok".to_string(),
         started_at: started_at.to_rfc3339(),
         finished_at: Utc::now().to_rfc3339(),
@@ -760,7 +759,6 @@ fn write_variant_result(
         outcome.application.successful_operations,
     );
     let result = ResultRecord {
-        schema_version: 1,
         identity: Identity {
             slate_version: version.to_string(),
             slate_commit: env!("BENCHMARK_SLATE_COMMIT").to_string(),
@@ -1014,7 +1012,6 @@ mod tests {
     #[test]
     fn database_size_uses_trapezoidal_time_integration() {
         let timeseries = TimeseriesFile {
-            schema_version: 1,
             interval_ns: 1_000_000_000,
             application_windows: Vec::new(),
             durability_windows: None,

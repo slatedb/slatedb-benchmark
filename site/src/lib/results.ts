@@ -4,7 +4,6 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export type BenchmarkResult = {
-  schema_version: number;
   identity: {
     slate_version: string;
     slate_commit: string;
@@ -83,7 +82,6 @@ export type DurabilityWindow = {
 };
 
 export type BenchmarkTimeseries = {
-  schema_version: number;
   interval_ns: number;
   application_windows: ApplicationWindow[];
   durability_windows: DurabilityWindow[] | null;
