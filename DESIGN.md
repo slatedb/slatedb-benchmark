@@ -303,14 +303,14 @@ variants within that version.
 Use `~/Code/slatedb/website` as the visual reference for the site's design
 aesthetic, layout, and CSS styling.
 
-The layout favors density. A slim header contains the SlateDB wordmark and
-version selector. On wide screens, a sticky context rail groups the profile,
-workload, and variant selectors with machine, object-store, dataset, cache, and
-durability facts. The results canvas beside it starts with chart tabs, making
-selection context and performance output visually distinct. The page does not
-repeat selected values in visible headings. Tabs show one chart at a time,
-with payload MiB/s selected by default. The other views are return latency over
-time, whole-run tail latency, and, where applicable, durability lag over time.
+The layout favors density. A slim header contains the SlateDB wordmark. On wide
+screens, a sticky context rail groups the version, profile, workload, and
+variant selectors with machine, object-store, dataset, cache, and durability
+facts. The results canvas beside it starts with an active chart description and
+a right-aligned chart dropdown. A download icon beside the dropdown links to
+the selected chart's raw data. Payload MiB/s is selected by default. The other
+views are return latency over time, whole-run tail latency, and, where
+applicable, durability lag over time.
 The rail and results collapse to one column on smaller screens. A table below
 the charts exposes all percentiles, durability, resource, storage, cost, and
 object-store baseline fields. Each page links to its raw result files and the

@@ -109,41 +109,48 @@ const charts = [throughputChart, latencyChart, tailLatencyChart, durabilityChart
 ---
 
 <section class="timeseries-region" aria-label="Performance charts" data-chart-switcher>
-  <div class="chart-tabs" role="tablist" aria-label="Performance charts">
-    {charts.map((chart, index) => (
-      <button
-        type="button"
-        role="tab"
-        id={`${chart.key}-tab`}
-        aria-controls={`${chart.key}-panel`}
-        aria-selected={index === 0 ? 'true' : 'false'}
-        tabindex={index === 0 ? 0 : -1}
+  <div class="chart-toolbar">
+    <p class="chart-description" id="active-chart-description" data-chart-description>{charts[0].description}</p>
+    <div class="chart-actions">
+      <label class="chart-selector">
+        <span>Chart</span>
+        <select data-chart-select aria-label="Chart">
+          {charts.map((chart, index) => (
+            <option value={chart.key} selected={index === 0}>{chart.title}</option>
+          ))}
+        </select>
+      </label>
+      <a
+        class="chart-download-link"
+        data-chart-raw-link
+        href={charts[0].rawHref}
+        download
+        aria-label={`Download data for ${charts[0].title}`}
+        title="Download raw chart data"
       >
-        {chart.title}
-      </button>
-    ))}
+        <svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 3v12"></path>
+          <path d="m7 10 5 5 5-5"></path>
+          <path d="M5 20h14"></path>
+        </svg>
+      </a>
+    </div>
   </div>
   <div class="chart-stage">
     {charts.map((chart, index) => (
       <figure
         class="time-chart"
         id={`${chart.key}-panel`}
-        role="tabpanel"
-        aria-labelledby={`${chart.key}-tab`}
+        data-chart-panel={chart.key}
+        data-chart-description={chart.description}
+        data-raw-href={chart.rawHref}
         hidden={index !== 0}
       >
-        <figcaption>
-          <div>
-            <h3>{chart.title}</h3>
-            <p id={`${chart.key}-description`}>{chart.description}</p>
-          </div>
-          <a class="chart-raw-link" href={chart.rawHref}>View raw data</a>
-        </figcaption>
         <div class="time-chart-canvas">
           <canvas
             data-time-chart={JSON.stringify(chart)}
             aria-label={`${chart.title} for ${variant}`}
-            aria-describedby={`${chart.key}-description`}
+            aria-describedby="active-chart-description"
           ></canvas>
         </div>
       </figure>
@@ -216,38 +223,25 @@ const charts = [throughputChart, latencyChart, tailLatencyChart, durabilityChart
   };
 
   document.querySelectorAll<HTMLElement>('[data-chart-switcher]').forEach((switcher) => {
-    const tabs = [...switcher.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
-    const panels = [...switcher.querySelectorAll<HTMLElement>('[role="tabpanel"]')];
-    const activate = (tab: HTMLButtonElement) => {
-      tabs.forEach((candidate) => {
-        const selected = candidate === tab;
-        candidate.setAttribute('aria-selected', String(selected));
-        candidate.tabIndex = selected ? 0 : -1;
-      });
+    const select = switcher.querySelector<HTMLSelectElement>('[data-chart-select]');
+    const rawLink = switcher.querySelector<HTMLAnchorElement>('[data-chart-raw-link]');
+    const description = switcher.querySelector<HTMLElement>('[data-chart-description]');
+    const panels = [...switcher.querySelectorAll<HTMLElement>('[data-chart-panel]')];
+    const activate = (key: string) => {
       panels.forEach((panel) => {
-        panel.hidden = panel.id !== tab.getAttribute('aria-controls');
+        panel.hidden = panel.dataset.chartPanel !== key;
       });
       const panel = panels.find((candidate) => !candidate.hidden);
+      if (rawLink && panel?.dataset.rawHref) rawLink.href = panel.dataset.rawHref;
+      if (description && panel?.dataset.chartDescription) description.textContent = panel.dataset.chartDescription;
+      if (rawLink && select?.selectedOptions[0]?.textContent) {
+        rawLink.setAttribute('aria-label', `Download data for ${select.selectedOptions[0].textContent}`);
+      }
       const canvas = panel?.querySelector<HTMLCanvasElement>('[data-time-chart]');
       if (canvas) requestAnimationFrame(() => renderChart(canvas));
     };
 
-    tabs.forEach((tab, index) => {
-      tab.addEventListener('click', () => activate(tab));
-      tab.addEventListener('keydown', (event) => {
-        if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
-        event.preventDefault();
-        const nextIndex = event.key === 'Home'
-          ? 0
-          : event.key === 'End'
-            ? tabs.length - 1
-            : (index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
-        tabs[nextIndex]?.focus();
-        if (tabs[nextIndex]) activate(tabs[nextIndex]);
-      });
-    });
-
-    const selected = tabs.find((tab) => tab.getAttribute('aria-selected') === 'true') || tabs[0];
-    if (selected) activate(selected);
+    select?.addEventListener('change', () => activate(select.value));
+    if (select) activate(select.value);
   });
 </script>
