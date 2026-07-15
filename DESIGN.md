@@ -32,18 +32,21 @@ correction to a published result.
 
 ## Execution
 
-A release workflow accepts a SlateDB tag or commit and runs this sequence:
+A release workflow accepts a SlateDB tag or commit, builds the runner once, and
+runs one sequential job per profile:
 
 ```text
-build -> inspect host -> probe object store -> prepare data -> run workloads
-      -> validate results -> build site -> publish
+build runner -> [inspect host -> probe object store -> prepare profile data
+              -> run profile workloads -> validate -> publish profile]
+             -> rebuild and deploy site from main
 ```
 
 The workflow builds the runner in release mode on the configured WarpBuild
 host. It verifies the runner type, CPU count, memory, and object-store endpoint
-before starting. One measured workload runs on a host at a time. Dataset
+before starting. Profile jobs use `max-parallel: 1`, so one measured workload
+runs at a time and profiles do not compete for the object store. Dataset
 preparation, object-store probes, and cleanup never overlap a measurement
-window.
+window. A failed profile does not cancel the remaining profile jobs.
 
 The runner uses monotonic time for durations and latency. Wall-clock time is
 used only for result timestamps. Warmup data is discarded and metric counters
@@ -325,7 +328,7 @@ off-white, and terracotta color tokens. Time-series charts use elapsed time on
 the x-axis, while tail latency uses percentile on the x-axis and milliseconds
 on the y-axis. Each chart links directly to its underlying raw JSON. Result
 charts use a browser charting library instead of Mermaid. The site needs client
-JavaScript only for selectors, chart tabs, and chart rendering.
+JavaScript only for selectors, chart selection, and chart rendering.
 
 ## Validation and publication
 
@@ -335,12 +338,14 @@ covers all measured writes, resource samples span the measurement window, and
 the workload used the expected initial manifest. Secrets, credentials, and
 signed URLs are rejected from result files.
 
-The workflow publishes a version after all required variants pass validation.
-Because a complete run is much longer than a normal commit cycle, publication
-copies the validated output into a fresh checkout of `main`, commits only the
-result sources, and rebases before pushing. A non-fast-forward push refetches,
-rebases, rebuilds the site, and retries instead of pushing from the benchmark's
-original stale checkout. The site contains complete runs; failed and
-interrupted runs keep their logs as CI artifacts. A rerun replaces the
-unpublished files for that version. The published schema omits trial and
+The workflow publishes each profile after all required variants in that profile
+pass validation. Publication copies the validated profile output into a fresh
+checkout of `main`, commits only that profile's result sources, and rebases
+before pushing. A non-fast-forward push refetches, rebases, rebuilds the site,
+and retries instead of pushing from the benchmark's original stale checkout.
+A separate Pages workflow deploys after each results push, so successful
+profiles become visible without waiting for the entire release. Failed and
+interrupted profiles keep their logs and partial output as CI artifacts, while
+the remaining profiles continue. Rerunning a failed matrix job replaces only
+that profile's unpublished files. The published schema omits trial and
 repetition fields.

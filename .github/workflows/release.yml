@@ -14,27 +14,15 @@ on:
 
 permissions:
   contents: write
-  pages: write
-  id-token: write
 
 concurrency:
   group: benchmark-release
   cancel-in-progress: false
 
 jobs:
-  benchmark:
+  build-runner:
     runs-on: warp-ubuntu-latest-x64-16x
-    environment: benchmark
     env:
-      CLOUD_PROVIDER: aws
-      AWS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
-      AWS_REGION: auto
-      AWS_ENDPOINT_URL_S3: https://fly.storage.tigris.dev
-      SLATEDB_BENCH_BUCKET: ${{ secrets.TIGRIS_BUCKET }}
-      SLATEDB_BENCH_PREFIX: release/${{ inputs.slate_version }}
-      SLATEDB_BENCH_REGION: fra
-      SLATEDB_BENCH_RUNNER_TYPE: warp-ubuntu-latest-x64-16x
       SLATEDB_VERSION: ${{ inputs.slate_version }}
     steps:
       - uses: actions/checkout@v4
@@ -52,53 +40,73 @@ jobs:
         run: cargo check --workspace --locked
       - name: Build runner
         run: cargo build --release --locked --manifest-path runner/Cargo.toml
-      - name: Run complete suite
-        run: ./target/release/slatedb-benchmark run --output .runs/release
+      - name: Preserve runner binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-runner
+          path: target/release/slatedb-benchmark
+          overwrite: true
+          retention-days: 7
+
+  benchmark:
+    needs: build-runner
+    name: Benchmark ${{ matrix.profile }}
+    runs-on: warp-ubuntu-latest-x64-16x
+    environment: benchmark
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        profile: [rocksdb, ycsb, slatedb]
+    env:
+      CLOUD_PROVIDER: aws
+      AWS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
+      AWS_REGION: auto
+      AWS_ENDPOINT_URL_S3: https://fly.storage.tigris.dev
+      SLATEDB_BENCH_BUCKET: ${{ secrets.TIGRIS_BUCKET }}
+      SLATEDB_BENCH_PREFIX: release/${{ inputs.slate_version }}/${{ matrix.profile }}
+      SLATEDB_BENCH_REGION: fra
+      SLATEDB_BENCH_RUNNER_TYPE: warp-ubuntu-latest-x64-16x
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download runner binary
+        uses: actions/download-artifact@v4
+        with:
+          name: benchmark-runner
+          path: bin
+      - name: Prepare runner binary
+        run: chmod +x bin/slatedb-benchmark
+      - name: Run ${{ matrix.profile }} profile
+        run: |
+          bin/slatedb-benchmark run \
+            --profile "${{ matrix.profile }}" \
+            --output ".runs/${{ matrix.profile }}"
+      - name: Validate ${{ matrix.profile }} output
+        run: bin/slatedb-benchmark validate --output ".runs/${{ matrix.profile }}"
+      - name: Preserve profile artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-${{ inputs.slate_version }}-${{ matrix.profile }}
+          path: .runs/${{ matrix.profile }}
+          if-no-files-found: ignore
+          overwrite: true
       - name: Check out current main for publication
         uses: actions/checkout@v4
         with:
           ref: main
           path: publish
           fetch-depth: 0
-      - name: Copy validated result sources into current main
-        run: |
-          mkdir -p "publish/results/${{ inputs.slate_version }}"
-          cp -R ".runs/release/results/${{ inputs.slate_version }}/." "publish/results/${{ inputs.slate_version }}/"
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: publish/site/package-lock.json
-      - name: Commit published result sources
-        working-directory: publish
+      - name: Publish ${{ matrix.profile }} results
         run: |
-          git add "results/${{ inputs.slate_version }}"
-          git config user.name "slatedb-benchmark[bot]"
-          git config user.email "slatedb-benchmark[bot]@users.noreply.github.com"
-          git commit -m "Publish SlateDB ${{ inputs.slate_version }} benchmarks"
-      - name: Rebase, validate site, and push current main
-        working-directory: publish
-        run: |
-          for attempt in 1 2 3 4 5; do
-            git fetch origin main
-            git rebase origin/main
-            npm --prefix site ci
-            npm --prefix site run build
-            if git push origin HEAD:main; then
-              exit 0
-            fi
-            echo "::warning::main advanced during publish attempt ${attempt}; retrying"
-          done
-          echo "::error::main advanced during all publish attempts"
-          exit 1
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: publish/site/dist
-      - uses: actions/deploy-pages@v4
-      - name: Preserve run artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: benchmark-${{ inputs.slate_version }}
-          path: .runs/
-          if-no-files-found: ignore
+          ./scripts/publish-results.sh \
+            ".runs/${{ matrix.profile }}" \
+            "${{ inputs.slate_version }}" \
+            "${{ matrix.profile }}" \
+            publish
