@@ -79,7 +79,10 @@ It derives the result version from the selected source: a release tag such as
 object-store prefixes, artifacts, and the website version selector.
 
 The workflow then runs one job per release suite. Suite jobs have no
-dependencies on one another and therefore run in parallel:
+dependencies on one another and therefore run in parallel. Generated suite
+jobs set `timeout-minutes: 1440` instead of GitHub's 360-minute default so the
+RocksDB-derived suite can finish its bulk load and twelve hours of timed
+measurements in one job:
 
 ```text
                          /-> rocksdb job: workload -> publish -> workload -> publish ...
@@ -96,6 +99,11 @@ database checkpoint to object storage before returning success:
 ```text
 restore session -> measure workload -> validate -> commit session -> publish workload
 ```
+
+If a suite job is interrupted or reaches its explicit timeout, rerunning the
+same workflow run preserves `github.run_id` and therefore the session name.
+The runner restores and skips committed workloads; only the workload that was
+in flight at interruption is measured again.
 
 The benchmark runner owns measurement and object-store persistence. It never
 modifies the repository. The release workflow validates the local result tree,

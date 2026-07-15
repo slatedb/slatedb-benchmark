@@ -69,6 +69,7 @@ const SUITE_SETUP: &str = r#"    needs: build-runner
       actions: write
       contents: write
     runs-on: warp-ubuntu-latest-x64-16x
+    timeout-minutes: 1440
     environment: benchmark
     env:
       CLOUD_PROVIDER: aws
@@ -236,5 +237,19 @@ mod tests {
 
         assert!(workflow.contains("      actions: write"));
         assert_eq!(dispatches, publishes);
+    }
+
+    #[test]
+    fn release_suite_jobs_have_explicit_day_long_timeouts() {
+        let benchmark = BenchmarkConfig::load_from(Path::new("config")).expect("config");
+        let release_suites = benchmark
+            .suites
+            .iter()
+            .filter(|suite| suite.release)
+            .count();
+        let workflow = render(&benchmark).expect("render workflow");
+        let timeouts = workflow.matches("    timeout-minutes: 1440").count();
+
+        assert_eq!(timeouts, release_suites);
     }
 }
