@@ -395,14 +395,15 @@ Cloud Standard regional storage. The table links to each provider's source and
 does not include Tigris pricing.
 
 Results store the raw inputs rather than a price-dependent estimate: elapsed
-time, successful application operations, request counts by object-store
-operation, and the time-weighted average database size. The site calculator
-scales those inputs to a user-selected operation count and applies the selected
-provider's current table entry. It covers the measurement window and final
-durability drain, excluding dataset preparation, warmup, cloning, the direct
-object-store probe, compute, free tiers, discounts, and taxes. Compute and the
-bucket are assumed to share a region, so the calculator does not add transfer
-charges.
+time, request counts by object-store operation, and the final database size. The
+site's cost section applies the selected provider's current
+table entry to the exact workload and variant being viewed. Request counts are
+scaled from the measured elapsed time to a 30-day month; storage uses the final
+database size at the provider's monthly rate. The estimate assumes that the final
+footprint stays constant rather than extrapolating database growth. It excludes
+dataset preparation, warmup, cloning, the direct object-store
+probe, compute, free tiers, discounts, and taxes. Compute and the bucket are
+assumed to share a region, so the cost section does not add transfer charges.
 
 ## Website
 

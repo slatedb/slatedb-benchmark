@@ -9,8 +9,7 @@ interface Props {
 const { result, pricing } = Astro.props;
 const basis = {
   elapsed_ns: result.elapsed_ns,
-  successful_operations: result.application.successful_operations,
-  average_database_size_bytes: result.storage.average_database_size_bytes,
+  database_size_bytes: result.storage.database_size_bytes,
   requests: result.storage.object_store_requests,
 };
 ---
@@ -18,14 +17,14 @@ const basis = {
 <section
   class="detail-region cost-region"
   aria-labelledby="cost-title"
-  data-cost-calculator
+  data-cost-section
   data-pricing={JSON.stringify(pricing)}
   data-basis={JSON.stringify(basis)}
 >
   <div class="section-heading cost-heading">
     <div>
-      <h2 id="cost-title">Cost calculator</h2>
-      <p>Estimate object-store cost using this run’s request mix, storage footprint, and execution time.</p>
+      <h2 id="cost-title">Cost</h2>
+      <p>30-day estimate using this run’s request rate and final storage footprint.</p>
     </div>
     <div class="cost-controls">
       <label>
@@ -34,18 +33,14 @@ const basis = {
           {pricing.providers.map((provider) => <option value={provider.id}>{provider.name}</option>)}
         </select>
       </label>
-      <label>
-        <span>Operations</span>
-        <input data-cost-operations aria-label="Projected application operations" type="number" min="1" step="100000" value="1000000" />
-      </label>
     </div>
   </div>
 
   <div class="cost-output" aria-live="polite">
     <div class="cost-total">
-      <span>Estimated object-store cost</span>
+      <span>Estimated monthly total</span>
       <strong data-cost-total>$0.000000</strong>
-      <small data-cost-scale></small>
+      <small>per 30-day month</small>
     </div>
     <dl class="cost-breakdown">
       <div><dt>Requests</dt><dd data-cost-requests>$0.000000</dd></div>
@@ -80,22 +75,19 @@ const basis = {
   };
   type CostBasis = {
     elapsed_ns: number;
-    successful_operations: number;
-    average_database_size_bytes: number;
+    database_size_bytes: number;
     requests: Record<string, number>;
   };
 
-  document.querySelectorAll<HTMLElement>('[data-cost-calculator]').forEach((calculator) => {
-    const pricing = JSON.parse(calculator.dataset.pricing || '{}') as PricingTable;
-    const basis = JSON.parse(calculator.dataset.basis || '{}') as CostBasis;
-    const providerSelect = calculator.querySelector<HTMLSelectElement>('[data-cost-provider]');
-    const operationsInput = calculator.querySelector<HTMLInputElement>('[data-cost-operations]');
-    const totalOutput = calculator.querySelector<HTMLElement>('[data-cost-total]');
-    const requestOutput = calculator.querySelector<HTMLElement>('[data-cost-requests]');
-    const storageOutput = calculator.querySelector<HTMLElement>('[data-cost-storage]');
-    const scaleOutput = calculator.querySelector<HTMLElement>('[data-cost-scale]');
-    const basisOutput = calculator.querySelector<HTMLElement>('[data-cost-basis]');
-    const sourceLink = calculator.querySelector<HTMLAnchorElement>('[data-cost-source]');
+  document.querySelectorAll<HTMLElement>('[data-cost-section]').forEach((section) => {
+    const pricing = JSON.parse(section.dataset.pricing || '{}') as PricingTable;
+    const basis = JSON.parse(section.dataset.basis || '{}') as CostBasis;
+    const providerSelect = section.querySelector<HTMLSelectElement>('[data-cost-provider]');
+    const totalOutput = section.querySelector<HTMLElement>('[data-cost-total]');
+    const requestOutput = section.querySelector<HTMLElement>('[data-cost-requests]');
+    const storageOutput = section.querySelector<HTMLElement>('[data-cost-storage]');
+    const basisOutput = section.querySelector<HTMLElement>('[data-cost-basis]');
+    const sourceLink = section.querySelector<HTMLAnchorElement>('[data-cost-source]');
 
     const currency = (value: number) => {
       const digits = value === 0 ? 2 : value < 0.01 ? 6 : value < 1 ? 4 : 2;
@@ -117,27 +109,20 @@ const basis = {
       const provider = pricing.providers.find((candidate) => candidate.id === providerSelect?.value)
         || pricing.providers[0];
       if (!provider) return;
-      const projectedOperations = Math.max(1, Number(operationsInput?.value) || 1);
-      const scale = basis.successful_operations > 0
-        ? projectedOperations / basis.successful_operations
-        : 0;
+      const elapsedSeconds = basis.elapsed_ns / 1e9;
+      const monthSeconds = pricing.units.month_days * 86400;
+      const requestScale = elapsedSeconds > 0 ? monthSeconds / elapsedSeconds : 0;
       const requestCost = Object.entries(basis.requests).reduce(
-        (sum, [operation, count]) => sum + count * scale / 1000
+        (sum, [operation, count]) => sum + count * requestScale / 1000
           * (provider.requests_per_1000[operation] || 0),
         0,
       );
-      const elapsedSeconds = basis.elapsed_ns / 1e9 * scale;
-      const storageGib = basis.average_database_size_bytes / pricing.units.gib_bytes;
-      const storageCost = storageGib
-        * elapsedSeconds / (pricing.units.month_days * 86400)
-        * provider.storage_per_gib_month;
+      const storageGib = basis.database_size_bytes / pricing.units.gib_bytes;
+      const storageCost = storageGib * provider.storage_per_gib_month;
 
       if (totalOutput) totalOutput.textContent = currency(requestCost + storageCost);
       if (requestOutput) requestOutput.textContent = currency(requestCost);
       if (storageOutput) storageOutput.textContent = currency(storageCost);
-      if (scaleOutput) {
-        scaleOutput.textContent = `for ${projectedOperations.toLocaleString('en-US')} application operations`;
-      }
       if (basisOutput) {
         basisOutput.textContent = `${provider.storage_class} · ${provider.region} (${provider.region_id}) · ${rate(provider.storage_per_gib_month)}/GiB-month`;
       }
@@ -145,7 +130,6 @@ const basis = {
     };
 
     providerSelect?.addEventListener('change', render);
-    operationsInput?.addEventListener('input', render);
     render();
   });
 </script>

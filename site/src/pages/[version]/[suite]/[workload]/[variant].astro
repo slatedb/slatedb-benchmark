@@ -26,11 +26,27 @@ const formatBytes = (value: unknown) => {
   return `${amount.toFixed(index === 0 ? 0 : 2)} ${units[index]}`;
 };
 
-const { object_store_requests: objectStoreRequests, ...storage } = result.storage;
+const {
+  object_store_requests: objectStoreRequests,
+  database_size_bytes,
+  average_database_size_bytes,
+  object_store_errors,
+  bytes_read,
+  bytes_written,
+  ...storage
+} = result.storage;
 const operationOrder = ['get', 'put', 'list', 'delete', 'head', 'copy', 'create_multipart', 'complete_multipart', 'abort_multipart'];
-const objectStoreOperations = Object.fromEntries(Object.entries(objectStoreRequests).sort(
+const orderedRequests = Object.fromEntries(Object.entries(objectStoreRequests).sort(
   ([left], [right]) => operationOrder.indexOf(left) - operationOrder.indexOf(right),
 ));
+const objectStoreOperations = {
+  database_size_bytes,
+  average_database_size_bytes,
+  bytes_read,
+  bytes_written,
+  object_store_errors,
+  ...orderedRequests,
+};
 const tables = [
   ['Application', result.application], ['Durability', result.durability], ['Resources', result.resources],
   ['Storage', storage], ['Object store operations', objectStoreOperations], ['Object-store baseline', result.object_store_baseline],

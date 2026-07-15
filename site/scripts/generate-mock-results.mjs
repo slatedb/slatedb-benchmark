@@ -176,6 +176,7 @@ for (const suite of published.suites) {
       const awaitDurable = Boolean(workload.await_durable);
       const measurementMs = workload.measurement_ms ?? suite.measurement_ms;
       const measurementNs = measurementMs * 1_000_000;
+      const elapsedNs = measurementNs || Math.max(1, Math.round(operations / throughput * 1_000_000_000));
       const recordCount = workload.record_count ?? suite.record_count;
       const keyBytes = workload.key_bytes ?? suite.key_bytes;
       const valueBytes = workload.value_bytes ?? suite.value_bytes;
@@ -197,7 +198,7 @@ for (const suite of published.suites) {
           variant,
           mode: 'smoke',
         },
-        elapsed_ns: measurementNs,
+        elapsed_ns: elapsedNs,
         environment: {
           runner_type: 'mock-warp-x64-16x',
           hostname: 'mock-runner',
