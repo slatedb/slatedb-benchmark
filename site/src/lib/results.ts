@@ -42,6 +42,7 @@ export type BenchmarkResult = {
   };
   durability: Record<string, unknown> & {
     lag: Latency | null;
+    final_flush_drain_ns: number | null;
     durable_ops_per_second: number | null;
   };
   resources: Record<string, unknown>;

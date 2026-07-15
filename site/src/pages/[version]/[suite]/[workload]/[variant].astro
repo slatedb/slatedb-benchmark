@@ -34,6 +34,9 @@ const cacheSummary = [
   ['metadata/index', result.configuration.metadata_cache_bytes],
   ['object store', result.configuration.object_store_cache_bytes],
 ].map(([name, bytes]) => bytes == null ? `${name} disabled` : `${formatBytes(bytes)} ${name}`);
+const durabilityMode = result.durability.final_flush_drain_ns == null
+  ? null
+  : result.durability.lag ? 'Async' : 'Sync';
 
 const {
   object_store_requests: objectStoreRequests,
@@ -91,7 +94,7 @@ const tables = [
           </dd>
         </div>
         <div><dt>Cache</dt><dd><ul class="cache-list">{cacheSummary.map((item) => <li>{item}</li>)}</ul></dd></div>
-        <div><dt>Durability</dt><dd>{result.durability.lag ? 'Async + tracked' : 'Awaited / read-only'}</dd></div>
+        {durabilityMode && <div><dt>Durability</dt><dd>{durabilityMode}</dd></div>}
       </dl>
 
       <div class="context-links">
