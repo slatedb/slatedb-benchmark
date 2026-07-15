@@ -314,7 +314,10 @@ time, whole-run tail latency, and, where applicable, durability lag over time.
 The rail and results collapse to one column on smaller screens. A table below
 the charts exposes all percentiles, durability, resource, storage, cost, and
 object-store baseline fields. Each page links to its raw result files and the
-source commits.
+source commits. Structured measurement values are flattened into ordinary
+table rows, with slash-separated labels preserving their path. Latency records,
+per-operation maps, and sustained-ingest windows therefore follow the same
+one-value-per-row presentation rather than using JSON or nested layouts.
 
 The header wordmark uses Marcellus, matching `slatedb.io`. Body text uses Inter
 and numeric tables use JetBrains Mono. The site reuses SlateDB's ink,

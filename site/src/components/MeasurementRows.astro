@@ -1,0 +1,67 @@
+---
+import type { Latency } from '../lib/results';
+
+interface Props {
+  name: string;
+  value: unknown;
+}
+
+type MeasurementRow = {
+  path: string[];
+  value: string;
+  empty?: boolean;
+};
+
+const { name, value } = Astro.props;
+const label = (key: string) => key.replaceAll('_', ' ').replace('p999', 'p99.9');
+const isRecord = (candidate: unknown): candidate is Record<string, unknown> =>
+  typeof candidate === 'object' && candidate !== null && !Array.isArray(candidate);
+const isLatency = (candidate: unknown): candidate is Latency => {
+  if (!isRecord(candidate)) return false;
+  return ['count', 'p50_ns', 'p95_ns', 'p99_ns', 'p999_ns', 'max_ns']
+    .every((key) => typeof candidate[key] === 'number');
+};
+const formatScalar = (candidate: unknown) => {
+  if (typeof candidate === 'number') {
+    return candidate.toLocaleString('en-US', { maximumFractionDigits: 6 });
+  }
+  return String(candidate);
+};
+const formatMilliseconds = (nanoseconds: number) =>
+  `${(nanoseconds / 1e6).toLocaleString('en-US', {
+    minimumFractionDigits: 3,
+    maximumFractionDigits: 3,
+  })} ms`;
+const latencyRows = (latency: Latency, path: string[]): MeasurementRow[] => [
+  { path: [...path, 'count'], value: latency.count.toLocaleString('en-US') },
+  { path: [...path, 'p50'], value: formatMilliseconds(latency.p50_ns) },
+  { path: [...path, 'p95'], value: formatMilliseconds(latency.p95_ns) },
+  { path: [...path, 'p99'], value: formatMilliseconds(latency.p99_ns) },
+  { path: [...path, 'p99.9'], value: formatMilliseconds(latency.p999_ns) },
+  { path: [...path, 'max'], value: formatMilliseconds(latency.max_ns) },
+];
+const flatten = (candidate: unknown, path: string[]): MeasurementRow[] => {
+  if (candidate === null || candidate === undefined) {
+    return [{ path, value: '—', empty: true }];
+  }
+  if (isLatency(candidate)) return latencyRows(candidate, path);
+  if (Array.isArray(candidate)) {
+    if (candidate.length === 0) return [{ path, value: '—', empty: true }];
+    return candidate.flatMap((item, index) => flatten(item, [...path, `window ${index + 1}`]));
+  }
+  if (isRecord(candidate)) {
+    const entries = Object.entries(candidate);
+    if (entries.length === 0) return [{ path, value: '—', empty: true }];
+    return entries.flatMap(([key, nested]) => flatten(nested, [...path, label(key)]));
+  }
+  return [{ path, value: formatScalar(candidate) }];
+};
+const rows = flatten(value, [label(name)]);
+---
+
+{rows.map((row) => (
+  <tr>
+    <th scope="row" class="measurement-path">{row.path.join(' / ')}</th>
+    <td><code class:list={['measurement-scalar', { 'measurement-empty': row.empty }]}>{row.value}</code></td>
+  </tr>
+))}
