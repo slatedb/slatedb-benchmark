@@ -285,7 +285,26 @@ const charts = [throughputChart, ...apiCharts, durabilityChart]
           legend: {
             display: chart.datasets.length > 1,
             align: 'end',
-            labels: { usePointStyle: true, pointStyle: 'line', boxWidth: 18 },
+            labels: {
+              usePointStyle: true,
+              pointStyle: 'line',
+              boxWidth: 28,
+              pointStyleWidth: 28,
+              generateLabels: (legendChart) =>
+                Chart.defaults.plugins.legend.labels.generateLabels(legendChart).map((label) => {
+                  const dataset = legendChart.data.datasets[label.datasetIndex ?? 0] as {
+                    borderDash?: number[];
+                    borderWidth?: number;
+                  };
+                  return {
+                    ...label,
+                    lineDash: Array.isArray(dataset?.borderDash) ? dataset.borderDash : [],
+                    lineWidth: typeof dataset?.borderWidth === 'number'
+                      ? dataset.borderWidth
+                      : label.lineWidth,
+                  };
+                }),
+            },
           },
           tooltip: {
             callbacks: {
