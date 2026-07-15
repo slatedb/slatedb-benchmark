@@ -1,16 +1,13 @@
 use super::{
-    bulk_load_settings, clone_database, execute_isolated_variant, execute_rocks_variant,
-    golden_key, lsm_digest, manifest_lsm_digest, object_store_cache_directory,
-    open_database_with_object_store_cache, prefix_size, prepare_golden_database,
-    wait_for_compaction, write_json, write_variant_result, GoldenDatabase, ResultContext,
+    bulk_load_settings, clone_database, execute_bulk_load_and_compact, execute_isolated_variant,
+    execute_rocks_variant, golden_key, manifest_lsm_digest, prefix_size, prepare_golden_database,
+    write_json, write_variant_result, GoldenDatabase, ResultContext,
 };
 use crate::cli::RunArgs;
 use crate::config::{BenchmarkConfig, SuiteConfig, SuiteExecution, VariantConfig, WorkloadKind};
 use crate::model::{EncodedHistogram, Environment, InitialState, ObjectStoreBaseline, RunManifest};
 use crate::object_store_probe::{delete_prefix, probe, ObjectStoreContext};
-use crate::system::{sample_until_stopped, ApplicationCounters, BenchmarkMetricsRecorder};
 use crate::validation::{validate_output, validate_run};
-use crate::workloads::{execute_variant, extend_with_compaction_phase};
 use anyhow::{bail, ensure, Context, Result};
 use chrono::Utc;
 use object_store::path::Path;
@@ -22,9 +19,7 @@ use slatedb::config::CheckpointOptions;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Component, Path as FsPath, PathBuf};
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::Instant;
 use uuid::Uuid;
 
 const STATE_FILE: &str = "resume.json";
@@ -425,91 +420,19 @@ async fn execute_bulk_load(
 ) -> Result<(String, DatabaseCheckpoint)> {
     let mut bulk_variant = variant.clone();
     bulk_variant.slate_settings = bulk_load_settings(&bulk_variant.slate_settings);
-    let object_store_cache = object_store_cache_directory(&bulk_variant.suite)?;
-    let bulk_recorder = Arc::new(BenchmarkMetricsRecorder::new());
-    let bulk_db = open_database_with_object_store_cache(
-        database_path.clone(),
-        Arc::clone(&store),
-        &bulk_variant.suite,
-        &bulk_variant.slate_settings,
-        object_store_cache.as_ref().map(|cache| cache.path()),
-        Arc::clone(&bulk_recorder),
-    )
-    .await?;
-    let initial = InitialState {
-        checkpoint_id: None,
-        manifest_id: Some(bulk_db.status().current_manifest.id()),
-        lsm_digest_sha256: lsm_digest(&bulk_db)?,
-    };
-    let measured = execute_variant(
-        Arc::clone(&bulk_db),
+    let execution = execute_bulk_load_and_compact(
         &bulk_variant,
-        Arc::clone(&store_metrics),
-        Arc::clone(&bulk_recorder),
-        database_path.clone(),
-        0,
-    )
-    .await;
-    let mut outcome = match measured {
-        Ok(outcome) => outcome,
-        Err(error) => {
-            let _ = bulk_db.close().await;
-            return Err(error);
-        }
-    };
-
-    let recorder = Arc::new(BenchmarkMetricsRecorder::new());
-    let started = Instant::now();
-    let start_store = store_metrics.snapshot();
-    let start_slate = recorder.snapshot();
-    let counters = Arc::new(ApplicationCounters::default());
-    counters
-        .operations
-        .store(outcome.application.total_operations, Ordering::Relaxed);
-    let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
-    let sampler = tokio::spawn(sample_until_stopped(
-        started,
-        counters,
-        Arc::clone(&store_metrics),
-        Arc::clone(&recorder),
-        database_path.clone(),
-        0,
-        stop_rx,
-    ));
-    bulk_db
-        .close()
-        .await
-        .context("closing resumable bulk-load database")?;
-
-    let compaction_db = open_database_with_object_store_cache(
-        database_path.clone(),
-        Arc::clone(&store),
-        &bulk_variant.suite,
         &variant.slate_settings,
-        object_store_cache.as_ref().map(|cache| cache.path()),
-        Arc::clone(&recorder),
+        &database_path,
+        Arc::clone(&store),
+        store_metrics,
+        true,
     )
     .await?;
-    let compaction_result =
-        wait_for_compaction(&compaction_db, &recorder, &bulk_variant.suite).await;
-    let _ = stop_tx.send(true);
-    let sampled = sampler
-        .await
-        .context("joining resumable bulk compaction sampler")??;
-    let elapsed = started.elapsed();
-    let store_delta = store_metrics.snapshot().difference(&start_store);
-    let end_slate = recorder.snapshot();
-    let close_result = compaction_db.close().await;
-    compaction_result?;
-    close_result.context("closing resumable post-bulk compaction database")?;
-    extend_with_compaction_phase(
-        &mut outcome,
-        sampled.samples,
-        store_delta,
-        &start_slate,
-        &end_slate,
-        elapsed,
-    )?;
+    let mut outcome = execution
+        .outcome
+        .context("measured bulk load did not produce an outcome")?;
+    let initial = execution.initial;
 
     let checkpoint = checkpoint_database(
         database_path,

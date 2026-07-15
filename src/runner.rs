@@ -2,7 +2,7 @@ mod session;
 
 use crate::cli::{RunArgs, WorkerArgs};
 use crate::config::{BenchmarkConfig, SuiteConfig, SuiteExecution, VariantConfig, WorkloadKind};
-use crate::instrumented_store::StoreMetrics;
+use crate::instrumented_store::{StoreMetrics, StoreSnapshot};
 use crate::model::{
     BenchmarkConfiguration, EncodedHistogram, Environment, Identity, InitialState,
     ObjectStoreBaseline, ResultRecord, RunManifest, SourceFiles, TimeseriesFile,
@@ -10,7 +10,7 @@ use crate::model::{
 use crate::object_store_probe::{delete_prefix, probe, ObjectStoreContext};
 use crate::system::{
     inspect_environment, sample_until_stopped, verify_environment, ApplicationCounters,
-    BenchmarkMetricsRecorder,
+    BenchmarkMetricsRecorder, SampledTimeseries,
 };
 use crate::validation::{validate_result, validate_run};
 use crate::workloads::{
@@ -31,7 +31,7 @@ use slatedb::db_cache::{
     DbCache, SplitCache,
 };
 use slatedb::{Db, SstBlockSize, VersionedManifest};
-use slatedb_common::metrics::{MetricValue, MetricsRecorder};
+use slatedb_common::metrics::{MetricValue, Metrics, MetricsRecorder};
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path as FsPath, PathBuf};
@@ -60,6 +60,93 @@ struct ResultContext<'a> {
     baseline: &'a ObjectStoreBaseline,
     baseline_histograms: &'a BTreeMap<String, EncodedHistogram>,
     args: &'a RunArgs,
+}
+
+struct BulkLoadExecution {
+    initial: InitialState,
+    outcome: Option<WorkloadOutcome>,
+}
+
+struct CompactionMeasurement {
+    started: Instant,
+    start_store: StoreSnapshot,
+    start_slate: Metrics,
+    stop_tx: tokio::sync::watch::Sender<bool>,
+    sampler: tokio::task::JoinHandle<Result<SampledTimeseries>>,
+    store_metrics: Arc<StoreMetrics>,
+    recorder: Arc<BenchmarkMetricsRecorder>,
+}
+
+struct CompletedCompactionMeasurement {
+    sampled: SampledTimeseries,
+    store_delta: StoreSnapshot,
+    start_slate: Metrics,
+    end_slate: Metrics,
+    elapsed: Duration,
+}
+
+impl CompactionMeasurement {
+    fn start(
+        outcome: &WorkloadOutcome,
+        store_metrics: Arc<StoreMetrics>,
+        recorder: Arc<BenchmarkMetricsRecorder>,
+        database_path: Path,
+    ) -> Self {
+        let started = Instant::now();
+        let start_store = store_metrics.snapshot();
+        let start_slate = recorder.snapshot();
+        let counters = Arc::new(ApplicationCounters::default());
+        counters
+            .operations
+            .store(outcome.application.total_operations, Ordering::Relaxed);
+        let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
+        let sampler = tokio::spawn(sample_until_stopped(
+            started,
+            counters,
+            Arc::clone(&store_metrics),
+            Arc::clone(&recorder),
+            database_path,
+            0,
+            stop_rx,
+        ));
+        Self {
+            started,
+            start_store,
+            start_slate,
+            stop_tx,
+            sampler,
+            store_metrics,
+            recorder,
+        }
+    }
+
+    async fn finish(self) -> Result<CompletedCompactionMeasurement> {
+        let _ = self.stop_tx.send(true);
+        let sampled = self
+            .sampler
+            .await
+            .context("joining bulk compaction sampler")??;
+        Ok(CompletedCompactionMeasurement {
+            sampled,
+            store_delta: self.store_metrics.snapshot().difference(&self.start_store),
+            start_slate: self.start_slate,
+            end_slate: self.recorder.snapshot(),
+            elapsed: self.started.elapsed(),
+        })
+    }
+}
+
+impl CompletedCompactionMeasurement {
+    fn apply(self, outcome: &mut WorkloadOutcome) -> Result<()> {
+        extend_with_compaction_phase(
+            outcome,
+            self.sampled.samples,
+            self.store_delta,
+            &self.start_slate,
+            &self.end_slate,
+            self.elapsed,
+        )
+    }
 }
 
 pub async fn execute(args: RunArgs) -> Result<()> {
@@ -517,6 +604,114 @@ async fn prepare_golden_database(
     })
 }
 
+async fn close_database_after<T>(
+    db: &Db,
+    operation: Result<T>,
+    close_context: &'static str,
+) -> Result<T> {
+    let close_result = db.close().await.context(close_context);
+    let value = operation?;
+    close_result?;
+    Ok(value)
+}
+
+async fn execute_bulk_load_and_compact(
+    bulk_variant: &VariantConfig,
+    compaction_settings: &Settings,
+    database_path: &Path,
+    store: Arc<dyn ObjectStore>,
+    store_metrics: Arc<StoreMetrics>,
+    measure_bulk_load: bool,
+) -> Result<BulkLoadExecution> {
+    let object_store_cache = object_store_cache_directory(&bulk_variant.suite)?;
+    let bulk_recorder = Arc::new(BenchmarkMetricsRecorder::new());
+    let bulk_db = open_database_with_object_store_cache(
+        database_path.clone(),
+        Arc::clone(&store),
+        &bulk_variant.suite,
+        &bulk_variant.slate_settings,
+        object_store_cache.as_ref().map(|cache| cache.path()),
+        Arc::clone(&bulk_recorder),
+    )
+    .await?;
+    let bulk_result = async {
+        let initial = InitialState {
+            checkpoint_id: None,
+            manifest_id: Some(bulk_db.status().current_manifest.id()),
+            lsm_digest_sha256: lsm_digest(&bulk_db)?,
+        };
+        let outcome = if measure_bulk_load {
+            Some(
+                execute_variant(
+                    Arc::clone(&bulk_db),
+                    bulk_variant,
+                    Arc::clone(&store_metrics),
+                    Arc::clone(&bulk_recorder),
+                    database_path.clone(),
+                    0,
+                )
+                .await?,
+            )
+        } else {
+            prepare_bulk_load(Arc::clone(&bulk_db), bulk_variant).await?;
+            bulk_db
+                .flush()
+                .await
+                .context("flushing bulk-load database")?;
+            None
+        };
+        Ok(BulkLoadExecution { initial, outcome })
+    }
+    .await;
+    let mut execution =
+        close_database_after(&bulk_db, bulk_result, "closing bulk-load database").await?;
+
+    let recorder = Arc::new(BenchmarkMetricsRecorder::new());
+    let measurement = execution.outcome.as_ref().map(|outcome| {
+        CompactionMeasurement::start(
+            outcome,
+            Arc::clone(&store_metrics),
+            Arc::clone(&recorder),
+            database_path.clone(),
+        )
+    });
+    let compaction_db = match open_database_with_object_store_cache(
+        database_path.clone(),
+        store,
+        &bulk_variant.suite,
+        compaction_settings,
+        object_store_cache.as_ref().map(|cache| cache.path()),
+        Arc::clone(&recorder),
+    )
+    .await
+    {
+        Ok(db) => db,
+        Err(error) => {
+            if let Some(measurement) = measurement {
+                let _ = measurement.finish().await;
+            }
+            return Err(error);
+        }
+    };
+    let compaction_result =
+        wait_for_compaction(&compaction_db, &recorder, &bulk_variant.suite).await;
+    let measurement_result = match measurement {
+        Some(measurement) => measurement.finish().await.map(Some),
+        None => Ok(None),
+    };
+    let completed_measurement = close_database_after(
+        &compaction_db,
+        compaction_result.and(measurement_result),
+        "closing post-bulk compaction database",
+    )
+    .await?;
+    if let (Some(outcome), Some(measurement)) = (execution.outcome.as_mut(), completed_measurement)
+    {
+        measurement.apply(outcome)?;
+    }
+    Ok(execution)
+}
+
 async fn run_sequential_suite(
     selected: Vec<VariantConfig>,
     benchmark: &BenchmarkConfig,
@@ -552,100 +747,22 @@ async fn run_sequential_suite(
         .context("bulk-load variant is missing")?;
     bulk_variant.slate_settings = bulk_load_settings(&bulk_variant.slate_settings);
     let path = run_root.clone().join("sequential-suite");
-    let object_store_cache = object_store_cache_directory(&suite)?;
-    let bulk_recorder = Arc::new(BenchmarkMetricsRecorder::new());
-    let bulk_db = open_database_with_object_store_cache(
-        path.clone(),
-        Arc::clone(&store),
-        &suite,
-        &bulk_variant.slate_settings,
-        object_store_cache.as_ref().map(|cache| cache.path()),
-        Arc::clone(&bulk_recorder),
-    )
-    .await?;
-    let bulk_initial = InitialState {
-        checkpoint_id: None,
-        manifest_id: Some(bulk_db.status().current_manifest.id()),
-        lsm_digest_sha256: lsm_digest(&bulk_db)?,
-    };
     let selected_bulk = selected
         .iter()
         .any(|variant| variant.workload.kind == WorkloadKind::BulkLoad);
-    let mut bulk_outcome = if selected_bulk {
-        Some(
-            execute_variant(
-                Arc::clone(&bulk_db),
-                &bulk_variant,
-                Arc::clone(&store_metrics),
-                Arc::clone(&bulk_recorder),
-                path.clone(),
-                0,
-            )
-            .await?,
-        )
-    } else {
-        prepare_bulk_load(Arc::clone(&bulk_db), &bulk_variant).await?;
-        bulk_db.flush().await?;
-        None
-    };
-    let recorder = Arc::new(BenchmarkMetricsRecorder::new());
-    let compaction_measurement = bulk_outcome.as_ref().map(|outcome| {
-        let started = Instant::now();
-        let start_store = store_metrics.snapshot();
-        let start_slate = recorder.snapshot();
-        let counters = Arc::new(ApplicationCounters::default());
-        counters
-            .operations
-            .store(outcome.application.total_operations, Ordering::Relaxed);
-        let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
-        let sampler = tokio::spawn(sample_until_stopped(
-            started,
-            counters,
-            Arc::clone(&store_metrics),
-            Arc::clone(&recorder),
-            path.clone(),
-            0,
-            stop_rx,
-        ));
-        (started, start_store, start_slate, stop_tx, sampler)
-    });
-    bulk_db
-        .close()
-        .await
-        .context("closing bulk-load database")?;
-
     let suite_settings = benchmark.slate_settings(&suite)?;
-    let compaction_db = open_database_with_object_store_cache(
-        path.clone(),
-        Arc::clone(&store),
-        &suite,
+    let BulkLoadExecution {
+        initial: bulk_initial,
+        outcome: mut bulk_outcome,
+    } = execute_bulk_load_and_compact(
+        &bulk_variant,
         &suite_settings,
-        object_store_cache.as_ref().map(|cache| cache.path()),
-        Arc::clone(&recorder),
+        &path,
+        Arc::clone(&store),
+        Arc::clone(&store_metrics),
+        selected_bulk,
     )
     .await?;
-    wait_for_compaction(&compaction_db, &recorder, &suite).await?;
-    if let (Some(outcome), Some((started, start_store, start_slate, stop_tx, sampler))) =
-        (bulk_outcome.as_mut(), compaction_measurement)
-    {
-        let _ = stop_tx.send(true);
-        let sampled = sampler.await.context("joining bulk compaction sampler")??;
-        let elapsed = started.elapsed();
-        let store_delta = store_metrics.snapshot().difference(&start_store);
-        let end_slate = recorder.snapshot();
-        extend_with_compaction_phase(
-            outcome,
-            sampled.samples,
-            store_delta,
-            &start_slate,
-            &end_slate,
-            elapsed,
-        )?;
-    }
-    compaction_db
-        .close()
-        .await
-        .context("closing post-bulk compaction database")?;
     let compacted_size = prefix_size(Arc::clone(&store), &path).await?;
     let mut paths = Vec::new();
     if let Some(mut outcome) = bulk_outcome.take() {
@@ -1049,8 +1166,8 @@ fn average_database_bytes(
 #[cfg(test)]
 mod tests {
     use super::{
-        average_database_bytes, bulk_load_settings, execute_rocks_variant, lsm_digest,
-        object_store_cache_directory, open_database,
+        average_database_bytes, bulk_load_settings, close_database_after, execute_rocks_variant,
+        lsm_digest, object_store_cache_directory, open_database,
     };
     use crate::cli::RunArgs;
     use crate::config::{
@@ -1177,6 +1294,20 @@ mod tests {
         assert_ne!(empty_digest, sixty_four_record_digest);
         assert_ne!(sixty_four_record_digest, hundred_sixty_record_digest);
         db.close().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn database_is_closed_when_operation_fails() -> Result<()> {
+        let db = Db::open("close-after-error-test", Arc::new(InMemory::new())).await?;
+        let operation = Err(anyhow::anyhow!("operation failed"));
+
+        let error = close_database_after::<()>(&db, operation, "closing test database")
+            .await
+            .expect_err("operation should fail");
+
+        assert_eq!(error.to_string(), "operation failed");
+        assert!(db.put(b"key", b"value").await.is_err());
         Ok(())
     }
 

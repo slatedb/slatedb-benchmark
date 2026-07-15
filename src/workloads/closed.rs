@@ -98,8 +98,7 @@ async fn worker_loop(
             .map(|counters| counters.register_window_recorder()),
     );
     while Instant::now() < deadline {
-        let started = Instant::now();
-        let (result, backpressure) = measure_backpressure(execute_operation(
+        let (completion, backpressure) = measure_backpressure(execute_operation(
             &db,
             &variant,
             &selector,
@@ -110,13 +109,13 @@ async fn worker_loop(
         ))
         .await;
         stats.record_backpressure(backpressure);
-        match result {
+        match completion.result {
             Ok(outcome) => {
                 let returned_at = Instant::now();
-                stats.record_success(outcome.name, started.elapsed(), outcome.payload);
+                stats.record_success(outcome.name, completion.latency, outcome.payload);
                 stats.batch_keys = stats.batch_keys.saturating_add(outcome.batch_keys);
                 if outcome.batch_keys > 0 {
-                    stats.record_batch_latency(started.elapsed());
+                    stats.record_batch_latency(completion.latency);
                 }
                 if outcome.transaction_commit {
                     stats.transaction_commits += 1;
@@ -132,13 +131,13 @@ async fn worker_loop(
                 }
             }
             Err(OperationError::TransactionConflict) => {
-                stats.record_transaction_conflict(started.elapsed());
+                stats.record_transaction_conflict(completion.latency);
                 if let Some(counters) = &counters {
                     counters.operations.fetch_add(1, Ordering::Relaxed);
                 }
             }
             Err(OperationError::Other(error)) => {
-                stats.record_error(operation_name(variant.workload.kind), started.elapsed());
+                stats.record_error(operation_name(variant.workload.kind), completion.latency);
                 if let Some(counters) = &counters {
                     counters.errors.fetch_add(1, Ordering::Relaxed);
                 }
@@ -155,6 +154,11 @@ struct OperationOutcome {
     batch_keys: u64,
     write_handle: Option<WriteHandle>,
     transaction_commit: bool,
+}
+
+struct OperationCompletion {
+    result: std::result::Result<OperationOutcome, OperationError>,
+    latency: Duration,
 }
 
 enum OperationError {
@@ -176,9 +180,10 @@ async fn execute_operation(
     state: &ClosedLoopState,
     rng: &mut StdRng,
     stats: &mut WorkerStats,
-) -> std::result::Result<OperationOutcome, OperationError> {
+) -> OperationCompletion {
+    let started = Instant::now();
     let kind = variant.workload.kind;
-    match kind {
+    let result = match kind {
         WorkloadKind::YcsbA => {
             if rng.random_bool(0.5) {
                 read(db, variant, selector.sample(rng), "read", stats).await
@@ -221,13 +226,7 @@ async fn execute_operation(
                 let id = latest.saturating_sub(1 + rng.random_range(0..window));
                 read(db, variant, id, "read", stats).await
             } else {
-                let _guard = state.insert_lock.lock().await;
-                let id = state.next_insert.load(Ordering::Relaxed);
-                let outcome = update(db, variant, id, write_options, rng, "insert", stats).await?;
-                state
-                    .next_insert
-                    .store(id.saturating_add(1), Ordering::Release);
-                Ok(outcome)
+                return ycsb_d_insert(db, variant, write_options, state, rng, stats).await;
             }
         }
         WorkloadKind::YcsbE => {
@@ -249,38 +248,41 @@ async fn execute_operation(
             }
         }
         WorkloadKind::YcsbF => {
-            if rng.random_bool(0.5) {
-                read(db, variant, selector.sample(rng), "read", stats).await
-            } else {
-                let id = selector.sample(rng);
-                let key = key_for_id(id, variant.key_bytes());
-                let previous = stats
-                    .measure_api("get", db.get(key.clone()))
-                    .await
-                    .map_err(|error| OperationError::Other(error.into()))?
-                    .context("read-modify-write key not found")
-                    .map_err(OperationError::Other)?;
-                let value = random_value(variant.value_bytes(), rng);
-                let handle = stats
-                    .measure_api(
-                        "put",
-                        db.put_with_options(
-                            key,
-                            value.clone(),
-                            &PutOptions::default(),
-                            write_options,
-                        ),
-                    )
-                    .await
-                    .map_err(|error| OperationError::Other(error.into()))?;
-                Ok(OperationOutcome {
-                    name: "read-modify-write",
-                    payload: Payload::read_write(previous.len() as u64, value.len() as u64),
-                    batch_keys: 0,
-                    write_handle: Some(handle),
-                    transaction_commit: false,
-                })
+            async {
+                if rng.random_bool(0.5) {
+                    read(db, variant, selector.sample(rng), "read", stats).await
+                } else {
+                    let id = selector.sample(rng);
+                    let key = key_for_id(id, variant.key_bytes());
+                    let previous = stats
+                        .measure_api("get", db.get(key.clone()))
+                        .await
+                        .map_err(|error| OperationError::Other(error.into()))?
+                        .context("read-modify-write key not found")
+                        .map_err(OperationError::Other)?;
+                    let value = random_value(variant.value_bytes(), rng);
+                    let handle = stats
+                        .measure_api(
+                            "put",
+                            db.put_with_options(
+                                key,
+                                value.clone(),
+                                &PutOptions::default(),
+                                write_options,
+                            ),
+                        )
+                        .await
+                        .map_err(|error| OperationError::Other(error.into()))?;
+                    Ok(OperationOutcome {
+                        name: "read-modify-write",
+                        payload: Payload::read_write(previous.len() as u64, value.len() as u64),
+                        batch_keys: 0,
+                        write_handle: Some(handle),
+                        transaction_commit: false,
+                    })
+                }
             }
+            .await
         }
         WorkloadKind::MultiRandomRead => multi_read(db, variant, selector, rng, stats).await,
         WorkloadKind::ForwardRange => {
@@ -302,23 +304,31 @@ async fn execute_operation(
             .await
         }
         WorkloadKind::SustainedIngest => {
-            let id = state.next_insert.fetch_add(1, Ordering::Relaxed);
-            let key = random_unique_key(id, variant.key_bytes(), rng);
-            let value = random_value(variant.value_bytes(), rng);
-            let handle = stats
-                .measure_api(
-                    "put",
-                    db.put_with_options(key, value.clone(), &PutOptions::default(), write_options),
-                )
-                .await
-                .map_err(|error| OperationError::Other(error.into()))?;
-            Ok(OperationOutcome {
-                name: "insert",
-                payload: Payload::write(value.len() as u64),
-                batch_keys: 0,
-                write_handle: Some(handle),
-                transaction_commit: false,
-            })
+            async {
+                let id = state.next_insert.fetch_add(1, Ordering::Relaxed);
+                let key = random_unique_key(id, variant.key_bytes(), rng);
+                let value = random_value(variant.value_bytes(), rng);
+                let handle = stats
+                    .measure_api(
+                        "put",
+                        db.put_with_options(
+                            key,
+                            value.clone(),
+                            &PutOptions::default(),
+                            write_options,
+                        ),
+                    )
+                    .await
+                    .map_err(|error| OperationError::Other(error.into()))?;
+                Ok(OperationOutcome {
+                    name: "insert",
+                    payload: Payload::write(value.len() as u64),
+                    batch_keys: 0,
+                    write_handle: Some(handle),
+                    transaction_commit: false,
+                })
+            }
+            .await
         }
         WorkloadKind::TransactionContention => {
             transaction(db, variant, write_options, rng, stats).await
@@ -327,6 +337,33 @@ async fn execute_operation(
         other => Err(OperationError::Other(anyhow::anyhow!(
             "unsupported closed-loop operation {other:?}"
         ))),
+    };
+    OperationCompletion {
+        result,
+        latency: started.elapsed(),
+    }
+}
+
+async fn ycsb_d_insert(
+    db: &Db,
+    variant: &VariantConfig,
+    write_options: &WriteOptions,
+    state: &ClosedLoopState,
+    rng: &mut StdRng,
+    stats: &mut WorkerStats,
+) -> OperationCompletion {
+    let _guard = state.insert_lock.lock().await;
+    let started = Instant::now();
+    let id = state.next_insert.load(Ordering::Relaxed);
+    let result = update(db, variant, id, write_options, rng, "insert", stats).await;
+    if result.is_ok() {
+        state
+            .next_insert
+            .store(id.saturating_add(1), Ordering::Release);
+    }
+    OperationCompletion {
+        result,
+        latency: started.elapsed(),
     }
 }
 
@@ -788,4 +825,61 @@ pub async fn populate_dataset(
     }
     db.flush().await.context("flushing loaded dataset")?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ycsb_d_insert, ClosedLoopState, WorkerStats};
+    use crate::config::BenchmarkConfig;
+    use anyhow::{Context, Result};
+    use object_store::memory::InMemory;
+    use rand::rngs::StdRng;
+    use rand::SeedableRng;
+    use slatedb::config::WriteOptions;
+    use slatedb::Db;
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    #[tokio::test]
+    async fn ycsb_d_insert_latency_excludes_insert_lock_wait() -> Result<()> {
+        let benchmark = BenchmarkConfig::load_from(std::path::Path::new("config"))?;
+        let variant = benchmark
+            .select(Some("ycsb"), Some("ycsb-d"), Some("clients-1"))?
+            .pop()
+            .context("missing YCSB-D test variant")?;
+        let db = Db::open("ycsb-d-insert-latency-test", Arc::new(InMemory::new())).await?;
+        let state = ClosedLoopState::new(1);
+        let held_lock = Arc::clone(&state.insert_lock).lock_owned().await;
+        let lock_delay = Duration::from_millis(50);
+        let release = tokio::spawn(async move {
+            tokio::time::sleep(lock_delay).await;
+            drop(held_lock);
+        });
+        let mut rng = StdRng::seed_from_u64(1);
+        let mut stats = WorkerStats::default();
+        let write_options = WriteOptions {
+            await_durable: false,
+            ..Default::default()
+        };
+
+        let wall_started = Instant::now();
+        let completion =
+            ycsb_d_insert(&db, &variant, &write_options, &state, &mut rng, &mut stats).await;
+        let wall_elapsed = wall_started.elapsed();
+        release.await.context("joining insert-lock release task")?;
+
+        assert!(completion.result.is_ok());
+        assert_eq!(
+            state.next_insert.load(std::sync::atomic::Ordering::Acquire),
+            2
+        );
+        assert!(
+            wall_elapsed.saturating_sub(completion.latency) >= lock_delay / 2,
+            "reported latency {:?} did not exclude lock wait from wall time {:?}",
+            completion.latency,
+            wall_elapsed
+        );
+        db.close().await?;
+        Ok(())
+    }
 }
