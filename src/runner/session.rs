@@ -100,20 +100,19 @@ pub(super) async fn execute(
         .suite
         .as_deref()
         .context("resumable sessions require --suite")?;
-    let workload_name = args
-        .workload
-        .as_deref()
-        .context("resumable sessions require --workload")?;
+    let selected_workload = args.workload.as_deref();
     ensure!(
         args.variant.is_none(),
         "resumable sessions execute complete workloads, not individual variants"
     );
-    ensure!(
-        requested
-            .iter()
-            .all(|variant| variant.workload.name == workload_name),
-        "session selection contains more than one workload"
-    );
+    if let Some(workload_name) = selected_workload {
+        ensure!(
+            requested
+                .iter()
+                .all(|variant| variant.workload.name == workload_name),
+            "workload session selection contains more than one workload"
+        );
+    }
     let all_variants = benchmark.select(Some(suite_name), None, None)?;
     let suite = &all_variants
         .first()
@@ -172,101 +171,115 @@ pub(super) async fn execute(
         &state.object_store_baseline,
     )?;
 
-    if state
-        .completed
-        .iter()
-        .any(|completed| completed.name == workload_name)
-    {
-        tracing::info!(
-            session,
-            workload = workload_name,
-            "restored completed workload"
-        );
-        write_run_manifest(args, benchmark, suite_name, &state)?;
-        cleanup_completed_session(&mut state, object_store, &session_root, &state_path).await?;
-        print_success(args);
-        return Ok(());
-    }
-
-    let next = suite
-        .workloads
-        .get(state.completed.len())
-        .context("session already completed every configured workload")?;
-    ensure!(
-        next.name == workload_name,
-        "session expects workload {}, not {}",
-        next.name,
-        workload_name
-    );
-    clear_local_workload_output(&args.output, suite_name, workload_name)?;
-
-    let baseline = state.object_store_baseline.clone();
-    let baseline_histograms = state.baseline_histograms.clone();
-    let result_context = ResultContext {
-        environment,
-        baseline: &baseline,
-        baseline_histograms: &baseline_histograms,
-        args,
-    };
-    let store: Arc<dyn ObjectStore> = object_store.instrumented.clone();
-    let stage_root = session_root
-        .clone()
-        .join("databases")
-        .join("stages")
-        .join(format!("{:03}-{}", state.completed.len(), workload_name));
-    delete_prefix(Arc::clone(&store), &stage_root)
-        .await
-        .context("removing an abandoned workload candidate")?;
-
-    let (results, sequential_checkpoint) = match suite.execution {
-        SuiteExecution::Sequential => {
-            execute_sequential_workload(
-                &requested,
-                stage_root,
-                &state,
-                Arc::clone(&store),
-                object_store.instrumented.metrics(),
-                !object_store.provider.eq_ignore_ascii_case("memory"),
-                session,
-                &result_context,
-            )
-            .await?
+    for workload in &suite.workloads {
+        let workload_name = workload.name.as_str();
+        if selected_workload.is_some_and(|selected| selected != workload_name) {
+            continue;
         }
-        SuiteExecution::Isolated => {
-            let results = execute_isolated_workload(
-                &requested,
-                stage_root,
-                &mut state,
-                &state_path,
+        if state
+            .completed
+            .iter()
+            .any(|completed| completed.name == workload_name)
+        {
+            tracing::info!(
+                session,
+                workload = workload_name,
+                "restored completed workload"
+            );
+            continue;
+        }
+        let workload_variants = requested
+            .iter()
+            .filter(|variant| variant.workload.name == workload_name)
+            .cloned()
+            .collect::<Vec<_>>();
+        ensure!(
+            !workload_variants.is_empty(),
+            "session selection does not contain workload {workload_name}"
+        );
+
+        let next = suite
+            .workloads
+            .get(state.completed.len())
+            .context("session already completed every configured workload")?;
+        ensure!(
+            next.name == workload_name,
+            "session expects workload {}, not {}",
+            next.name,
+            workload_name
+        );
+        clear_local_workload_output(&args.output, suite_name, workload_name)?;
+
+        let baseline = state.object_store_baseline.clone();
+        let baseline_histograms = state.baseline_histograms.clone();
+        let result_context = ResultContext {
+            environment,
+            baseline: &baseline,
+            baseline_histograms: &baseline_histograms,
+            args,
+        };
+        let store: Arc<dyn ObjectStore> = object_store.instrumented.clone();
+        let stage_root = session_root
+            .clone()
+            .join("databases")
+            .join("stages")
+            .join(format!("{:03}-{}", state.completed.len(), workload_name));
+        delete_prefix(Arc::clone(&store), &stage_root)
+            .await
+            .context("removing an abandoned workload candidate")?;
+
+        let (results, sequential_checkpoint) = match suite.execution {
+            SuiteExecution::Sequential => {
+                execute_sequential_workload(
+                    &workload_variants,
+                    stage_root,
+                    &state,
+                    Arc::clone(&store),
+                    object_store.instrumented.metrics(),
+                    !object_store.provider.eq_ignore_ascii_case("memory"),
+                    session,
+                    &result_context,
+                )
+                .await?
+            }
+            SuiteExecution::Isolated => {
+                let results = execute_isolated_workload(
+                    &workload_variants,
+                    stage_root,
+                    &mut state,
+                    &state_path,
+                    &session_root,
+                    object_store,
+                    &result_context,
+                )
+                .await?;
+                (results, None)
+            }
+        };
+
+        state.completed.push(CompletedWorkload {
+            name: workload_name.to_string(),
+            results: results.clone(),
+        });
+        if let Some(checkpoint) = sequential_checkpoint {
+            state.sequential_databases.push(checkpoint);
+        }
+        state.measurement_complete = state.completed.len() == suite.workloads.len();
+        write_run_manifest(args, benchmark, suite_name, &state)?;
+        validate_output(&args.output)?;
+        for result in &results {
+            persist_result(
+                Arc::clone(&object_store.raw),
                 &session_root,
-                object_store,
-                &result_context,
+                &args.output,
+                result,
             )
             .await?;
-            (results, None)
         }
-    };
+        save_state(Arc::clone(&object_store.raw), &state_path, &state).await?;
+    }
 
-    state.completed.push(CompletedWorkload {
-        name: workload_name.to_string(),
-        results: results.clone(),
-    });
-    if let Some(checkpoint) = sequential_checkpoint {
-        state.sequential_databases.push(checkpoint);
-    }
-    state.measurement_complete = state.completed.len() == suite.workloads.len();
     write_run_manifest(args, benchmark, suite_name, &state)?;
-    validate_output(&args.output)?;
-    for result in &results {
-        persist_result(
-            Arc::clone(&object_store.raw),
-            &session_root,
-            &args.output,
-            result,
-        )
-        .await?;
-    }
-    save_state(Arc::clone(&object_store.raw), &state_path, &state).await?;
     cleanup_completed_session(&mut state, object_store, &session_root, &state_path).await?;
     print_success(args);
     Ok(())
@@ -758,8 +771,13 @@ mod tests {
         append_path, checkpoint_database, compatible_environment, hydrate_results, load_state,
         persist_result, save_state, CompletedWorkload, SessionState, RESULT_FILES,
     };
+    use crate::cli::RunArgs;
+    use crate::config::BenchmarkConfig;
+    use crate::instrumented_store::InstrumentedStore;
     use crate::model::{Environment, ObjectStoreBaseline};
+    use crate::object_store_probe::ObjectStoreContext;
     use crate::runner::clone_database;
+    use crate::validation::validate_output;
     use bytes::Bytes;
     use object_store::memory::InMemory;
     use object_store::path::Path;
@@ -837,6 +855,95 @@ mod tests {
                 name
             );
         }
+    }
+
+    #[tokio::test]
+    async fn suite_session_restores_completed_workloads_into_a_new_output() {
+        let raw: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let instrumented = Arc::new(InstrumentedStore::new(Arc::clone(&raw)));
+        let object_store = ObjectStoreContext {
+            raw: Arc::clone(&raw),
+            instrumented,
+            root: Path::from("suite-resume"),
+            provider: "memory".to_string(),
+            endpoint: "memory".to_string(),
+            region: "test".to_string(),
+        };
+        let benchmark = BenchmarkConfig::load_from(std::path::Path::new("config"))
+            .expect("load benchmark config");
+        let selected = benchmark
+            .select(Some("smoke"), None, None)
+            .expect("select smoke suite");
+        let environment = Environment {
+            runner_type: "test".to_string(),
+            hostname: "test-host".to_string(),
+            cpu_model: "test-cpu".to_string(),
+            cpu_cores: 1,
+            ram_bytes: 1,
+            local_disk: "memory".to_string(),
+            os: "test".to_string(),
+            kernel: "test".to_string(),
+            object_store: "memory".to_string(),
+            endpoint: "memory".to_string(),
+            region: "test".to_string(),
+        };
+        let first_output = tempdir().expect("first output");
+        let args = RunArgs {
+            suite: Some("smoke".to_string()),
+            session: Some("suite-session".to_string()),
+            workload: None,
+            variant: None,
+            output: first_output.path().to_path_buf(),
+            config_dir: PathBuf::from("config"),
+            schema_dir: PathBuf::from("schema"),
+        };
+
+        super::execute(
+            &args,
+            &benchmark,
+            selected.clone(),
+            &object_store,
+            &environment,
+        )
+        .await
+        .expect("execute complete suite session");
+        validate_output(first_output.path()).expect("validate first output");
+
+        let state_path = Path::from("suite-resume/sessions/suite-session/resume.json");
+        let state = load_state(Arc::clone(&raw), &state_path)
+            .await
+            .expect("load completed state")
+            .expect("completed state exists");
+        let suite = selected.first().expect("selected variant").suite.clone();
+        assert!(state.measurement_complete);
+        assert_eq!(
+            state
+                .completed
+                .iter()
+                .map(|workload| workload.name.as_str())
+                .collect::<Vec<_>>(),
+            suite
+                .workloads
+                .iter()
+                .map(|workload| workload.name.as_str())
+                .collect::<Vec<_>>()
+        );
+
+        let second_output = tempdir().expect("second output");
+        let resumed_args = RunArgs {
+            output: second_output.path().to_path_buf(),
+            ..args
+        };
+        super::execute(
+            &resumed_args,
+            &benchmark,
+            selected,
+            &object_store,
+            &environment,
+        )
+        .await
+        .expect("resume completed suite session");
+        validate_output(second_output.path()).expect("validate resumed output");
     }
 
     #[tokio::test]

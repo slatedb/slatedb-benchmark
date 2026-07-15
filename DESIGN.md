@@ -91,16 +91,17 @@ RocksDB-derived suite can finish its bulk load and twelve hours of timed
 measurements in one job:
 
 ```text
-                         /-> rocksdb job: workload -> workload -> ... -> publish suite
-build runner artifact --+-> slatedb job: workload -> workload -> ... -> publish suite
-                         \-> ycsb job:    workload -> workload -> ... -> publish suite
+                         /-> rocksdb job: run suite -> publish suite
+build runner artifact --+-> slatedb job: run suite -> publish suite
+                         \-> ycsb job:    run suite -> publish suite
 ```
 
-Every suite job has its own Tigris bucket in the `fra` region. Workloads within
-a job run in the order declared by the suite, followed by one publication step
-after the suite completes. A workload invocation runs all of that workload's
-variants, validates the accumulated suite output, and commits its result bundle
-and any database checkpoint to object storage before returning success:
+Every suite job has its own Tigris bucket in the `fra` region. One runner
+invocation executes the workloads in declaration order, followed by one
+publication step after the suite completes. The runner preserves a commit
+boundary after each workload: it validates the accumulated suite output and
+commits the workload's result bundle and any database checkpoint before moving
+to the next workload:
 
 ```text
 restore session -> measure workload -> validate -> commit session
@@ -516,12 +517,11 @@ covers all measured writes, resource samples span the measurement window, and
 the workload used the expected initial manifest. Secrets, credentials, and
 signed URLs are rejected from result files.
 
-Every workload in every release suite is a run step. One publish step runs after
-all workloads in that suite complete. A publication failure does not invalidate
-the object-store commits: rerunning the GitHub job with the same run ID restores
-and skips every completed workload, then retries suite publication without
-measuring them again. The same behavior applies to isolated and sequential
-suites.
+Every release suite has one run step and one publish step. A publication failure
+does not invalidate the per-workload object-store commits: rerunning the GitHub
+job with the same run ID restores and skips every completed workload, then
+retries suite publication without measuring them again. The same behavior
+applies to isolated and sequential suites.
 
 Publication replaces that suite's destination with all of its validated
 workload and variant results in a fresh checkout of `main`, commits only that

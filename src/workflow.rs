@@ -146,47 +146,37 @@ pub fn render(benchmark: &BenchmarkConfig) -> Result<String> {
             "      SLATEDB_BENCH_PREFIX: release/${{ needs.build-runner.outputs.slate_version }}\n",
         );
         output.push_str(SUITE_STEPS);
-        for (workload_index, workload) in suite.workloads.iter().enumerate() {
-            writeln!(
-                output,
-                "      - name: Run {} / {}",
-                suite.name, workload.name
-            )?;
-            output.push_str("        run: |\n");
-            output.push_str("          bin/slatedb-benchmark run \\\n");
-            writeln!(output, "            --suite \"{}\" \\", suite.name)?;
-            writeln!(output, "            --workload \"{}\" \\", workload.name)?;
-            output.push_str("            --session \"github-${{ github.run_id }}-");
-            output.push_str(&suite.name);
-            output.push_str("\" \\\n");
-            writeln!(output, "            --output \".runs/{}\"", suite.name)?;
-            writeln!(
-                output,
-                "          bin/slatedb-benchmark validate --output \".runs/{}\"",
-                suite.name
-            )?;
-            if workload_index + 1 != suite.workloads.len() {
-                continue;
-            }
-            writeln!(output, "      - name: Publish {} suite", suite.name)?;
-            output.push_str("        run: |\n");
-            output.push_str("          ./scripts/publish-results.sh \\\n");
-            writeln!(output, "            \".runs/{}\" \\", suite.name)?;
-            output.push_str("            \"${{ needs.build-runner.outputs.slate_version }}\" \\\n");
-            writeln!(output, "            \"{}\" \\", suite.name)?;
-            output.push_str("            publish\n");
-            writeln!(output, "      - name: Deploy {} suite", suite.name)?;
-            output.push_str("        uses: actions/github-script@v9\n");
-            output.push_str("        with:\n");
-            output.push_str("          github-token: ${{ github.token }}\n");
-            output.push_str("          script: |\n");
-            output.push_str("            await github.rest.actions.createWorkflowDispatch({\n");
-            output.push_str("              owner: context.repo.owner,\n");
-            output.push_str("              repo: context.repo.repo,\n");
-            output.push_str("              workflow_id: \"pages.yml\",\n");
-            output.push_str("              ref: \"main\",\n");
-            output.push_str("            });\n");
-        }
+        writeln!(output, "      - name: Run {} suite", suite.name)?;
+        output.push_str("        run: |\n");
+        output.push_str("          bin/slatedb-benchmark run \\\n");
+        writeln!(output, "            --suite \"{}\" \\", suite.name)?;
+        output.push_str("            --session \"github-${{ github.run_id }}-");
+        output.push_str(&suite.name);
+        output.push_str("\" \\\n");
+        writeln!(output, "            --output \".runs/{}\"", suite.name)?;
+        writeln!(
+            output,
+            "          bin/slatedb-benchmark validate --output \".runs/{}\"",
+            suite.name
+        )?;
+        writeln!(output, "      - name: Publish {} suite", suite.name)?;
+        output.push_str("        run: |\n");
+        output.push_str("          ./scripts/publish-results.sh \\\n");
+        writeln!(output, "            \".runs/{}\" \\", suite.name)?;
+        output.push_str("            \"${{ needs.build-runner.outputs.slate_version }}\" \\\n");
+        writeln!(output, "            \"{}\" \\", suite.name)?;
+        output.push_str("            publish\n");
+        writeln!(output, "      - name: Deploy {} suite", suite.name)?;
+        output.push_str("        uses: actions/github-script@v9\n");
+        output.push_str("        with:\n");
+        output.push_str("          github-token: ${{ github.token }}\n");
+        output.push_str("          script: |\n");
+        output.push_str("            await github.rest.actions.createWorkflowDispatch({\n");
+        output.push_str("              owner: context.repo.owner,\n");
+        output.push_str("              repo: context.repo.repo,\n");
+        output.push_str("              workflow_id: \"pages.yml\",\n");
+        output.push_str("              ref: \"main\",\n");
+        output.push_str("            });\n");
         output.push_str("      - name: Preserve suite artifacts\n");
         output.push_str("        if: always()\n");
         output.push_str("        uses: actions/upload-artifact@v4\n");
@@ -228,6 +218,9 @@ mod tests {
             .filter(|suite| suite.release)
             .count();
         let workflow = render(&benchmark).expect("render workflow");
+        let runs = workflow
+            .matches("          bin/slatedb-benchmark run")
+            .count();
         let publishes = workflow
             .matches("          ./scripts/publish-results.sh")
             .count();
@@ -236,6 +229,8 @@ mod tests {
             .count();
 
         assert!(workflow.contains("      actions: write"));
+        assert!(!workflow.contains("            --workload"));
+        assert_eq!(runs, release_suites);
         assert_eq!(publishes, release_suites);
         assert_eq!(dispatches, release_suites);
     }

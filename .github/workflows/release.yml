@@ -97,75 +97,10 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: publish/website/package-lock.json
-      - name: Run rocksdb / bulk-load
+      - name: Run rocksdb suite
         run: |
           bin/slatedb-benchmark run \
             --suite "rocksdb" \
-            --workload "bulk-load" \
-            --session "github-${{ github.run_id }}-rocksdb" \
-            --output ".runs/rocksdb"
-          bin/slatedb-benchmark validate --output ".runs/rocksdb"
-      - name: Run rocksdb / random-read
-        run: |
-          bin/slatedb-benchmark run \
-            --suite "rocksdb" \
-            --workload "random-read" \
-            --session "github-${{ github.run_id }}-rocksdb" \
-            --output ".runs/rocksdb"
-          bin/slatedb-benchmark validate --output ".runs/rocksdb"
-      - name: Run rocksdb / multi-random-read
-        run: |
-          bin/slatedb-benchmark run \
-            --suite "rocksdb" \
-            --workload "multi-random-read" \
-            --session "github-${{ github.run_id }}-rocksdb" \
-            --output ".runs/rocksdb"
-          bin/slatedb-benchmark validate --output ".runs/rocksdb"
-      - name: Run rocksdb / forward-range
-        run: |
-          bin/slatedb-benchmark run \
-            --suite "rocksdb" \
-            --workload "forward-range" \
-            --session "github-${{ github.run_id }}-rocksdb" \
-            --output ".runs/rocksdb"
-          bin/slatedb-benchmark validate --output ".runs/rocksdb"
-      - name: Run rocksdb / reverse-range
-        run: |
-          bin/slatedb-benchmark run \
-            --suite "rocksdb" \
-            --workload "reverse-range" \
-            --session "github-${{ github.run_id }}-rocksdb" \
-            --output ".runs/rocksdb"
-          bin/slatedb-benchmark validate --output ".runs/rocksdb"
-      - name: Run rocksdb / overwrite
-        run: |
-          bin/slatedb-benchmark run \
-            --suite "rocksdb" \
-            --workload "overwrite" \
-            --session "github-${{ github.run_id }}-rocksdb" \
-            --output ".runs/rocksdb"
-          bin/slatedb-benchmark validate --output ".runs/rocksdb"
-      - name: Run rocksdb / read-while-writing
-        run: |
-          bin/slatedb-benchmark run \
-            --suite "rocksdb" \
-            --workload "read-while-writing" \
-            --session "github-${{ github.run_id }}-rocksdb" \
-            --output ".runs/rocksdb"
-          bin/slatedb-benchmark validate --output ".runs/rocksdb"
-      - name: Run rocksdb / forward-range-while-writing
-        run: |
-          bin/slatedb-benchmark run \
-            --suite "rocksdb" \
-            --workload "forward-range-while-writing" \
-            --session "github-${{ github.run_id }}-rocksdb" \
-            --output ".runs/rocksdb"
-          bin/slatedb-benchmark validate --output ".runs/rocksdb"
-      - name: Run rocksdb / reverse-range-while-writing
-        run: |
-          bin/slatedb-benchmark run \
-            --suite "rocksdb" \
-            --workload "reverse-range-while-writing" \
             --session "github-${{ github.run_id }}-rocksdb" \
             --output ".runs/rocksdb"
           bin/slatedb-benchmark validate --output ".runs/rocksdb"
@@ -236,51 +171,10 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: publish/website/package-lock.json
-      - name: Run slatedb / cold-read
+      - name: Run slatedb suite
         run: |
           bin/slatedb-benchmark run \
             --suite "slatedb" \
-            --workload "cold-read" \
-            --session "github-${{ github.run_id }}-slatedb" \
-            --output ".runs/slatedb"
-          bin/slatedb-benchmark validate --output ".runs/slatedb"
-      - name: Run slatedb / open-loop-read
-        run: |
-          bin/slatedb-benchmark run \
-            --suite "slatedb" \
-            --workload "open-loop-read" \
-            --session "github-${{ github.run_id }}-slatedb" \
-            --output ".runs/slatedb"
-          bin/slatedb-benchmark validate --output ".runs/slatedb"
-      - name: Run slatedb / open-loop-read-update
-        run: |
-          bin/slatedb-benchmark run \
-            --suite "slatedb" \
-            --workload "open-loop-read-update" \
-            --session "github-${{ github.run_id }}-slatedb" \
-            --output ".runs/slatedb"
-          bin/slatedb-benchmark validate --output ".runs/slatedb"
-      - name: Run slatedb / prefix-scan
-        run: |
-          bin/slatedb-benchmark run \
-            --suite "slatedb" \
-            --workload "prefix-scan" \
-            --session "github-${{ github.run_id }}-slatedb" \
-            --output ".runs/slatedb"
-          bin/slatedb-benchmark validate --output ".runs/slatedb"
-      - name: Run slatedb / sustained-ingest
-        run: |
-          bin/slatedb-benchmark run \
-            --suite "slatedb" \
-            --workload "sustained-ingest" \
-            --session "github-${{ github.run_id }}-slatedb" \
-            --output ".runs/slatedb"
-          bin/slatedb-benchmark validate --output ".runs/slatedb"
-      - name: Run slatedb / transaction-contention
-        run: |
-          bin/slatedb-benchmark run \
-            --suite "slatedb" \
-            --workload "transaction-contention" \
             --session "github-${{ github.run_id }}-slatedb" \
             --output ".runs/slatedb"
           bin/slatedb-benchmark validate --output ".runs/slatedb"
@@ -351,51 +245,10 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: publish/website/package-lock.json
-      - name: Run ycsb / ycsb-a
+      - name: Run ycsb suite
         run: |
           bin/slatedb-benchmark run \
             --suite "ycsb" \
-            --workload "ycsb-a" \
-            --session "github-${{ github.run_id }}-ycsb" \
-            --output ".runs/ycsb"
-          bin/slatedb-benchmark validate --output ".runs/ycsb"
-      - name: Run ycsb / ycsb-b
-        run: |
-          bin/slatedb-benchmark run \
-            --suite "ycsb" \
-            --workload "ycsb-b" \
-            --session "github-${{ github.run_id }}-ycsb" \
-            --output ".runs/ycsb"
-          bin/slatedb-benchmark validate --output ".runs/ycsb"
-      - name: Run ycsb / ycsb-c
-        run: |
-          bin/slatedb-benchmark run \
-            --suite "ycsb" \
-            --workload "ycsb-c" \
-            --session "github-${{ github.run_id }}-ycsb" \
-            --output ".runs/ycsb"
-          bin/slatedb-benchmark validate --output ".runs/ycsb"
-      - name: Run ycsb / ycsb-d
-        run: |
-          bin/slatedb-benchmark run \
-            --suite "ycsb" \
-            --workload "ycsb-d" \
-            --session "github-${{ github.run_id }}-ycsb" \
-            --output ".runs/ycsb"
-          bin/slatedb-benchmark validate --output ".runs/ycsb"
-      - name: Run ycsb / ycsb-e
-        run: |
-          bin/slatedb-benchmark run \
-            --suite "ycsb" \
-            --workload "ycsb-e" \
-            --session "github-${{ github.run_id }}-ycsb" \
-            --output ".runs/ycsb"
-          bin/slatedb-benchmark validate --output ".runs/ycsb"
-      - name: Run ycsb / ycsb-f
-        run: |
-          bin/slatedb-benchmark run \
-            --suite "ycsb" \
-            --workload "ycsb-f" \
             --session "github-${{ github.run_id }}-ycsb" \
             --output ".runs/ycsb"
           bin/slatedb-benchmark validate --output ".runs/ycsb"

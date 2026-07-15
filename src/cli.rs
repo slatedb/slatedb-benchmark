@@ -32,7 +32,7 @@ pub struct RunArgs {
     #[arg(long)]
     pub suite: Option<String>,
     /// Stable name used to create or resume a suite in object storage.
-    #[arg(long, requires = "workload")]
+    #[arg(long, requires = "suite")]
     pub session: Option<String>,
     #[arg(long, requires = "suite")]
     pub workload: Option<String>,
@@ -89,4 +89,32 @@ pub struct WorkerArgs {
     pub output: PathBuf,
     #[arg(long, default_value = "config")]
     pub config_dir: PathBuf,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Cli, Command};
+    use clap::Parser;
+
+    #[test]
+    fn resumable_session_can_select_a_whole_suite() {
+        let cli = Cli::try_parse_from([
+            "slatedb-benchmark",
+            "run",
+            "--suite",
+            "rocksdb",
+            "--session",
+            "release-123",
+            "--output",
+            ".runs/rocksdb",
+        ])
+        .expect("parse suite session");
+
+        let Command::Run(args) = cli.command else {
+            panic!("expected run command");
+        };
+        assert_eq!(args.suite.as_deref(), Some("rocksdb"));
+        assert_eq!(args.session.as_deref(), Some("release-123"));
+        assert!(args.workload.is_none());
+    }
 }
