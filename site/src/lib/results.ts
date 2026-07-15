@@ -70,7 +70,6 @@ export type PricingTable = {
   currency: string;
   units: { gib_bytes: number; month_days: number };
   providers: PricingProvider[];
-  notes: string[];
 };
 
 export type Latency = {
