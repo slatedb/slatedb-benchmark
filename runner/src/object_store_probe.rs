@@ -52,8 +52,7 @@ impl ObjectStoreContext {
             }
             other => bail!("unsupported CLOUD_PROVIDER {other}; expected aws, memory, or local"),
         };
-        let prefix = env::var("SLATEDB_BENCH_PREFIX")
-            .unwrap_or_else(|_| format!("manual/{}", Uuid::new_v4()));
+        let prefix = env::var("SLATEDB_BENCH_PREFIX").unwrap_or_else(|_| "manual".to_string());
         let endpoint = env::var("AWS_ENDPOINT_URL_S3")
             .or_else(|_| env::var("AWS_ENDPOINT"))
             .unwrap_or_else(|_| "https://fly.storage.tigris.dev".to_string());

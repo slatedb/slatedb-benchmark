@@ -1,3 +1,5 @@
+mod session;
+
 use crate::cli::{RunArgs, WorkerArgs};
 use crate::config::{BenchmarkConfig, SuiteConfig, SuiteExecution, VariantConfig, WorkloadKind};
 use crate::cost::PriceTable;
@@ -52,7 +54,6 @@ struct GoldenManager {
     store: Arc<dyn ObjectStore>,
     root: Path,
     values: HashMap<String, GoldenDatabase>,
-    cleanup_paths: Vec<Path>,
 }
 
 struct ResultContext<'a> {
@@ -64,7 +65,7 @@ struct ResultContext<'a> {
 }
 
 pub async fn execute(args: RunArgs) -> Result<()> {
-    if args.output.exists() {
+    if args.output.exists() && args.session.is_none() {
         bail!("output directory {} already exists", args.output.display());
     }
     fs::create_dir_all(&args.output)
@@ -101,6 +102,18 @@ async fn execute_inner(args: &RunArgs) -> Result<()> {
         &object_store.endpoint,
         &object_store.region,
     );
+
+    if args.session.is_some() {
+        return session::execute(
+            args,
+            &benchmark,
+            selected,
+            &prices,
+            &object_store,
+            &environment,
+        )
+        .await;
+    }
 
     let mut by_suite = BTreeMap::<String, Vec<VariantConfig>>::new();
     for variant in selected {
@@ -188,7 +201,6 @@ async fn execute_suite(
         store: Arc::clone(&store),
         root: run_root.clone(),
         values: HashMap::new(),
-        cleanup_paths: Vec::new(),
     };
 
     let run_result = async {
@@ -213,77 +225,18 @@ async fn execute_suite(
                 .join("clones")
                 .join(variant.workload.name.as_str())
                 .join(format!("{}-{}", variant.variant, Uuid::new_v4()));
-            clone_database(
-                Arc::clone(&store),
-                &clone_path,
-                &golden.path,
-                golden.checkpoint_id,
-            )
-            .await?;
-            golden_manager.cleanup_paths.push(clone_path.clone());
-
-            let recorder = Arc::new(BenchmarkMetricsRecorder::new());
-            let db = open_database(
-                clone_path.clone(),
-                Arc::clone(&store),
-                &variant.suite,
-                &variant.slate_settings,
-                Arc::clone(&recorder),
-            )
-            .await?;
-            let clone_digest = lsm_digest(&db)?;
-            if clone_digest != golden.lsm_digest {
-                bail!("clone {} does not match checkpoint LSM state", clone_path);
-            }
-            let initial = InitialState {
-                checkpoint_id: Some(golden.checkpoint_id.to_string()),
-                manifest_id: Some(golden.manifest_id),
-                lsm_digest_sha256: clone_digest,
-            };
-            db.close()
-                .await
-                .context("closing clone validation handle")?;
-            let mut outcome = if object_store.provider.eq_ignore_ascii_case("memory") {
-                let recorder = Arc::new(BenchmarkMetricsRecorder::new());
-                let db = open_database(
-                    clone_path.clone(),
+            result_paths.push(
+                execute_isolated_variant(
+                    variant,
+                    clone_path,
+                    &golden,
                     Arc::clone(&store),
-                    &variant.suite,
-                    &variant.slate_settings,
-                    Arc::clone(&recorder),
-                )
-                .await?;
-                let outcome = execute_variant(
-                    Arc::clone(&db),
-                    variant,
                     object_store.instrumented.metrics(),
-                    recorder,
-                    clone_path.clone(),
-                    golden.size_bytes,
+                    !object_store.provider.eq_ignore_ascii_case("memory"),
+                    result_context,
                 )
-                .await;
-                db.close().await.context("closing benchmark clone")?;
-                outcome?
-            } else {
-                execute_variant_in_fresh_process(
-                    variant,
-                    &clone_path,
-                    golden.size_bytes,
-                    &golden.lsm_digest,
-                    result_context.args,
-                )
-                .await?
-            };
-            let clone_size = prefix_size(Arc::clone(&store), &clone_path).await?;
-            outcome.storage.database_size_bytes = golden.size_bytes.saturating_add(clone_size);
-            result_paths.push(write_variant_result(
-                variant,
-                outcome,
-                initial,
-                golden.size_bytes,
-                result_context,
-            )?);
-            delete_prefix(Arc::clone(&store), &clone_path).await?;
+                .await?,
+            );
         }
         Ok(result_paths)
     }
@@ -295,6 +248,88 @@ async fn execute_suite(
     cleanup_result?;
     run_cleanup?;
     Ok(result_paths)
+}
+
+async fn execute_isolated_variant(
+    variant: &VariantConfig,
+    clone_path: Path,
+    golden: &GoldenDatabase,
+    store: Arc<dyn ObjectStore>,
+    store_metrics: Arc<StoreMetrics>,
+    fresh_process: bool,
+    result_context: &ResultContext<'_>,
+) -> Result<String> {
+    clone_database(
+        Arc::clone(&store),
+        &clone_path,
+        &golden.path,
+        golden.checkpoint_id,
+    )
+    .await?;
+    let result = async {
+        let recorder = Arc::new(BenchmarkMetricsRecorder::new());
+        let db = open_database(
+            clone_path.clone(),
+            Arc::clone(&store),
+            &variant.suite,
+            &variant.slate_settings,
+            Arc::clone(&recorder),
+        )
+        .await?;
+        let clone_digest = lsm_digest(&db)?;
+        if clone_digest != golden.lsm_digest {
+            bail!("clone {} does not match checkpoint LSM state", clone_path);
+        }
+        let initial = InitialState {
+            checkpoint_id: Some(golden.checkpoint_id.to_string()),
+            manifest_id: Some(golden.manifest_id),
+            lsm_digest_sha256: clone_digest,
+        };
+        db.close()
+            .await
+            .context("closing clone validation handle")?;
+        let mut outcome = if fresh_process {
+            execute_variant_in_fresh_process(
+                variant,
+                &clone_path,
+                golden.size_bytes,
+                &golden.lsm_digest,
+                result_context.args,
+            )
+            .await?
+        } else {
+            let recorder = Arc::new(BenchmarkMetricsRecorder::new());
+            let db = open_database(
+                clone_path.clone(),
+                Arc::clone(&store),
+                &variant.suite,
+                &variant.slate_settings,
+                Arc::clone(&recorder),
+            )
+            .await?;
+            let outcome = execute_variant(
+                Arc::clone(&db),
+                variant,
+                store_metrics,
+                recorder,
+                clone_path.clone(),
+                golden.size_bytes,
+            )
+            .await;
+            db.close().await.context("closing benchmark clone")?;
+            outcome?
+        };
+        let clone_size = prefix_size(Arc::clone(&store), &clone_path).await?;
+        outcome.storage.database_size_bytes = golden.size_bytes.saturating_add(clone_size);
+        write_variant_result(variant, outcome, initial, golden.size_bytes, result_context)
+    }
+    .await;
+    let cleanup = delete_prefix(store, &clone_path).await;
+    match (result, cleanup) {
+        (Ok(path), Ok(())) => Ok(path),
+        (Err(error), _) => Err(error),
+        (Ok(_), Err(error)) => Err(error.context("cleaning up benchmark clone")),
+    }
 }
 
 pub async fn execute_worker(args: WorkerArgs) -> Result<()> {
@@ -386,74 +421,12 @@ async fn execute_variant_in_fresh_process(
 
 impl GoldenManager {
     async fn prepare(&mut self, variant: &VariantConfig) -> Result<GoldenDatabase> {
-        let prefix_layout = variant.workload.kind == WorkloadKind::PrefixScan;
-        let record_count = if variant.workload.kind == WorkloadKind::SustainedIngest {
-            0
-        } else {
-            variant.record_count()
-        };
-        let key = format!(
-            "{}-{}-{}-{}-{}-{}",
-            if prefix_layout { "prefix" } else { "records" },
-            record_count,
-            variant.key_bytes(),
-            variant.value_bytes(),
-            variant.suite.sst_block_bytes.unwrap_or_default(),
-            settings_digest(&variant.slate_settings)?
-        );
+        let key = golden_key(variant)?;
         if let Some(golden) = self.values.get(&key) {
             return Ok(golden.clone());
         }
         let path = self.root.clone().join("golden").join(key.as_str());
-        tracing::info!(
-            dataset = key,
-            records = record_count,
-            "preparing golden database"
-        );
-        let recorder = Arc::new(BenchmarkMetricsRecorder::new());
-        let db = open_database(
-            path.clone(),
-            Arc::clone(&self.store),
-            &variant.suite,
-            &variant.slate_settings,
-            Arc::clone(&recorder),
-        )
-        .await?;
-        populate_dataset(
-            Arc::clone(&db),
-            record_count,
-            variant.key_bytes(),
-            variant.value_bytes(),
-            prefix_layout,
-        )
-        .await?;
-        wait_for_compaction(&db, &recorder, &variant.suite).await?;
-        db.close().await.context("closing golden database")?;
-
-        let admin = AdminBuilder::new(path.clone(), Arc::clone(&self.store)).build();
-        let checkpoint = admin
-            .create_detached_checkpoint(&CheckpointOptions {
-                lifetime: None,
-                source: None,
-                name: Some(format!("benchmark-{key}")),
-            })
-            .await
-            .context("creating golden checkpoint")?;
-        let checkpoint_manifest = admin
-            .read_manifest(Some(checkpoint.manifest_id))
-            .await
-            .context("reading golden checkpoint manifest")?
-            .context("golden checkpoint manifest does not exist")?;
-        let digest = manifest_lsm_digest(&checkpoint_manifest)?;
-        let size_bytes = prefix_size(Arc::clone(&self.store), &path).await?;
-        let golden = GoldenDatabase {
-            path: path.clone(),
-            checkpoint_id: checkpoint.id,
-            manifest_id: checkpoint.manifest_id,
-            lsm_digest: digest,
-            size_bytes,
-        };
-        self.cleanup_paths.push(path);
+        let golden = prepare_golden_database(variant, path, Arc::clone(&self.store), &key).await?;
         self.values.insert(key, golden.clone());
         Ok(golden)
     }
@@ -465,12 +438,88 @@ impl GoldenManager {
                 .delete_checkpoint(golden.checkpoint_id)
                 .await
                 .context("deleting golden checkpoint")?;
-        }
-        for path in &self.cleanup_paths {
-            delete_prefix(Arc::clone(&self.store), path).await?;
+            delete_prefix(Arc::clone(&self.store), &golden.path).await?;
         }
         Ok(())
     }
+}
+
+fn golden_key(variant: &VariantConfig) -> Result<String> {
+    let prefix_layout = variant.workload.kind == WorkloadKind::PrefixScan;
+    let record_count = if variant.workload.kind == WorkloadKind::SustainedIngest {
+        0
+    } else {
+        variant.record_count()
+    };
+    Ok(format!(
+        "{}-{}-{}-{}-{}-{}",
+        if prefix_layout { "prefix" } else { "records" },
+        record_count,
+        variant.key_bytes(),
+        variant.value_bytes(),
+        variant.suite.sst_block_bytes.unwrap_or_default(),
+        settings_digest(&variant.slate_settings)?
+    ))
+}
+
+async fn prepare_golden_database(
+    variant: &VariantConfig,
+    path: Path,
+    store: Arc<dyn ObjectStore>,
+    key: &str,
+) -> Result<GoldenDatabase> {
+    let prefix_layout = variant.workload.kind == WorkloadKind::PrefixScan;
+    let record_count = if variant.workload.kind == WorkloadKind::SustainedIngest {
+        0
+    } else {
+        variant.record_count()
+    };
+    tracing::info!(
+        dataset = key,
+        records = record_count,
+        "preparing golden database"
+    );
+    let recorder = Arc::new(BenchmarkMetricsRecorder::new());
+    let db = open_database(
+        path.clone(),
+        Arc::clone(&store),
+        &variant.suite,
+        &variant.slate_settings,
+        Arc::clone(&recorder),
+    )
+    .await?;
+    populate_dataset(
+        Arc::clone(&db),
+        record_count,
+        variant.key_bytes(),
+        variant.value_bytes(),
+        prefix_layout,
+    )
+    .await?;
+    wait_for_compaction(&db, &recorder, &variant.suite).await?;
+    db.close().await.context("closing golden database")?;
+
+    let admin = AdminBuilder::new(path.clone(), Arc::clone(&store)).build();
+    let checkpoint = admin
+        .create_detached_checkpoint(&CheckpointOptions {
+            lifetime: None,
+            source: None,
+            name: Some(format!("benchmark-{key}")),
+        })
+        .await
+        .context("creating golden checkpoint")?;
+    let checkpoint_manifest = admin
+        .read_manifest(Some(checkpoint.manifest_id))
+        .await
+        .context("reading golden checkpoint manifest")?
+        .context("golden checkpoint manifest does not exist")?;
+    Ok(GoldenDatabase {
+        path: path.clone(),
+        checkpoint_id: checkpoint.id,
+        manifest_id: checkpoint.manifest_id,
+        lsm_digest: manifest_lsm_digest(&checkpoint_manifest)?,
+        size_bytes: prefix_size(store, &path).await?,
+    })
 }
 
 async fn run_sequential_suite(
@@ -623,6 +672,7 @@ async fn run_sequential_suite(
             Arc::clone(&store),
             Arc::clone(&store_metrics),
             fresh_process_variants,
+            0,
             result_context.args,
         )
         .await?;
@@ -654,6 +704,7 @@ async fn execute_rocks_variant(
     store: Arc<dyn ObjectStore>,
     store_metrics: Arc<StoreMetrics>,
     fresh_process: bool,
+    shared_database_bytes: u64,
     args: &RunArgs,
 ) -> Result<(WorkloadOutcome, InitialState)> {
     let admin = AdminBuilder::new(database_path.clone(), Arc::clone(&store)).build();
@@ -672,7 +723,7 @@ async fn execute_rocks_variant(
         execute_variant_in_fresh_process(
             variant,
             database_path,
-            0,
+            shared_database_bytes,
             &initial.lsm_digest_sha256,
             args,
         )
@@ -696,7 +747,7 @@ async fn execute_rocks_variant(
             store_metrics,
             recorder,
             database_path.clone(),
-            0,
+            shared_database_bytes,
         )
         .await;
         db.close()
@@ -1156,6 +1207,7 @@ mod tests {
         };
         let args = RunArgs {
             suite: None,
+            session: None,
             workload: None,
             variant: None,
             output: PathBuf::new(),
@@ -1183,6 +1235,7 @@ mod tests {
             Arc::clone(&store),
             instrumented.metrics(),
             false,
+            0,
             &args,
         )
         .await?;
@@ -1192,6 +1245,7 @@ mod tests {
             store,
             instrumented.metrics(),
             false,
+            0,
             &args,
         )
         .await?;

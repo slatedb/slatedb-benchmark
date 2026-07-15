@@ -215,6 +215,7 @@ impl BenchmarkConfig {
         let mut identities = BTreeSet::new();
         let mut suite_names = BTreeSet::new();
         for suite in &self.suites {
+            validate_identity_component(&suite.name, "suite")?;
             if !suite_names.insert(suite.name.clone()) {
                 bail!("duplicate suite {}", suite.name);
             }
@@ -246,6 +247,7 @@ impl BenchmarkConfig {
 
             let mut workload_names = BTreeSet::new();
             for workload in &suite.workloads {
+                validate_identity_component(&workload.name, "workload")?;
                 if !workload_names.insert(&workload.name) {
                     bail!(
                         "suite {} contains duplicate workload {}",
@@ -257,13 +259,7 @@ impl BenchmarkConfig {
                     bail!("workload {}/{} has no variants", suite.name, workload.name);
                 }
                 for variant in &workload.variants {
-                    if variant.name.trim().is_empty() {
-                        bail!(
-                            "workload {}/{} has a variant with an empty name",
-                            suite.name,
-                            workload.name
-                        );
-                    }
+                    validate_identity_component(&variant.name, "variant")?;
                     if variant.clients == Some(0) || variant.target_rate == Some(0) {
                         bail!(
                             "variant {}/{}/{} has zero concurrency or target rate",
@@ -533,6 +529,26 @@ fn validate_sequential_suite(suite: &SuiteConfig) -> Result<()> {
             "sequential suite {} must begin with exactly one bulk-load workload",
             suite.name
         );
+    }
+    if suite.workloads[0].variants.len() != 1 {
+        bail!(
+            "sequential suite {} bulk-load must have exactly one variant",
+            suite.name
+        );
+    }
+    Ok(())
+}
+
+fn validate_identity_component(value: &str, kind: &str) -> Result<()> {
+    if value.is_empty()
+        || value.len() > 128
+        || value == "."
+        || value == ".."
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    {
+        bail!("{kind} names must be 1-128 ASCII letters, digits, '.', '-', or '_': {value}");
     }
     Ok(())
 }

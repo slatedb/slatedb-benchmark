@@ -62,28 +62,54 @@ are attached as `DbBuilder` components and are not fields in SlateDB's
 internally and nanoseconds in result records.
 
 The `smoke.suite.toml` file defines an ordinary suite with `release = false`.
-Its few purpose-built workloads cover the important runner paths with small datasets.
-Release discovery excludes non-release suites unless one is named
+Its few purpose-built workloads cover the important runner paths with small
+datasets. Release discovery excludes non-release suites unless one is named
 explicitly, so Docker runs it with `--suite smoke` and the release workflow
 continues to name `rocksdb`, `ycsb`, and `slatedb`.
 
 ## Execution
 
 A release workflow accepts a SlateDB tag or commit, builds the runner once, and
-runs one sequential job per suite:
+then runs one job per release suite. Suite jobs have no dependencies on one
+another and therefore run in parallel:
 
 ```text
-build runner -> [inspect host -> probe object store -> prepare suite data
-              -> run suite workloads -> validate -> publish suite]
-             -> rebuild and deploy site from main
+                         /-> rocksdb job: workload -> publish -> workload -> publish ...
+build runner artifact --+-> slatedb job: workload -> publish -> workload -> publish ...
+                         \-> ycsb job:    workload -> publish -> workload -> publish ...
 ```
+
+Every suite job has its own Tigris bucket. Workloads within a job run in the
+order declared by the suite, and each workload is followed immediately by a
+publication step. A workload invocation runs all of that workload's variants,
+validates the accumulated suite output, and commits its result bundle and any
+database checkpoint to object storage before returning success:
+
+```text
+restore session -> measure workload -> validate -> commit session -> publish workload
+```
+
+The benchmark runner owns measurement and object-store persistence. It never
+modifies the repository. The release workflow validates the local result tree,
+copies it into a publication checkout, commits it, and pushes it to `main`.
 
 The workflow builds the runner in release mode on the configured WarpBuild
 host. It verifies the runner type, CPU count, memory, and object-store endpoint
-before starting. Suite jobs use `max-parallel: 1`, so one measured workload
-runs at a time and suites do not compete for the object store. Dataset
+before starting. Workloads are ordinary steps, so only one measurement runs at
+a time within a suite job; parallel suite jobs do not share a bucket. Dataset
 preparation, object-store probes, and cleanup never overlap a measurement
-window. A failed suite does not cancel the remaining suite jobs.
+window within the suite. A failed suite does not cancel the other suite jobs.
+
+`.github/workflows/release.yml` is generated from the release suites and their
+declared workload order. Regenerate it after changing suite configuration:
+
+```console
+$ slatedb-benchmark generate-workflow
+```
+
+`generate-workflow --check` verifies that the checked-in workflow is current.
+The `benchmark` GitHub environment supplies `TIGRIS_BUCKET_PREFIX`; a suite
+named `ycsb`, for example, uses `${TIGRIS_BUCKET_PREFIX}-ycsb`.
 
 The runner uses monotonic time for durations and latency. Wall-clock time is
 used only for result timestamps. Warmup data is discarded and metric counters
@@ -106,15 +132,31 @@ does not copy the dataset. Writes and compaction output belong to the clone.
 The runner checks the clone's initial manifest against the checkpoint before
 opening a fresh process and empty SlateDB caches.
 
-The checkpoint stays live until all clones have closed. The runner then deletes
-the clones and checkpoint in a cleanup phase that also runs after failure. Each
-result records the checkpoint ID, manifest ID, and a digest of the initial LSM
-state. These fields confirm that every variant began with the same logical data
-and SST layout.
+In an ordinary non-resumable run, the checkpoint stays live until all clones
+have closed and is then deleted. A resumable isolated suite records its golden
+checkpoint in the session as soon as preparation succeeds. Later workload
+processes reuse that checkpoint instead of loading the same dataset again. The
+goldens remain live until the last suite workload commits. Each result records
+the checkpoint ID, manifest ID, and a digest of the initial LSM state. These
+fields confirm that every variant began with the same logical data and SST
+layout.
 
-The RocksDB-derived suite is different by design: it runs its ordered
-workloads against the database produced by `bulk-load`. The database path and
-mutations carry forward, but the runner closes the database between variants.
+The RocksDB-derived suite is different by design: its ordered workloads carry
+forward the database produced by `bulk-load`. A resumable run records a
+last-good detached checkpoint after every successful workload. The next
+workload uses a new shallow clone of that checkpoint, so its writes cannot
+modify the committed input. The runner verifies the clone's LSM digest before
+measuring. If a process or workload fails, its candidate path is not recorded
+in the session state; retrying clones the same last-good checkpoint.
+
+All variant result bundles for a workload are copied to the session's
+object-store prefix before the runner advances the session state. Updating that
+state is the atomic workload commit point. The database paths that back golden
+or sequential checkpoints remain live until the full suite completes, then the
+runner deletes them. The small session state and result bundles remain so a
+later process can reconstruct the complete local output without repeating
+measurements. Isolated and sequential suites use the same session protocol.
+
 Each published variant runs in a fresh worker process with a newly constructed
 cache, matching `db_bench` process isolation; in-memory smoke runs reopen the
 database with a new cache in the parent process because their object store
@@ -127,8 +169,9 @@ the runner cannot clear caches managed inside Tigris.
 At the start of each selected suite, before its dataset preparation or
 workload execution, the runner probes the Tigris bucket and endpoint through
 the object-store client without opening SlateDB. Probe parameters belong to
-the suite, so the probe runs exactly once per suite. The release latency
-probe performs 2,000
+the suite, so the probe runs exactly once per suite. A resumed session reuses
+its persisted baseline rather than probing again. The release latency probe
+performs 2,000
 sequential PUTs and GETs of 8 KiB objects and records their histograms and
 required percentiles.
 
@@ -221,6 +264,29 @@ $ ./target/release/slatedb-benchmark run \
 {"status":"ok","run":".runs/ycsb-a/run.json"}
 ```
 
+Any suite accepts a stable `--session` name when a complete workload is
+selected. Begin with the first configured workload and use the same name as the
+suite advances:
+
+```console
+$ ./target/release/slatedb-benchmark run \
+    --suite rocksdb \
+    --workload bulk-load \
+    --session july-0.14.1-rocksdb \
+    --output .runs/rocksdb
+```
+
+Each invocation may request the next configured workload, or a workload already
+completed by that session. A completed workload is restored and returns without
+running any of its variants again. Completed result bundles are restored from
+object storage, so the local output directory may be the original session
+directory, an empty directory, or a new path. An existing directory is accepted
+only when its session marker matches. Resume checks the SlateDB and runner
+builds, lockfile, suite configuration, machine shape, and object-store endpoint
+before continuing. Use a persistent `aws` or `local` object store to resume
+across processes, and do not run two processes with the same session name
+concurrently.
+
 Omitting the selectors runs all release suites and variants. Suites with
 `release = false`, including `smoke`, require an explicit `--suite`:
 
@@ -231,13 +297,15 @@ $ ./target/release/slatedb-benchmark run --output .runs/release
 
 The read-only `catalog` command prints the discovered release identities as
 JSON without running a benchmark. Passing `--suite smoke` includes that
-explicit non-release suite instead. CI uses this output to verify that a
-smoke run produced exactly its configured result set.
+explicit non-release suite instead. `generate-workflow` is the corresponding
+configuration-to-CI command: it emits the complete release workflow rather
+than requiring a hand-maintained job or matrix.
 
-Each `run` invocation probes the object store once per selected suite, before
-preparing that suite's data. It writes progress to stderr and one JSON status
-line to stdout. The output tree is shown below. The output directory must not
-exist before the command starts.
+Each ordinary `run` invocation probes the object store once per selected suite,
+before preparing that suite's data. A session probes only when its state is
+created. The runner writes progress to stderr and one JSON status line to
+stdout. The output tree is shown below. An ordinary run's output directory must
+not exist before the command starts; resumable output follows the rules above.
 
 ```text
 .runs/ycsb-a/
@@ -384,14 +452,17 @@ covers all measured writes, resource samples span the measurement window, and
 the workload used the expected initial manifest. Secrets, credentials, and
 signed URLs are rejected from result files.
 
-The workflow publishes each suite after all required variants in that suite
-pass validation. Publication copies the validated suite output into a fresh
-checkout of `main`, commits only that suite's result sources, and rebases
-before pushing. A non-fast-forward push refetches, rebases, rebuilds the site,
-and retries instead of pushing from the benchmark's original stale checkout.
-A separate Pages workflow deploys after each results push, so successful
-suites become visible without waiting for the entire release. Failed and
-interrupted suites keep their logs and partial output as CI artifacts, while
-the remaining suites continue. Rerunning a failed matrix job replaces only
-that suite's unpublished files. The published schema omits trial and
-repetition fields.
+Every workload in every release suite is a run step followed by a publish step.
+A publication failure does not invalidate the object-store commit: rerunning
+the GitHub job with the same run ID restores and skips already completed
+workloads, then retries their publication without measuring them again. The
+same behavior applies to isolated and sequential suites.
+
+Publication replaces only that workload's destination with its validated
+variant results in a fresh checkout of `main`, commits only that result subtree,
+and rebases before pushing. A non-fast-forward push refetches, rebases, rebuilds
+the site, and retries instead of pushing from the benchmark's original stale
+checkout. A separate Pages workflow deploys after each results push, so every
+successful workload becomes visible without waiting for the rest of its suite
+or release. Failed and interrupted jobs keep their local output as CI
+artifacts. The published schema omits trial and repetition fields.

@@ -22,6 +22,7 @@ pub enum Command {
     Run(RunArgs),
     Validate(ValidateArgs),
     Catalog(CatalogArgs),
+    GenerateWorkflow(GenerateWorkflowArgs),
     #[command(hide = true)]
     Worker(WorkerArgs),
 }
@@ -30,6 +31,9 @@ pub enum Command {
 pub struct RunArgs {
     #[arg(long)]
     pub suite: Option<String>,
+    /// Stable name used to create or resume a suite in object storage.
+    #[arg(long, requires = "workload")]
+    pub session: Option<String>,
     #[arg(long, requires = "suite")]
     pub workload: Option<String>,
     #[arg(long, requires = "workload")]
@@ -54,6 +58,17 @@ pub struct CatalogArgs {
     pub suite: Option<String>,
     #[arg(long, default_value = "config")]
     pub config_dir: PathBuf,
+}
+
+#[derive(Debug, Args)]
+pub struct GenerateWorkflowArgs {
+    #[arg(long, default_value = "config")]
+    pub config_dir: PathBuf,
+    #[arg(long, default_value = ".github/workflows/release.yml")]
+    pub output: PathBuf,
+    /// Fail if the checked-in workflow does not match the generated output.
+    #[arg(long)]
+    pub check: bool,
 }
 
 #[derive(Debug, Clone, Args)]
