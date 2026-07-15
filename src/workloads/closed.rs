@@ -751,7 +751,7 @@ async fn capped_writer(
         match result {
             Ok(handle) => {
                 let returned_at = Instant::now();
-                stats.record_success(
+                stats.record_background_success(
                     "writer-update",
                     started.elapsed(),
                     Payload::write(value.len() as u64),
@@ -765,7 +765,7 @@ async fn capped_writer(
                 }
             }
             Err(error) => {
-                stats.record_error("writer-update", started.elapsed());
+                stats.record_background_error("writer-update", started.elapsed());
                 if let Some(counters) = &counters {
                     counters.errors.fetch_add(1, Ordering::Relaxed);
                 }

@@ -219,11 +219,14 @@ records:
 
 - response latency from scheduled arrival to completion
 - return latency from SlateDB invocation to completion
-- scheduling delay, offered ops/s, completed ops/s, and the scheduler's dropped operation count and rate
+- scheduling delay, offered ops/s, accepted ops/s, completed ops/s, and the scheduler's dropped operation count and rate
 
 Open-loop results record the offered rate as `configuration.target_rate`; their
-`configuration.clients` field is `null`. A result fails validation if the
-scheduler cannot sustain the target rate while SlateDB has capacity.
+`configuration.clients` field is `null`. Accepted operations are offered
+arrivals that entered the worker queue. Offered, accepted, completed, and
+dropped rates use the same measured elapsed interval, including the final queue
+drain, so their ratios are directly comparable. A result fails validation if
+the scheduler cannot sustain the target rate while SlateDB has capacity.
 
 ### Durability
 
@@ -354,6 +357,11 @@ one-second sampler swaps those shards, merges their completed histograms, and
 emits application windows without a global per-operation lock. Those same
 windows are merged into the aggregate histograms, so the summary and time
 series describe the same observations.
+
+The capped writer in each while-writing workload contributes counts, payload,
+API latency, durability, and a `return/writer-update` histogram. Its return
+latency is excluded from the aggregate `return` histogram so the workload's
+headline latency describes the named read or scan operation.
 
 Application windows also contain successful-operation counts and logical read
 and write payload bytes; their sum is retained as total payload bytes. Reads

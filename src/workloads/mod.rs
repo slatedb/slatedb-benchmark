@@ -180,12 +180,7 @@ pub async fn execute_variant(
     );
     storage.database_size_bytes = 0;
     let resources = system::summarize_resources(&timeseries.samples);
-    let mut application = stats.application(measurement_elapsed, open_loop);
-    if open_loop {
-        let scheduled_seconds = configured_duration.as_secs_f64().max(f64::EPSILON);
-        application.offered_ops_per_second = Some(stats.offered as f64 / scheduled_seconds);
-        application.dropped_ops_per_second = Some(stats.dropped as f64 / scheduled_seconds);
-    }
+    let application = stats.application(measurement_elapsed, open_loop);
     Ok(WorkloadOutcome {
         application,
         durability,

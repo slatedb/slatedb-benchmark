@@ -68,26 +68,80 @@ impl WorkerStats {
     }
 
     pub fn record_success(&mut self, operation: &str, latency: Duration, payload: Payload) {
+        self.record_success_internal(operation, latency, payload, true);
+    }
+
+    pub fn record_background_success(
+        &mut self,
+        operation: &str,
+        latency: Duration,
+        payload: Payload,
+    ) {
+        self.record_success_internal(operation, latency, payload, false);
+    }
+
+    fn record_success_internal(
+        &mut self,
+        operation: &str,
+        latency: Duration,
+        payload: Payload,
+        include_in_headline: bool,
+    ) {
         self.total += 1;
         self.successful += 1;
         self.read_payload_bytes = self.read_payload_bytes.saturating_add(payload.read_bytes);
         self.write_payload_bytes = self.write_payload_bytes.saturating_add(payload.write_bytes);
         if let Some(recorder) = &self.window_recorder {
-            recorder.record_success(operation, latency, payload.read_bytes, payload.write_bytes);
+            if include_in_headline {
+                recorder.record_success(
+                    operation,
+                    latency,
+                    payload.read_bytes,
+                    payload.write_bytes,
+                );
+            } else {
+                recorder.record_background_success(
+                    operation,
+                    latency,
+                    payload.read_bytes,
+                    payload.write_bytes,
+                );
+            }
         } else {
-            self.histograms.record("return", latency);
+            if include_in_headline {
+                self.histograms.record("return", latency);
+            }
             self.histograms
                 .record(format!("return/{operation}"), latency);
         }
     }
 
     pub fn record_error(&mut self, operation: &str, latency: Duration) {
+        self.record_error_internal(operation, latency, true);
+    }
+
+    pub fn record_background_error(&mut self, operation: &str, latency: Duration) {
+        self.record_error_internal(operation, latency, false);
+    }
+
+    fn record_error_internal(
+        &mut self,
+        operation: &str,
+        latency: Duration,
+        include_in_headline: bool,
+    ) {
         self.total += 1;
         self.errors += 1;
         if let Some(recorder) = &self.window_recorder {
-            recorder.record_error(operation, latency);
+            if include_in_headline {
+                recorder.record_error(operation, latency);
+            } else {
+                recorder.record_background_error(operation, latency);
+            }
         } else {
-            self.histograms.record("return", latency);
+            if include_in_headline {
+                self.histograms.record("return", latency);
+            }
             self.histograms
                 .record(format!("return/{operation}"), latency);
         }
@@ -217,11 +271,16 @@ impl WorkerStats {
         let transactions = self.transaction_commits + self.transaction_aborts;
         let transaction_rate =
             |count: u64| (transactions > 0).then_some(count as f64 / transactions as f64);
+        let accepted = if open_loop {
+            self.offered.saturating_sub(self.dropped)
+        } else {
+            self.successful
+        };
         let completed = self.total.saturating_sub(self.dropped);
         ApplicationPerformance {
             total_operations: self.total,
             successful_operations: self.successful,
-            accepted_ops_per_second: self.successful as f64 / seconds,
+            accepted_ops_per_second: accepted as f64 / seconds,
             completed_ops_per_second: completed as f64 / seconds,
             offered_ops_per_second: open_loop.then_some(self.offered as f64 / seconds),
             dropped_operations: open_loop.then_some(self.dropped),
@@ -274,15 +333,19 @@ mod tests {
     fn application_exposes_scheduler_drop_count() {
         let stats = WorkerStats {
             total: 10,
+            successful: 7,
             offered: 10,
             dropped: 2,
             ..Default::default()
         };
 
-        let application = stats.application(Duration::from_secs(1), true);
+        let application = stats.application(Duration::from_secs(2), true);
 
         assert_eq!(application.dropped_operations, Some(2));
-        assert_eq!(application.completed_ops_per_second, 8.0);
+        assert_eq!(application.offered_ops_per_second, Some(5.0));
+        assert_eq!(application.accepted_ops_per_second, 4.0);
+        assert_eq!(application.completed_ops_per_second, 4.0);
+        assert_eq!(application.dropped_ops_per_second, Some(1.0));
     }
 
     #[test]
@@ -309,5 +372,23 @@ mod tests {
         let application = stats.application(Duration::from_secs(1), false);
 
         assert_eq!(application.payload_mib_per_second, 3.0);
+    }
+
+    #[test]
+    fn background_operation_is_excluded_from_headline_latency() {
+        let mut stats = WorkerStats::default();
+        stats.record_success("read", Duration::from_millis(1), Payload::read(1));
+        stats.record_background_success("writer-update", Duration::from_secs(1), Payload::write(1));
+
+        let application = stats.application(Duration::from_secs(1), false);
+
+        assert_eq!(application.total_operations, 2);
+        assert_eq!(application.return_latency.count, 1);
+        assert_eq!(application.return_latency.max_ns, 1_000_000);
+        assert_eq!(application.return_latency_by_operation["read"].count, 1);
+        assert_eq!(
+            application.return_latency_by_operation["writer-update"].count,
+            1
+        );
     }
 }

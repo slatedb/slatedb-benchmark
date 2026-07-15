@@ -222,6 +222,39 @@ impl ApplicationWindowRecorder {
         read_payload_bytes: u64,
         write_payload_bytes: u64,
     ) {
+        self.record_success_internal(
+            operation,
+            latency,
+            read_payload_bytes,
+            write_payload_bytes,
+            true,
+        );
+    }
+
+    pub fn record_background_success(
+        &self,
+        operation: &str,
+        latency: Duration,
+        read_payload_bytes: u64,
+        write_payload_bytes: u64,
+    ) {
+        self.record_success_internal(
+            operation,
+            latency,
+            read_payload_bytes,
+            write_payload_bytes,
+            false,
+        );
+    }
+
+    fn record_success_internal(
+        &self,
+        operation: &str,
+        latency: Duration,
+        read_payload_bytes: u64,
+        write_payload_bytes: u64,
+        include_in_headline: bool,
+    ) {
         let mut window = self.inner.lock().expect("application window lock poisoned");
         window.completed_operations = window.completed_operations.saturating_add(1);
         window.successful_operations = window.successful_operations.saturating_add(1);
@@ -229,17 +262,29 @@ impl ApplicationWindowRecorder {
         window.write_payload_bytes = window
             .write_payload_bytes
             .saturating_add(write_payload_bytes);
-        window.histograms.record("return", latency);
+        if include_in_headline {
+            window.histograms.record("return", latency);
+        }
         window
             .histograms
             .record(format!("return/{operation}"), latency);
     }
 
     pub fn record_error(&self, operation: &str, latency: Duration) {
+        self.record_error_internal(operation, latency, true);
+    }
+
+    pub fn record_background_error(&self, operation: &str, latency: Duration) {
+        self.record_error_internal(operation, latency, false);
+    }
+
+    fn record_error_internal(&self, operation: &str, latency: Duration, include_in_headline: bool) {
         let mut window = self.inner.lock().expect("application window lock poisoned");
         window.completed_operations = window.completed_operations.saturating_add(1);
         window.errors = window.errors.saturating_add(1);
-        window.histograms.record("return", latency);
+        if include_in_headline {
+            window.histograms.record("return", latency);
+        }
         window
             .histograms
             .record(format!("return/{operation}"), latency);
@@ -881,6 +926,7 @@ mod tests {
         let counters = ApplicationCounters::new(true);
         let worker = counters.register_window_recorder();
         worker.record_success("read-modify-write", Duration::from_millis(2), 1024, 256);
+        worker.record_background_success("writer-update", Duration::from_secs(1), 0, 128);
         worker.record_error("read", Duration::from_millis(4));
         worker.record_open_loop_timing(Duration::from_millis(5), Duration::from_millis(1));
         worker.record_open_loop_timing(Duration::from_millis(7), Duration::from_millis(1));
@@ -891,18 +937,26 @@ mod tests {
             .drain_window(0, 1_000_000_000)
             .expect("drain application window");
 
-        assert_eq!(window.completed_operations, 2);
-        assert_eq!(window.successful_operations, 1);
+        assert_eq!(window.completed_operations, 3);
+        assert_eq!(window.successful_operations, 2);
         assert_eq!(window.errors, 1);
         assert_eq!(window.read_payload_bytes, 1024);
-        assert_eq!(window.write_payload_bytes, 256);
-        assert_eq!(window.payload_bytes, 1280);
+        assert_eq!(window.write_payload_bytes, 384);
+        assert_eq!(window.payload_bytes, 1408);
         assert_eq!(window.offered_operations, Some(3));
         assert_eq!(window.dropped_operations, Some(1));
         assert_eq!(window.return_latency.expect("return latency").count, 2);
+        assert_eq!(window.return_latency_by_operation["writer-update"].count, 1);
         assert_eq!(window.response_latency.expect("response latency").count, 2);
         assert_eq!(window.api_latency["get"].count, 1);
         assert_eq!(histograms.get("return").expect("return histogram").len(), 2);
+        assert_eq!(
+            histograms
+                .get("return/writer-update")
+                .expect("writer return histogram")
+                .len(),
+            1
+        );
         assert_eq!(histograms.get("api/get").expect("API histogram").len(), 1);
     }
 

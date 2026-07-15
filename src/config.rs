@@ -260,6 +260,15 @@ impl BenchmarkConfig {
                 if workload.variants.is_empty() {
                     bail!("workload {}/{} has no variants", suite.name, workload.name);
                 }
+                if workload.kind == WorkloadKind::BulkLoad
+                    && workload.warmup_ms.unwrap_or(suite.warmup_ms) != 0
+                {
+                    bail!(
+                        "bulk-load workload {}/{} must have zero warmup",
+                        suite.name,
+                        workload.name
+                    );
+                }
                 for variant in &workload.variants {
                     validate_identity_component(&variant.name, "variant")?;
                     if variant.clients == Some(0) || variant.target_rate == Some(0) {
@@ -631,6 +640,34 @@ mod tests {
 
         assert_eq!(variant.clients, None);
         assert_eq!(variant.target_rate, Some(10_000));
+    }
+
+    #[test]
+    fn bulk_load_requires_zero_effective_warmup() {
+        let mut benchmark = BenchmarkConfig::load_from(Path::new("config")).expect("config");
+        let suite = benchmark
+            .suites
+            .iter_mut()
+            .find(|suite| suite.name == "rocksdb")
+            .expect("rocksdb suite");
+        suite.warmup_ms = 1;
+
+        let error = benchmark
+            .validate()
+            .expect_err("inherited bulk-load warmup should fail");
+        assert!(error
+            .to_string()
+            .contains("bulk-load workload rocksdb/bulk-load must have zero warmup"));
+
+        let suite = benchmark
+            .suites
+            .iter_mut()
+            .find(|suite| suite.name == "rocksdb")
+            .expect("rocksdb suite");
+        suite.workloads[0].warmup_ms = Some(0);
+        benchmark
+            .validate()
+            .expect("zero workload override should be valid");
     }
 
     #[test]

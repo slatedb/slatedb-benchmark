@@ -30,12 +30,14 @@ apply.
   measured outside SlateDB
 - Configuration: client count, duration, record count, key and value sizes,
   cache sizes, SlateDB settings, build profile, and enabled features
-- Application performance: total operations, accepted ops/s, payload MiB/s,
+- Application performance: total operations, accepted and completed ops/s, payload MiB/s,
   errors, and p50, p95, p99, p99.9, and maximum return latency overall and per
   operation type. The same percentiles are recorded for each SlateDB API used
   during measurement. One-second application windows report return and API
   latency, successful-operation counts, and logical read, write, and total
-  payload bytes over time.
+  payload bytes over time. For open-loop workloads, accepted operations are
+  offered arrivals that entered the worker queue; all rates use the same actual
+  measured elapsed time.
 - Durability performance: p50, p95, p99, p99.9, and maximum durability lag,
   final flush/drain time, and durable ops/s. Asynchronous writes also report
   one-second durability-lag windows through the final drain; awaited writes do
@@ -101,7 +103,8 @@ Run the tests below in order against the same database.
    can hold the complete load. Flush all memtables after loading, restore the
    suite settings, and wait for compaction to finish. RocksDB also uses its
    vector memtable and an explicit full compaction; SlateDB has no exact
-   equivalents.
+   equivalents. Bulk-load workloads must have an effective warmup of zero
+   because their record-count-driven phase ignores duration.
 2. `random-read`: Read uniformly random existing keys.
 3. `multi-random-read`: Read batches of 10 uniformly random keys. SlateDB has no
    native `MultiGet`, so issue 10 `get` calls concurrently and report batch
@@ -118,6 +121,11 @@ Run the tests below in order against the same database.
 9. `reverse-range-while-writing`: Run 64 reverse-scan clients and one additional
    writer capped at 2 MiB/s. Each scan reads up to 10 records; the writer waits
    for durability.
+
+For the three while-writing workloads, headline return latency contains only
+the reader or scanner operations. The capped writer remains visible as
+`writer-update` in the per-operation return latency, API latency, throughput,
+payload, and durability metrics.
 
 RocksDB publishes both buffered-I/O and direct-I/O variants. Direct I/O does not
 apply to SlateDB's object-store path, so this suite omits that variant.
