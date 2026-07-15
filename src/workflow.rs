@@ -145,7 +145,7 @@ pub fn render(benchmark: &BenchmarkConfig) -> Result<String> {
             "      SLATEDB_BENCH_PREFIX: release/${{ needs.build-runner.outputs.slate_version }}\n",
         );
         output.push_str(SUITE_STEPS);
-        for workload in &suite.workloads {
+        for (workload_index, workload) in suite.workloads.iter().enumerate() {
             writeln!(
                 output,
                 "      - name: Run {} / {}",
@@ -164,23 +164,17 @@ pub fn render(benchmark: &BenchmarkConfig) -> Result<String> {
                 "          bin/slatedb-benchmark validate --output \".runs/{}\"",
                 suite.name
             )?;
-            writeln!(
-                output,
-                "      - name: Publish {} / {}",
-                suite.name, workload.name
-            )?;
+            if workload_index + 1 != suite.workloads.len() {
+                continue;
+            }
+            writeln!(output, "      - name: Publish {} suite", suite.name)?;
             output.push_str("        run: |\n");
             output.push_str("          ./scripts/publish-results.sh \\\n");
             writeln!(output, "            \".runs/{}\" \\", suite.name)?;
             output.push_str("            \"${{ needs.build-runner.outputs.slate_version }}\" \\\n");
             writeln!(output, "            \"{}\" \\", suite.name)?;
-            writeln!(output, "            \"{}\" \\", workload.name)?;
             output.push_str("            publish\n");
-            writeln!(
-                output,
-                "      - name: Deploy {} / {}",
-                suite.name, workload.name
-            )?;
+            writeln!(output, "      - name: Deploy {} suite", suite.name)?;
             output.push_str("        uses: actions/github-script@v9\n");
             output.push_str("        with:\n");
             output.push_str("          github-token: ${{ github.token }}\n");
@@ -225,8 +219,13 @@ mod tests {
     }
 
     #[test]
-    fn release_workflow_dispatches_pages_after_every_publish() {
+    fn release_workflow_publishes_and_dispatches_once_per_suite() {
         let benchmark = BenchmarkConfig::load_from(Path::new("config")).expect("config");
+        let release_suites = benchmark
+            .suites
+            .iter()
+            .filter(|suite| suite.release)
+            .count();
         let workflow = render(&benchmark).expect("render workflow");
         let publishes = workflow
             .matches("          ./scripts/publish-results.sh")
@@ -236,7 +235,8 @@ mod tests {
             .count();
 
         assert!(workflow.contains("      actions: write"));
-        assert_eq!(dispatches, publishes);
+        assert_eq!(publishes, release_suites);
+        assert_eq!(dispatches, release_suites);
     }
 
     #[test]

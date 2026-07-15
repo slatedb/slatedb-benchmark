@@ -91,20 +91,19 @@ RocksDB-derived suite can finish its bulk load and twelve hours of timed
 measurements in one job:
 
 ```text
-                         /-> rocksdb job: workload -> publish -> workload -> publish ...
-build runner artifact --+-> slatedb job: workload -> publish -> workload -> publish ...
-                         \-> ycsb job:    workload -> publish -> workload -> publish ...
+                         /-> rocksdb job: workload -> workload -> ... -> publish suite
+build runner artifact --+-> slatedb job: workload -> workload -> ... -> publish suite
+                         \-> ycsb job:    workload -> workload -> ... -> publish suite
 ```
 
 Every suite job has its own Tigris bucket in the `fra` region. Workloads within
-a job run in the order declared by the suite, and each workload is followed
-immediately by a publication step. A workload invocation runs all of that
-workload's variants, validates the accumulated suite output, and commits its
-result bundle and any database checkpoint to object storage before returning
-success:
+a job run in the order declared by the suite, followed by one publication step
+after the suite completes. A workload invocation runs all of that workload's
+variants, validates the accumulated suite output, and commits its result bundle
+and any database checkpoint to object storage before returning success:
 
 ```text
-restore session -> measure workload -> validate -> commit session -> publish workload
+restore session -> measure workload -> validate -> commit session
 ```
 
 If a suite job is interrupted or reaches its explicit timeout, rerunning the
@@ -516,17 +515,18 @@ covers all measured writes, resource samples span the measurement window, and
 the workload used the expected initial manifest. Secrets, credentials, and
 signed URLs are rejected from result files.
 
-Every workload in every release suite is a run step followed by a publish step.
-A publication failure does not invalidate the object-store commit: rerunning
-the GitHub job with the same run ID restores and skips already completed
-workloads, then retries their publication without measuring them again. The
-same behavior applies to isolated and sequential suites.
+Every workload in every release suite is a run step. One publish step runs after
+all workloads in that suite complete. A publication failure does not invalidate
+the object-store commits: rerunning the GitHub job with the same run ID restores
+and skips every completed workload, then retries suite publication without
+measuring them again. The same behavior applies to isolated and sequential
+suites.
 
-Publication replaces only that workload's destination with its validated
-variant results in a fresh checkout of `main`, commits only that result subtree,
-and rebases before pushing. A non-fast-forward push refetches, rebases, rebuilds
-the website, and retries instead of pushing from the benchmark's original stale
-checkout. A separate Pages workflow deploys after each results push, so every
-successful workload becomes visible without waiting for the rest of its suite
-or release. Failed and interrupted jobs keep their local output as CI
-artifacts. The published schema omits trial and repetition fields.
+Publication replaces that suite's destination with all of its validated
+workload and variant results in a fresh checkout of `main`, commits only that
+result subtree, and rebases before pushing. A non-fast-forward push refetches,
+rebases, rebuilds the website, and retries instead of pushing from the
+benchmark's original stale checkout. A separate Pages workflow deploys after
+each suite results push, so a successful suite becomes visible without waiting
+for the rest of the release. Failed and interrupted jobs keep their local output
+as CI artifacts. The published schema omits trial and repetition fields.

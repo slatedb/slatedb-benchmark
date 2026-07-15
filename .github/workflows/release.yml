@@ -104,25 +104,6 @@ jobs:
             --session "github-${{ github.run_id }}-rocksdb" \
             --output ".runs/rocksdb"
           bin/slatedb-benchmark validate --output ".runs/rocksdb"
-      - name: Publish rocksdb / bulk-load
-        run: |
-          ./scripts/publish-results.sh \
-            ".runs/rocksdb" \
-            "${{ needs.build-runner.outputs.slate_version }}" \
-            "rocksdb" \
-            "bulk-load" \
-            publish
-      - name: Deploy rocksdb / bulk-load
-        uses: actions/github-script@v9
-        with:
-          github-token: ${{ github.token }}
-          script: |
-            await github.rest.actions.createWorkflowDispatch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: "pages.yml",
-              ref: "main",
-            });
       - name: Run rocksdb / random-read
         run: |
           bin/slatedb-benchmark run \
@@ -131,25 +112,6 @@ jobs:
             --session "github-${{ github.run_id }}-rocksdb" \
             --output ".runs/rocksdb"
           bin/slatedb-benchmark validate --output ".runs/rocksdb"
-      - name: Publish rocksdb / random-read
-        run: |
-          ./scripts/publish-results.sh \
-            ".runs/rocksdb" \
-            "${{ needs.build-runner.outputs.slate_version }}" \
-            "rocksdb" \
-            "random-read" \
-            publish
-      - name: Deploy rocksdb / random-read
-        uses: actions/github-script@v9
-        with:
-          github-token: ${{ github.token }}
-          script: |
-            await github.rest.actions.createWorkflowDispatch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: "pages.yml",
-              ref: "main",
-            });
       - name: Run rocksdb / multi-random-read
         run: |
           bin/slatedb-benchmark run \
@@ -158,25 +120,6 @@ jobs:
             --session "github-${{ github.run_id }}-rocksdb" \
             --output ".runs/rocksdb"
           bin/slatedb-benchmark validate --output ".runs/rocksdb"
-      - name: Publish rocksdb / multi-random-read
-        run: |
-          ./scripts/publish-results.sh \
-            ".runs/rocksdb" \
-            "${{ needs.build-runner.outputs.slate_version }}" \
-            "rocksdb" \
-            "multi-random-read" \
-            publish
-      - name: Deploy rocksdb / multi-random-read
-        uses: actions/github-script@v9
-        with:
-          github-token: ${{ github.token }}
-          script: |
-            await github.rest.actions.createWorkflowDispatch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: "pages.yml",
-              ref: "main",
-            });
       - name: Run rocksdb / forward-range
         run: |
           bin/slatedb-benchmark run \
@@ -185,25 +128,6 @@ jobs:
             --session "github-${{ github.run_id }}-rocksdb" \
             --output ".runs/rocksdb"
           bin/slatedb-benchmark validate --output ".runs/rocksdb"
-      - name: Publish rocksdb / forward-range
-        run: |
-          ./scripts/publish-results.sh \
-            ".runs/rocksdb" \
-            "${{ needs.build-runner.outputs.slate_version }}" \
-            "rocksdb" \
-            "forward-range" \
-            publish
-      - name: Deploy rocksdb / forward-range
-        uses: actions/github-script@v9
-        with:
-          github-token: ${{ github.token }}
-          script: |
-            await github.rest.actions.createWorkflowDispatch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: "pages.yml",
-              ref: "main",
-            });
       - name: Run rocksdb / reverse-range
         run: |
           bin/slatedb-benchmark run \
@@ -212,25 +136,6 @@ jobs:
             --session "github-${{ github.run_id }}-rocksdb" \
             --output ".runs/rocksdb"
           bin/slatedb-benchmark validate --output ".runs/rocksdb"
-      - name: Publish rocksdb / reverse-range
-        run: |
-          ./scripts/publish-results.sh \
-            ".runs/rocksdb" \
-            "${{ needs.build-runner.outputs.slate_version }}" \
-            "rocksdb" \
-            "reverse-range" \
-            publish
-      - name: Deploy rocksdb / reverse-range
-        uses: actions/github-script@v9
-        with:
-          github-token: ${{ github.token }}
-          script: |
-            await github.rest.actions.createWorkflowDispatch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: "pages.yml",
-              ref: "main",
-            });
       - name: Run rocksdb / overwrite
         run: |
           bin/slatedb-benchmark run \
@@ -239,25 +144,6 @@ jobs:
             --session "github-${{ github.run_id }}-rocksdb" \
             --output ".runs/rocksdb"
           bin/slatedb-benchmark validate --output ".runs/rocksdb"
-      - name: Publish rocksdb / overwrite
-        run: |
-          ./scripts/publish-results.sh \
-            ".runs/rocksdb" \
-            "${{ needs.build-runner.outputs.slate_version }}" \
-            "rocksdb" \
-            "overwrite" \
-            publish
-      - name: Deploy rocksdb / overwrite
-        uses: actions/github-script@v9
-        with:
-          github-token: ${{ github.token }}
-          script: |
-            await github.rest.actions.createWorkflowDispatch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: "pages.yml",
-              ref: "main",
-            });
       - name: Run rocksdb / read-while-writing
         run: |
           bin/slatedb-benchmark run \
@@ -266,25 +152,6 @@ jobs:
             --session "github-${{ github.run_id }}-rocksdb" \
             --output ".runs/rocksdb"
           bin/slatedb-benchmark validate --output ".runs/rocksdb"
-      - name: Publish rocksdb / read-while-writing
-        run: |
-          ./scripts/publish-results.sh \
-            ".runs/rocksdb" \
-            "${{ needs.build-runner.outputs.slate_version }}" \
-            "rocksdb" \
-            "read-while-writing" \
-            publish
-      - name: Deploy rocksdb / read-while-writing
-        uses: actions/github-script@v9
-        with:
-          github-token: ${{ github.token }}
-          script: |
-            await github.rest.actions.createWorkflowDispatch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: "pages.yml",
-              ref: "main",
-            });
       - name: Run rocksdb / forward-range-while-writing
         run: |
           bin/slatedb-benchmark run \
@@ -293,25 +160,6 @@ jobs:
             --session "github-${{ github.run_id }}-rocksdb" \
             --output ".runs/rocksdb"
           bin/slatedb-benchmark validate --output ".runs/rocksdb"
-      - name: Publish rocksdb / forward-range-while-writing
-        run: |
-          ./scripts/publish-results.sh \
-            ".runs/rocksdb" \
-            "${{ needs.build-runner.outputs.slate_version }}" \
-            "rocksdb" \
-            "forward-range-while-writing" \
-            publish
-      - name: Deploy rocksdb / forward-range-while-writing
-        uses: actions/github-script@v9
-        with:
-          github-token: ${{ github.token }}
-          script: |
-            await github.rest.actions.createWorkflowDispatch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: "pages.yml",
-              ref: "main",
-            });
       - name: Run rocksdb / reverse-range-while-writing
         run: |
           bin/slatedb-benchmark run \
@@ -320,15 +168,14 @@ jobs:
             --session "github-${{ github.run_id }}-rocksdb" \
             --output ".runs/rocksdb"
           bin/slatedb-benchmark validate --output ".runs/rocksdb"
-      - name: Publish rocksdb / reverse-range-while-writing
+      - name: Publish rocksdb suite
         run: |
           ./scripts/publish-results.sh \
             ".runs/rocksdb" \
             "${{ needs.build-runner.outputs.slate_version }}" \
             "rocksdb" \
-            "reverse-range-while-writing" \
             publish
-      - name: Deploy rocksdb / reverse-range-while-writing
+      - name: Deploy rocksdb suite
         uses: actions/github-script@v9
         with:
           github-token: ${{ github.token }}
@@ -395,25 +242,6 @@ jobs:
             --session "github-${{ github.run_id }}-slatedb" \
             --output ".runs/slatedb"
           bin/slatedb-benchmark validate --output ".runs/slatedb"
-      - name: Publish slatedb / cold-read
-        run: |
-          ./scripts/publish-results.sh \
-            ".runs/slatedb" \
-            "${{ needs.build-runner.outputs.slate_version }}" \
-            "slatedb" \
-            "cold-read" \
-            publish
-      - name: Deploy slatedb / cold-read
-        uses: actions/github-script@v9
-        with:
-          github-token: ${{ github.token }}
-          script: |
-            await github.rest.actions.createWorkflowDispatch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: "pages.yml",
-              ref: "main",
-            });
       - name: Run slatedb / open-loop-read
         run: |
           bin/slatedb-benchmark run \
@@ -422,25 +250,6 @@ jobs:
             --session "github-${{ github.run_id }}-slatedb" \
             --output ".runs/slatedb"
           bin/slatedb-benchmark validate --output ".runs/slatedb"
-      - name: Publish slatedb / open-loop-read
-        run: |
-          ./scripts/publish-results.sh \
-            ".runs/slatedb" \
-            "${{ needs.build-runner.outputs.slate_version }}" \
-            "slatedb" \
-            "open-loop-read" \
-            publish
-      - name: Deploy slatedb / open-loop-read
-        uses: actions/github-script@v9
-        with:
-          github-token: ${{ github.token }}
-          script: |
-            await github.rest.actions.createWorkflowDispatch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: "pages.yml",
-              ref: "main",
-            });
       - name: Run slatedb / open-loop-read-update
         run: |
           bin/slatedb-benchmark run \
@@ -449,25 +258,6 @@ jobs:
             --session "github-${{ github.run_id }}-slatedb" \
             --output ".runs/slatedb"
           bin/slatedb-benchmark validate --output ".runs/slatedb"
-      - name: Publish slatedb / open-loop-read-update
-        run: |
-          ./scripts/publish-results.sh \
-            ".runs/slatedb" \
-            "${{ needs.build-runner.outputs.slate_version }}" \
-            "slatedb" \
-            "open-loop-read-update" \
-            publish
-      - name: Deploy slatedb / open-loop-read-update
-        uses: actions/github-script@v9
-        with:
-          github-token: ${{ github.token }}
-          script: |
-            await github.rest.actions.createWorkflowDispatch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: "pages.yml",
-              ref: "main",
-            });
       - name: Run slatedb / prefix-scan
         run: |
           bin/slatedb-benchmark run \
@@ -476,25 +266,6 @@ jobs:
             --session "github-${{ github.run_id }}-slatedb" \
             --output ".runs/slatedb"
           bin/slatedb-benchmark validate --output ".runs/slatedb"
-      - name: Publish slatedb / prefix-scan
-        run: |
-          ./scripts/publish-results.sh \
-            ".runs/slatedb" \
-            "${{ needs.build-runner.outputs.slate_version }}" \
-            "slatedb" \
-            "prefix-scan" \
-            publish
-      - name: Deploy slatedb / prefix-scan
-        uses: actions/github-script@v9
-        with:
-          github-token: ${{ github.token }}
-          script: |
-            await github.rest.actions.createWorkflowDispatch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: "pages.yml",
-              ref: "main",
-            });
       - name: Run slatedb / sustained-ingest
         run: |
           bin/slatedb-benchmark run \
@@ -503,25 +274,6 @@ jobs:
             --session "github-${{ github.run_id }}-slatedb" \
             --output ".runs/slatedb"
           bin/slatedb-benchmark validate --output ".runs/slatedb"
-      - name: Publish slatedb / sustained-ingest
-        run: |
-          ./scripts/publish-results.sh \
-            ".runs/slatedb" \
-            "${{ needs.build-runner.outputs.slate_version }}" \
-            "slatedb" \
-            "sustained-ingest" \
-            publish
-      - name: Deploy slatedb / sustained-ingest
-        uses: actions/github-script@v9
-        with:
-          github-token: ${{ github.token }}
-          script: |
-            await github.rest.actions.createWorkflowDispatch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: "pages.yml",
-              ref: "main",
-            });
       - name: Run slatedb / transaction-contention
         run: |
           bin/slatedb-benchmark run \
@@ -530,15 +282,14 @@ jobs:
             --session "github-${{ github.run_id }}-slatedb" \
             --output ".runs/slatedb"
           bin/slatedb-benchmark validate --output ".runs/slatedb"
-      - name: Publish slatedb / transaction-contention
+      - name: Publish slatedb suite
         run: |
           ./scripts/publish-results.sh \
             ".runs/slatedb" \
             "${{ needs.build-runner.outputs.slate_version }}" \
             "slatedb" \
-            "transaction-contention" \
             publish
-      - name: Deploy slatedb / transaction-contention
+      - name: Deploy slatedb suite
         uses: actions/github-script@v9
         with:
           github-token: ${{ github.token }}
@@ -605,25 +356,6 @@ jobs:
             --session "github-${{ github.run_id }}-ycsb" \
             --output ".runs/ycsb"
           bin/slatedb-benchmark validate --output ".runs/ycsb"
-      - name: Publish ycsb / ycsb-a
-        run: |
-          ./scripts/publish-results.sh \
-            ".runs/ycsb" \
-            "${{ needs.build-runner.outputs.slate_version }}" \
-            "ycsb" \
-            "ycsb-a" \
-            publish
-      - name: Deploy ycsb / ycsb-a
-        uses: actions/github-script@v9
-        with:
-          github-token: ${{ github.token }}
-          script: |
-            await github.rest.actions.createWorkflowDispatch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: "pages.yml",
-              ref: "main",
-            });
       - name: Run ycsb / ycsb-b
         run: |
           bin/slatedb-benchmark run \
@@ -632,25 +364,6 @@ jobs:
             --session "github-${{ github.run_id }}-ycsb" \
             --output ".runs/ycsb"
           bin/slatedb-benchmark validate --output ".runs/ycsb"
-      - name: Publish ycsb / ycsb-b
-        run: |
-          ./scripts/publish-results.sh \
-            ".runs/ycsb" \
-            "${{ needs.build-runner.outputs.slate_version }}" \
-            "ycsb" \
-            "ycsb-b" \
-            publish
-      - name: Deploy ycsb / ycsb-b
-        uses: actions/github-script@v9
-        with:
-          github-token: ${{ github.token }}
-          script: |
-            await github.rest.actions.createWorkflowDispatch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: "pages.yml",
-              ref: "main",
-            });
       - name: Run ycsb / ycsb-c
         run: |
           bin/slatedb-benchmark run \
@@ -659,25 +372,6 @@ jobs:
             --session "github-${{ github.run_id }}-ycsb" \
             --output ".runs/ycsb"
           bin/slatedb-benchmark validate --output ".runs/ycsb"
-      - name: Publish ycsb / ycsb-c
-        run: |
-          ./scripts/publish-results.sh \
-            ".runs/ycsb" \
-            "${{ needs.build-runner.outputs.slate_version }}" \
-            "ycsb" \
-            "ycsb-c" \
-            publish
-      - name: Deploy ycsb / ycsb-c
-        uses: actions/github-script@v9
-        with:
-          github-token: ${{ github.token }}
-          script: |
-            await github.rest.actions.createWorkflowDispatch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: "pages.yml",
-              ref: "main",
-            });
       - name: Run ycsb / ycsb-d
         run: |
           bin/slatedb-benchmark run \
@@ -686,25 +380,6 @@ jobs:
             --session "github-${{ github.run_id }}-ycsb" \
             --output ".runs/ycsb"
           bin/slatedb-benchmark validate --output ".runs/ycsb"
-      - name: Publish ycsb / ycsb-d
-        run: |
-          ./scripts/publish-results.sh \
-            ".runs/ycsb" \
-            "${{ needs.build-runner.outputs.slate_version }}" \
-            "ycsb" \
-            "ycsb-d" \
-            publish
-      - name: Deploy ycsb / ycsb-d
-        uses: actions/github-script@v9
-        with:
-          github-token: ${{ github.token }}
-          script: |
-            await github.rest.actions.createWorkflowDispatch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: "pages.yml",
-              ref: "main",
-            });
       - name: Run ycsb / ycsb-e
         run: |
           bin/slatedb-benchmark run \
@@ -713,25 +388,6 @@ jobs:
             --session "github-${{ github.run_id }}-ycsb" \
             --output ".runs/ycsb"
           bin/slatedb-benchmark validate --output ".runs/ycsb"
-      - name: Publish ycsb / ycsb-e
-        run: |
-          ./scripts/publish-results.sh \
-            ".runs/ycsb" \
-            "${{ needs.build-runner.outputs.slate_version }}" \
-            "ycsb" \
-            "ycsb-e" \
-            publish
-      - name: Deploy ycsb / ycsb-e
-        uses: actions/github-script@v9
-        with:
-          github-token: ${{ github.token }}
-          script: |
-            await github.rest.actions.createWorkflowDispatch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: "pages.yml",
-              ref: "main",
-            });
       - name: Run ycsb / ycsb-f
         run: |
           bin/slatedb-benchmark run \
@@ -740,15 +396,14 @@ jobs:
             --session "github-${{ github.run_id }}-ycsb" \
             --output ".runs/ycsb"
           bin/slatedb-benchmark validate --output ".runs/ycsb"
-      - name: Publish ycsb / ycsb-f
+      - name: Publish ycsb suite
         run: |
           ./scripts/publish-results.sh \
             ".runs/ycsb" \
             "${{ needs.build-runner.outputs.slate_version }}" \
             "ycsb" \
-            "ycsb-f" \
             publish
-      - name: Deploy ycsb / ycsb-f
+      - name: Deploy ycsb suite
         uses: actions/github-script@v9
         with:
           github-token: ${{ github.token }}
