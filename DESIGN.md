@@ -275,7 +275,8 @@ environment:
 export AWS_ACCESS_KEY_ID=...
 export AWS_SECRET_ACCESS_KEY=...
 export AWS_REGION=auto
-export AWS_ENDPOINT_URL_S3=https://fly.storage.tigris.dev
+export AWS_ENDPOINT_URL_S3=https://t3.storage.dev
+export AWS_ENDPOINT_URL_IAM=https://iam.storage.dev
 export SLATEDB_BENCH_BUCKET=slatedb-benchmarks
 export SLATEDB_BENCH_PREFIX="manual/$USER"
 ```

@@ -423,6 +423,12 @@ pub struct SampledTimeseries {
     pub histograms: HistogramSet,
 }
 
+fn is_tigris_endpoint(endpoint: &str) -> bool {
+    endpoint.contains("tigrisdata.com")
+        || endpoint.contains("tigris.dev")
+        || endpoint == "https://t3.storage.dev"
+}
+
 pub fn inspect_environment(provider: &str, endpoint: &str, region: &str) -> Environment {
     let mut system = System::new_all();
     system.refresh_all();
@@ -459,9 +465,7 @@ pub fn inspect_environment(provider: &str, endpoint: &str, region: &str) -> Envi
             System::os_version().unwrap_or_else(|| "unknown".to_string())
         ),
         kernel: System::kernel_version().unwrap_or_else(|| "unknown".to_string()),
-        object_store: if provider.eq_ignore_ascii_case("aws")
-            && (endpoint.contains("tigrisdata.com") || endpoint.contains("tigris.dev"))
-        {
+        object_store: if provider.eq_ignore_ascii_case("aws") && is_tigris_endpoint(endpoint) {
             "Tigris".to_string()
         } else {
             provider.to_string()
@@ -493,8 +497,8 @@ pub fn verify_environment(environment: &Environment, smoke: bool) -> anyhow::Res
         "published runs require Tigris"
     );
     anyhow::ensure!(
-        environment.endpoint.contains("fly.storage.tigris.dev"),
-        "published runs require the Tigris S3 endpoint"
+        environment.endpoint == "https://t3.storage.dev",
+        "published runs require https://t3.storage.dev"
     );
     anyhow::ensure!(
         environment.region == "fra",
@@ -935,8 +939,8 @@ fn finite_or_zero(value: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        append_timeseries, compact_timeseries, measure_backpressure, ApplicationCounters,
-        BenchmarkMetricsRecorder,
+        append_timeseries, compact_timeseries, is_tigris_endpoint, measure_backpressure,
+        ApplicationCounters, BenchmarkMetricsRecorder,
     };
     use crate::model::{
         MetricSnapshot, MetricValue, MetricValueType, TimeseriesFile, TimeseriesSample,
@@ -944,6 +948,11 @@ mod tests {
     use slatedb_common::metrics::{MetricValue as SlateMetricValue, MetricsRecorder};
     use std::collections::BTreeMap;
     use std::time::Duration;
+
+    #[test]
+    fn recognizes_current_tigris_endpoint() {
+        assert!(is_tigris_endpoint("https://t3.storage.dev"));
+    }
 
     #[test]
     fn drains_application_measurements_into_one_window() {

@@ -76,7 +76,8 @@ const SUITE_SETUP: &str = r#"    needs: build-runner
       AWS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
       AWS_REGION: auto
-      AWS_ENDPOINT_URL_S3: https://fly.storage.tigris.dev
+      AWS_ENDPOINT_URL_S3: https://t3.storage.dev
+      AWS_ENDPOINT_URL_IAM: https://iam.storage.dev
 "#;
 
 const SUITE_STEPS: &str = r#"      SLATEDB_BENCH_REGION: fra
@@ -251,5 +252,29 @@ mod tests {
         let timeouts = workflow.matches("    timeout-minutes: 1440").count();
 
         assert_eq!(timeouts, release_suites);
+    }
+
+    #[test]
+    fn release_suite_jobs_use_current_tigris_endpoints() {
+        let benchmark = BenchmarkConfig::load_from(Path::new("config")).expect("config");
+        let release_suites = benchmark
+            .suites
+            .iter()
+            .filter(|suite| suite.release)
+            .count();
+        let workflow = render(&benchmark).expect("render workflow");
+
+        assert_eq!(
+            workflow
+                .matches("      AWS_ENDPOINT_URL_S3: https://t3.storage.dev")
+                .count(),
+            release_suites
+        );
+        assert_eq!(
+            workflow
+                .matches("      AWS_ENDPOINT_URL_IAM: https://iam.storage.dev")
+                .count(),
+            release_suites
+        );
     }
 }

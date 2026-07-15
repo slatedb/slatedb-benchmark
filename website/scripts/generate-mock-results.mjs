@@ -373,7 +373,7 @@ for (const suite of published.suites) {
           os: 'Ubuntu 24.04 (mock)',
           kernel: '6.8.0-mock',
           object_store: 'Tigris (mock)',
-          endpoint: 'https://fly.storage.tigris.dev',
+          endpoint: 'https://t3.storage.dev',
           region: 'fra',
         },
         object_store_baseline: objectStoreBaseline,

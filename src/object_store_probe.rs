@@ -36,7 +36,7 @@ impl ObjectStoreContext {
             .ok();
         let endpoint = configured_endpoint
             .clone()
-            .unwrap_or_else(|| "https://fly.storage.tigris.dev".to_string());
+            .unwrap_or_else(|| "https://t3.storage.dev".to_string());
         let metrics = Arc::new(StoreMetrics::default());
         let raw: Arc<dyn ObjectStore> = match provider.to_ascii_lowercase().as_str() {
             "aws" => {
