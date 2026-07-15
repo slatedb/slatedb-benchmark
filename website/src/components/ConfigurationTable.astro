@@ -70,21 +70,26 @@ const flatten = (value: unknown, path: string[] = []): ConfigurationRow[] => {
   }
   return [{ path, value: formatScalar(value, path) }];
 };
-const rows = [
-  ...flatten(benchmarkConfiguration),
-  ...flatten(slateSettings, ['SlateDB settings']),
+const groups: [string, ConfigurationRow[]][] = [
+  ['Benchmark', flatten(benchmarkConfiguration)],
+  ['SlateDB', flatten(slateSettings)],
 ];
 ---
 
-<div class="table-scroll">
-  <table class="configuration-table">
-    <tbody>
-      {rows.map((row) => (
-        <tr>
-          <th scope="row">{row.path.map(label).join(' / ')}</th>
-          <td><code class:list={['configuration-value', { 'measurement-empty': row.empty }]}>{row.value}</code></td>
-        </tr>
-      ))}
-    </tbody>
-  </table>
-</div>
+{groups.map(([name, rows]) => (
+  <div class="metric-group">
+    <h3>{name}</h3>
+    <div class="table-scroll">
+      <table class="configuration-table">
+        <tbody>
+          {rows.map((row) => (
+            <tr>
+              <th scope="row">{row.path.map(label).join(' / ')}</th>
+              <td><code class:list={['configuration-value', { 'measurement-empty': row.empty }]}>{row.value}</code></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  </div>
+))}
