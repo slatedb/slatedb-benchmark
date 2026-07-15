@@ -91,7 +91,7 @@ const awaitsDurability = result.durability.final_flush_drain_ns !== null
 
 const throughputChart: ChartDefinition = {
   key: 'payload-throughput',
-  title: 'Payload throughput',
+  title: 'Throughput',
   description: 'Logical application payload, SlateDB compaction, and host-wide network traffic',
   unit: 'MiB / second',
   digits: 2,
@@ -152,6 +152,7 @@ const apiOrder = [
   'flush',
 ];
 const apiLabel = (api: string) => `${api}()`;
+const apiChartLabel = (api: string) => `${api.replace(/^transaction\./, '')}()`;
 const apiDescription = (api: string) => {
   if (api === 'scan') return 'SlateDB scan invocation through iterator exhaustion';
   if (api === 'flush') return 'SlateDB flush() invocation through durable completion';
@@ -179,7 +180,7 @@ const apiCharts: ChartDefinition[] = [...new Set(application.flatMap((window) =>
     if (api === 'flush' && calls < 2) return [];
     return [{
       key: `api-${api.replaceAll('.', '-')}`,
-      title: `${apiLabel(api)} latency`,
+      title: `${apiChartLabel(api)} latency`,
       description: apiDescription(api),
       unit: 'Milliseconds',
       digits: 3,
