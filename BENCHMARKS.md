@@ -37,10 +37,11 @@ apply.
   not have a separate post-return lag.
 - Resources: average and peak CPU, peak RSS, network bytes sent and received,
   and disk bytes and operations read and written
-- Storage: database size, object-store request counts by operation, bytes read
-  and written, compaction throughput, write amplification, and backpressure time
-- Cost: compute, request, storage, and transfer cost, both total and per million
-  operations
+- Storage: final and time-weighted average database size, raw object-store
+  request counts by operation, bytes read and written, compaction throughput,
+  write amplification, and backpressure time
+- Cost calculator: projected request and storage cost for standard regional
+  Amazon S3, Azure Blob Storage, and Google Cloud Storage buckets in US East
 
 ## YCSB suite
 

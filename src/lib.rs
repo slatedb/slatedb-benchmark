@@ -1,6 +1,5 @@
 pub mod cli;
 pub mod config;
-mod cost;
 mod histogram;
 mod instrumented_store;
 mod model;

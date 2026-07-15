@@ -2,7 +2,6 @@ mod session;
 
 use crate::cli::{RunArgs, WorkerArgs};
 use crate::config::{BenchmarkConfig, SuiteConfig, SuiteExecution, VariantConfig, WorkloadKind};
-use crate::cost::PriceTable;
 use crate::instrumented_store::StoreMetrics;
 use crate::model::{
     BenchmarkConfiguration, EncodedHistogram, Environment, Identity, InitialState,
@@ -60,7 +59,6 @@ struct ResultContext<'a> {
     environment: &'a Environment,
     baseline: &'a ObjectStoreBaseline,
     baseline_histograms: &'a BTreeMap<String, EncodedHistogram>,
-    prices: &'a PriceTable,
     args: &'a RunArgs,
 }
 
@@ -95,7 +93,6 @@ async fn execute_inner(args: &RunArgs) -> Result<()> {
         bail!("a benchmark run cannot mix release and non-release suites");
     }
 
-    let prices = PriceTable::load(&args.schema_dir)?;
     let object_store = ObjectStoreContext::load()?;
     let environment = inspect_environment(
         &object_store.provider,
@@ -104,15 +101,7 @@ async fn execute_inner(args: &RunArgs) -> Result<()> {
     );
 
     if args.session.is_some() {
-        return session::execute(
-            args,
-            &benchmark,
-            selected,
-            &prices,
-            &object_store,
-            &environment,
-        )
-        .await;
+        return session::execute(args, &benchmark, selected, &object_store, &environment).await;
     }
 
     let mut by_suite = BTreeMap::<String, Vec<VariantConfig>>::new();
@@ -149,7 +138,6 @@ async fn execute_inner(args: &RunArgs) -> Result<()> {
             environment: &environment,
             baseline: &baseline,
             baseline_histograms: &baseline_histograms,
-            prices: &prices,
             args,
         };
         result_paths
@@ -760,7 +748,7 @@ async fn execute_rocks_variant(
 
 fn write_variant_result(
     variant: &VariantConfig,
-    outcome: WorkloadOutcome,
+    mut outcome: WorkloadOutcome,
     initial_state: InitialState,
     initial_database_bytes: u64,
     context: &ResultContext<'_>,
@@ -783,12 +771,7 @@ fn write_variant_result(
         initial_database_bytes,
         outcome.storage.database_size_bytes,
     );
-    let cost = context.prices.estimate(
-        outcome.elapsed_ns,
-        average_database_bytes,
-        &outcome.storage,
-        outcome.application.successful_operations,
-    );
+    outcome.storage.average_database_size_bytes = average_database_bytes;
     let result = ResultRecord {
         identity: Identity {
             slate_version: version.to_string(),
@@ -802,6 +785,7 @@ fn write_variant_result(
             variant: variant.variant.clone(),
             mode: variant.suite.mode().to_string(),
         },
+        elapsed_ns: outcome.elapsed_ns,
         environment: context.environment.clone(),
         object_store_baseline: context.baseline.clone(),
         configuration: BenchmarkConfiguration {
@@ -837,7 +821,6 @@ fn write_variant_result(
         durability: outcome.durability,
         resources: outcome.resources,
         storage: outcome.storage,
-        cost,
         initial_state,
         source_files: SourceFiles {
             histograms: "histograms.json".to_string(),

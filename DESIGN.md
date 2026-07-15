@@ -389,16 +389,20 @@ crash dumps remain workflow artifacts rather than permanent result files.
 
 ### Cost
 
-Versioned price tables under `schema/` contain compute, request, storage, and
-transfer rates with their currency, effective date, and source. Each result
-records the table revision used for its calculation.
+`schema/prices.json` contains request and storage rates for comparable standard,
+regional, multi-zone buckets in US East: S3 Standard, Azure Hot ZRS, and Google
+Cloud Standard regional storage. The table links to each provider's source and
+does not include Tigris pricing.
 
-Workload cost covers the measurement window and final durability drain. It
-excludes dataset preparation, warmup, cloning, and the direct object-store
-probe. Request and transfer cost comes from the instrumented object-store
-counters. Compute cost uses elapsed host time, while storage cost integrates
-sampled database size over the same interval. Cost per million operations uses
-successful measured operations as the denominator.
+Results store the raw inputs rather than a price-dependent estimate: elapsed
+time, successful application operations, request counts by object-store
+operation, and the time-weighted average database size. The site calculator
+scales those inputs to a user-selected operation count and applies the selected
+provider's current table entry. It covers the measurement window and final
+durability drain, excluding dataset preparation, warmup, cloning, the direct
+object-store probe, compute, free tiers, discounts, and taxes. Compute and the
+bucket are assumed to share a region, so the calculator does not add transfer
+charges.
 
 ## Website
 
@@ -426,8 +430,10 @@ the selected chart's raw data. Payload MiB/s is selected by default. The other
 views are return latency over time, whole-run tail latency, and, where
 applicable, durability lag over time.
 The rail and results collapse to one column on smaller screens. A table below
-the charts exposes all percentiles, durability, resource, storage, cost, and
-object-store baseline fields. Each page links to its raw result files and the
+the charts exposes all percentiles, durability, resource, storage, and
+object-store baseline fields. Raw object-store counts appear in their own
+operations subsection. A provider-selectable cost calculator follows the
+measurements, and each page links to its raw result files, price table, and
 source commits. Structured measurement values are flattened into ordinary
 table rows, with slash-separated labels preserving their path. Latency records,
 per-operation maps, and sustained-ingest windows therefore follow the same

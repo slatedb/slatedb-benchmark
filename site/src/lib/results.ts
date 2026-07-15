@@ -1,7 +1,6 @@
 import { promises as fs } from 'node:fs';
 import type { Dirent } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 export type BenchmarkResult = {
   identity: {
@@ -15,6 +14,7 @@ export type BenchmarkResult = {
     variant: string;
     mode: string;
   };
+  elapsed_ns: number;
   environment: Record<string, string | number>;
   object_store_baseline: {
     upload_mib_per_second: number;
@@ -32,6 +32,7 @@ export type BenchmarkResult = {
     metadata_cache_bytes: number | null;
   };
   application: Record<string, unknown> & {
+    successful_operations: number;
     accepted_ops_per_second: number;
     payload_mib_per_second: number;
     errors: number;
@@ -43,10 +44,33 @@ export type BenchmarkResult = {
     durable_ops_per_second: number | null;
   };
   resources: Record<string, unknown>;
-  storage: Record<string, unknown>;
-  cost: Record<string, unknown> & { total: number; total_per_million_operations: number | null; currency: string };
+  storage: Record<string, unknown> & {
+    database_size_bytes: number;
+    average_database_size_bytes: number;
+    object_store_requests: Record<string, number>;
+    bytes_read: number;
+    bytes_written: number;
+  };
   initial_state: Record<string, unknown>;
   source_files: { histograms: string; timeseries: string };
+};
+
+export type PricingProvider = {
+  id: string;
+  name: string;
+  region: string;
+  region_id: string;
+  storage_class: string;
+  source: string;
+  storage_per_gib_month: number;
+  requests_per_1000: Record<string, number>;
+};
+
+export type PricingTable = {
+  currency: string;
+  units: { gib_bytes: number; month_days: number };
+  providers: PricingProvider[];
+  notes: string[];
 };
 
 export type Latency = {
@@ -96,9 +120,15 @@ export type ResultRoute = {
   timeseries: BenchmarkTimeseries;
 };
 
+const repoRoot = path.resolve(process.cwd(), '..');
 const resultsRoot = process.env.BENCHMARK_RESULTS_ROOT
   ? path.resolve(process.env.BENCHMARK_RESULTS_ROOT)
-  : fileURLToPath(new URL('../../../results', import.meta.url));
+  : path.join(repoRoot, 'results');
+const pricingFile = path.join(repoRoot, 'schema', 'prices.json');
+
+export async function loadPricing(): Promise<PricingTable> {
+  return JSON.parse(await fs.readFile(pricingFile, 'utf8')) as PricingTable;
+}
 
 async function walk(directory: string): Promise<string[]> {
   let entries: Dirent<string>[];
@@ -143,12 +173,13 @@ export async function rawResultFiles() {
   const files = (await walk(resultsRoot)).filter((file) =>
     ['result.json', 'histograms.json', 'timeseries.json'].includes(path.basename(file)),
   );
-  return Promise.all(
+  const results = await Promise.all(
     files.map(async (file) => ({
       path: path.relative(resultsRoot, file).split(path.sep).join('/'),
       body: await fs.readFile(file),
     })),
   );
+  return [...results, { path: 'prices.json', body: await fs.readFile(pricingFile) }];
 }
 
 export function latestStable(routes: ResultRoute[]): ResultRoute | undefined {

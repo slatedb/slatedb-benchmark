@@ -1,0 +1,74 @@
+{
+  "currency": "USD",
+  "units": {
+    "gib_bytes": 1073741824,
+    "month_days": 30
+  },
+  "providers": [
+    {
+      "id": "aws",
+      "name": "Amazon S3",
+      "region": "US East (N. Virginia)",
+      "region_id": "us-east-1",
+      "storage_class": "S3 Standard",
+      "source": "https://aws.amazon.com/s3/pricing/",
+      "storage_per_gib_month": 0.023,
+      "requests_per_1000": {
+        "put": 0.005,
+        "get": 0.0004,
+        "head": 0.0004,
+        "list": 0.005,
+        "delete": 0.0,
+        "copy": 0.005,
+        "create_multipart": 0.005,
+        "complete_multipart": 0.005,
+        "abort_multipart": 0.0
+      }
+    },
+    {
+      "id": "azure",
+      "name": "Azure Blob Storage",
+      "region": "East US",
+      "region_id": "eastus",
+      "storage_class": "Hot ZRS",
+      "source": "https://azure.microsoft.com/en-us/pricing/details/storage/blobs/",
+      "storage_per_gib_month": 0.026,
+      "requests_per_1000": {
+        "put": 0.00625,
+        "get": 0.0004,
+        "head": 0.0004,
+        "list": 0.00625,
+        "delete": 0.0,
+        "copy": 0.00625,
+        "create_multipart": 0.00625,
+        "complete_multipart": 0.00625,
+        "abort_multipart": 0.0
+      }
+    },
+    {
+      "id": "gcs",
+      "name": "Google Cloud Storage",
+      "region": "South Carolina",
+      "region_id": "us-east1",
+      "storage_class": "Standard regional",
+      "source": "https://cloud.google.com/storage/pricing",
+      "storage_per_gib_month": 0.02,
+      "requests_per_1000": {
+        "put": 0.005,
+        "get": 0.0004,
+        "head": 0.0004,
+        "list": 0.005,
+        "delete": 0.0,
+        "copy": 0.005,
+        "create_multipart": 0.005,
+        "complete_multipart": 0.005,
+        "abort_multipart": 0.0
+      }
+    }
+  ],
+  "notes": [
+    "Rates use pay-as-you-go pricing without free tiers, credits, discounts, or taxes.",
+    "Buckets and benchmark compute are assumed to be in the same US East region, so data transfer is not charged.",
+    "Storage is prorated over the benchmark interval and scaled with the requested operation count."
+  ]
+}

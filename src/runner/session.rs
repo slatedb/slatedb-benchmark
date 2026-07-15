@@ -6,7 +6,6 @@ use super::{
 };
 use crate::cli::RunArgs;
 use crate::config::{BenchmarkConfig, SuiteConfig, SuiteExecution, VariantConfig, WorkloadKind};
-use crate::cost::PriceTable;
 use crate::model::{EncodedHistogram, Environment, InitialState, ObjectStoreBaseline, RunManifest};
 use crate::object_store_probe::{delete_prefix, probe, ObjectStoreContext};
 use crate::system::{sample_until_stopped, ApplicationCounters, BenchmarkMetricsRecorder};
@@ -96,7 +95,6 @@ pub(super) async fn execute(
     args: &RunArgs,
     benchmark: &BenchmarkConfig,
     requested: Vec<VariantConfig>,
-    prices: &PriceTable,
     object_store: &ObjectStoreContext,
     environment: &Environment,
 ) -> Result<()> {
@@ -212,7 +210,6 @@ pub(super) async fn execute(
         environment,
         baseline: &baseline,
         baseline_histograms: &baseline_histograms,
-        prices,
         args,
     };
     let store: Arc<dyn ObjectStore> = object_store.instrumented.clone();

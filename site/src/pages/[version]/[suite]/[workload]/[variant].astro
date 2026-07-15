@@ -1,8 +1,9 @@
 ---
 import MeasurementRows from '../../../../components/MeasurementRows.astro';
 import ResultChart from '../../../../components/ResultChart.astro';
+import CostCalculator from '../../../../components/CostCalculator.astro';
 import Base from '../../../../layouts/Base.astro';
-import { loadResults, routeHref, type BenchmarkResult, type BenchmarkTimeseries } from '../../../../lib/results';
+import { loadPricing, loadResults, routeHref, type BenchmarkResult, type BenchmarkTimeseries } from '../../../../lib/results';
 
 export async function getStaticPaths() {
   const routes = await loadResults();
@@ -12,6 +13,7 @@ export async function getStaticPaths() {
 const { route, routes } = Astro.props;
 const result = route.result as BenchmarkResult;
 const timeseries = route.timeseries as BenchmarkTimeseries;
+const pricing = await loadPricing();
 const catalog = routes.map((candidate: typeof route) => ({ version: candidate.version, suite: candidate.suite, workload: candidate.workload, variant: candidate.variant, href: routeHref(candidate) }));
 const rawBase = `/raw/${route.version}/${route.suite}/${route.workload}/${route.variant}`;
 
@@ -24,9 +26,14 @@ const formatBytes = (value: unknown) => {
   return `${amount.toFixed(index === 0 ? 0 : 2)} ${units[index]}`;
 };
 
+const { object_store_requests: objectStoreRequests, ...storage } = result.storage;
+const operationOrder = ['get', 'put', 'list', 'delete', 'head', 'copy', 'create_multipart', 'complete_multipart', 'abort_multipart'];
+const objectStoreOperations = Object.fromEntries(Object.entries(objectStoreRequests).sort(
+  ([left], [right]) => operationOrder.indexOf(left) - operationOrder.indexOf(right),
+));
 const tables = [
   ['Application', result.application], ['Durability', result.durability], ['Resources', result.resources],
-  ['Storage', result.storage], ['Cost', result.cost], ['Object-store baseline', result.object_store_baseline],
+  ['Storage', storage], ['Object store operations', objectStoreOperations], ['Object-store baseline', result.object_store_baseline],
 ] as const;
 ---
 
@@ -72,6 +79,8 @@ const tables = [
           </div>
         ))}
       </section>
+
+      <CostCalculator result={result} pricing={pricing} />
 
       <footer class="result-footer">
         <div><span>Raw files</span><a href={`${rawBase}/result.json`}>result.json</a><a href={`${rawBase}/histograms.json`}>histograms.json</a><a href={`${rawBase}/timeseries.json`}>timeseries.json</a></div>

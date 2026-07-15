@@ -180,11 +180,6 @@ for (const suite of published.suites) {
       const keyBytes = workload.key_bytes ?? suite.key_bytes;
       const valueBytes = workload.value_bytes ?? suite.value_bytes;
       const databaseSize = Math.max(16 * 1024 * 1024, Math.round(recordCount * (keyBytes + valueBytes) * 0.42));
-      const compute = Math.max(0.00001, measurementMs / 60_000 * 0.032);
-      const requests = operations * 0.0000006;
-      const storage = databaseSize / 1_073_741_824 * (measurementMs / 2_592_000_000) * 0.02;
-      const totalCost = compute + requests + storage;
-      const perMillion = 1_000_000 / operations;
       const openLoop = target !== null;
       const transaction = workload.name === 'transaction-contention';
       const durabilityLag = isWrite && !awaitDurable ? latency.summary : null;
@@ -202,6 +197,7 @@ for (const suite of published.suites) {
           variant,
           mode: 'smoke',
         },
+        elapsed_ns: measurementNs,
         environment: {
           runner_type: 'mock-warp-x64-16x',
           hostname: 'mock-runner',
@@ -292,7 +288,18 @@ for (const suite of published.suites) {
         },
         storage: {
           database_size_bytes: databaseSize,
-          object_store_requests: { put: Math.round(operations / 100), get: Math.round(operations / 20), head: 2, list: 4, delete: 0 },
+          average_database_size_bytes: Math.round(databaseSize * (isWrite ? 1.05 : 1)),
+          object_store_requests: {
+            put: Math.round(operations / 100),
+            get: Math.round(operations / 20),
+            head: 2,
+            list: 4,
+            delete: 0,
+            copy: 0,
+            create_multipart: 0,
+            complete_multipart: 0,
+            abort_multipart: 0,
+          },
           object_store_errors: 0,
           bytes_read: Math.round(operations * valueBytes * 0.64),
           bytes_written: isWrite ? operations * valueBytes : 0,
@@ -309,20 +316,6 @@ for (const suite of published.suites) {
               write_amplification: 1.12 + index * 0.01,
             }))
             : [],
-        },
-        cost: {
-          price_table_revision: 'tigris-standard-2026-07-14',
-          currency: 'USD',
-          compute,
-          requests,
-          storage,
-          transfer: 0,
-          total: totalCost,
-          compute_per_million_operations: compute * perMillion,
-          requests_per_million_operations: requests * perMillion,
-          storage_per_million_operations: storage * perMillion,
-          transfer_per_million_operations: 0,
-          total_per_million_operations: totalCost * perMillion,
         },
         initial_state: {
           checkpoint_id: suite.name === 'rocksdb' ? null : '00000000-0000-4000-8000-000000000000',

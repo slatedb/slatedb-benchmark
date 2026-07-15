@@ -21,6 +21,7 @@ pub struct RunManifest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResultRecord {
     pub identity: Identity,
+    pub elapsed_ns: u64,
     pub environment: Environment,
     pub object_store_baseline: ObjectStoreBaseline,
     pub configuration: BenchmarkConfiguration,
@@ -28,7 +29,6 @@ pub struct ResultRecord {
     pub durability: DurabilityPerformance,
     pub resources: ResourceUse,
     pub storage: StoragePerformance,
-    pub cost: CostEstimate,
     pub initial_state: InitialState,
     pub source_files: SourceFiles,
 }
@@ -138,6 +138,7 @@ pub struct ResourceUse {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct StoragePerformance {
     pub database_size_bytes: u64,
+    pub average_database_size_bytes: u64,
     pub object_store_requests: BTreeMap<String, u64>,
     pub object_store_errors: u64,
     pub bytes_read: u64,
@@ -156,22 +157,6 @@ pub struct IngestWindow {
     pub ops_per_second: f64,
     pub compaction_backlog_bytes: Option<u64>,
     pub write_amplification: Option<f64>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct CostEstimate {
-    pub price_table_revision: String,
-    pub currency: String,
-    pub compute: f64,
-    pub requests: f64,
-    pub storage: f64,
-    pub transfer: f64,
-    pub total: f64,
-    pub compute_per_million_operations: Option<f64>,
-    pub requests_per_million_operations: Option<f64>,
-    pub storage_per_million_operations: Option<f64>,
-    pub transfer_per_million_operations: Option<f64>,
-    pub total_per_million_operations: Option<f64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

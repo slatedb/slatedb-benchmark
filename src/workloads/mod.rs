@@ -264,6 +264,7 @@ fn storage_summary(
     .map(|value| value.max(0) as u64);
     StoragePerformance {
         database_size_bytes: 0,
+        average_database_size_bytes: 0,
         object_store_requests: store.requests.clone(),
         object_store_errors: store.errors,
         bytes_read: store.bytes_read,

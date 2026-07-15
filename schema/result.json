@@ -4,9 +4,10 @@
   "title": "SlateDB benchmark result",
   "type": "object",
   "additionalProperties": false,
-  "required": ["identity", "environment", "object_store_baseline", "configuration", "application", "durability", "resources", "storage", "cost", "initial_state", "source_files"],
+  "required": ["identity", "elapsed_ns", "environment", "object_store_baseline", "configuration", "application", "durability", "resources", "storage", "initial_state", "source_files"],
   "properties": {
     "identity": { "$ref": "#/$defs/identity" },
+    "elapsed_ns": { "type": "integer", "minimum": 0 },
     "environment": { "$ref": "#/$defs/environment" },
     "object_store_baseline": { "$ref": "#/$defs/baseline" },
     "configuration": { "$ref": "#/$defs/configuration" },
@@ -14,7 +15,6 @@
     "durability": { "$ref": "#/$defs/durability" },
     "resources": { "$ref": "#/$defs/resources" },
     "storage": { "$ref": "#/$defs/storage" },
-    "cost": { "$ref": "#/$defs/cost" },
     "initial_state": { "$ref": "#/$defs/initialState" },
     "source_files": { "$ref": "#/$defs/sourceFiles" }
   },
@@ -114,9 +114,10 @@
     },
     "storage": {
       "type": "object", "additionalProperties": false,
-      "required": ["database_size_bytes", "object_store_requests", "object_store_errors", "bytes_read", "bytes_written", "compaction_throughput_bytes_per_second", "write_amplification", "backpressure_ns", "compaction_backlog_bytes", "five_minute_windows"],
+      "required": ["database_size_bytes", "average_database_size_bytes", "object_store_requests", "object_store_errors", "bytes_read", "bytes_written", "compaction_throughput_bytes_per_second", "write_amplification", "backpressure_ns", "compaction_backlog_bytes", "five_minute_windows"],
       "properties": {
         "database_size_bytes": { "type": "integer", "minimum": 0 },
+        "average_database_size_bytes": { "type": "integer", "minimum": 0 },
         "object_store_requests": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
         "object_store_errors": { "type": "integer", "minimum": 0 }, "bytes_read": { "type": "integer", "minimum": 0 }, "bytes_written": { "type": "integer", "minimum": 0 },
         "compaction_throughput_bytes_per_second": { "$ref": "#/$defs/nullableNumber" }, "write_amplification": { "$ref": "#/$defs/nullableNumber" },
@@ -131,20 +132,6 @@
         "start_offset_ns": { "type": "integer", "minimum": 0 }, "operations": { "type": "integer", "minimum": 0 },
         "ops_per_second": { "type": "number", "minimum": 0 }, "compaction_backlog_bytes": { "$ref": "#/$defs/nullableInteger" },
         "write_amplification": { "$ref": "#/$defs/nullableNumber" }
-      }
-    },
-    "cost": {
-      "type": "object", "additionalProperties": false,
-      "required": ["price_table_revision", "currency", "compute", "requests", "storage", "transfer", "total", "compute_per_million_operations", "requests_per_million_operations", "storage_per_million_operations", "transfer_per_million_operations", "total_per_million_operations"],
-      "properties": {
-        "price_table_revision": { "type": "string" }, "currency": { "type": "string" }, "compute": { "type": "number", "minimum": 0 },
-        "requests": { "type": "number", "minimum": 0 }, "storage": { "type": "number", "minimum": 0 }, "transfer": { "type": "number", "minimum": 0 },
-        "total": { "type": "number", "minimum": 0 },
-        "compute_per_million_operations": { "$ref": "#/$defs/nullableNumber" },
-        "requests_per_million_operations": { "$ref": "#/$defs/nullableNumber" },
-        "storage_per_million_operations": { "$ref": "#/$defs/nullableNumber" },
-        "transfer_per_million_operations": { "$ref": "#/$defs/nullableNumber" },
-        "total_per_million_operations": { "$ref": "#/$defs/nullableNumber" }
       }
     },
     "initialState": {
