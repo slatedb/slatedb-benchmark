@@ -304,14 +304,15 @@ Use `~/Code/slatedb/website` as the visual reference for the site's design
 aesthetic, layout, and CSS styling.
 
 The layout favors density. A slim header contains the SlateDB wordmark and
-version selector. A compact metadata row shows the machine, object store,
-dataset, cache, and durability settings. Summary values sit above a
-selected-variant chart workspace. Tabs show one chart at a time, with payload
-MiB/s selected by default. The other views are return latency over time,
-whole-run tail latency, and, where applicable, durability lag over time. A
-table below the charts exposes all percentiles, durability, resource, storage,
-cost, and object-store baseline fields. Each page links to its raw result files
-and the source commits.
+version selector. Profile, workload, and variant selectors begin the report;
+the page does not repeat those values in visible headings. A compact metadata
+row shows the machine, object store, dataset, cache, and durability settings,
+followed directly by the chart workspace. Tabs show one chart at a time, with
+payload MiB/s selected by default. The other views are return latency over
+time, whole-run tail latency, and, where applicable, durability lag over time.
+A table below the charts exposes all percentiles, durability, resource,
+storage, cost, and object-store baseline fields. Each page links to its raw
+result files and the source commits.
 
 The header wordmark uses Marcellus, matching `slatedb.io`. Body text uses Inter
 and numeric tables use JetBrains Mono. The site reuses SlateDB's ink,
