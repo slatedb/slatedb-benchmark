@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Builds and runs the Docker smoke suite, then validates its results.
+# Usage: ./scripts/smoke.sh
+# Requires Docker Compose. Replaces .runs/docker-smoke and removes the Compose
+# volumes on exit. The final repeated workload verifies checkpoint restoration.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

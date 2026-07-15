@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Publishes one validated workload from a run directory to the results checkout.
+# Usage: publish-results.sh <run-directory> <version> <suite> <workload> <publish-checkout>
+# Replaces that workload's published results, rebuilds the site, and retries the
+# push when another publisher advances main concurrently.
 set -euo pipefail
 
 if [[ $# -ne 5 ]]; then
@@ -45,6 +49,8 @@ git -C "$publish_checkout" config user.name "slatedb-benchmark[bot]"
 git -C "$publish_checkout" config user.email "slatedb-benchmark[bot]@users.noreply.github.com"
 git -C "$publish_checkout" commit -m "Publish SlateDB $version $suite/$workload benchmarks"
 
+# Rebase and rebuild before every push so the published site includes any results
+# committed by concurrent suite jobs.
 for attempt in 1 2 3 4 5; do
   git -C "$publish_checkout" fetch origin main
   git -C "$publish_checkout" rebase origin/main

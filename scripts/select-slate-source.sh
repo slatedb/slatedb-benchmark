@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Points this crate's SlateDB dependencies at a local SlateDB checkout.
+# Usage: select-slate-source.sh <slatedb-root>
+# The checkout must contain slatedb and slatedb-common packages. Running this
+# script updates the root Cargo.toml and Cargo.lock through `cargo add`.
 set -euo pipefail
 
 if [[ $# -ne 1 ]]; then
