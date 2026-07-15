@@ -541,13 +541,13 @@ async fn run_rocks_profile(
         (bulk_outcome.as_mut(), compaction_measurement)
     {
         let _ = stop_tx.send(true);
-        let samples = sampler.await.context("joining bulk compaction sampler")?;
+        let sampled = sampler.await.context("joining bulk compaction sampler")??;
         let elapsed = started.elapsed();
         let store_delta = store_metrics.snapshot().difference(&start_store);
         let end_slate = recorder.snapshot();
         extend_with_compaction_phase(
             outcome,
-            samples,
+            sampled.samples,
             store_delta,
             &start_slate,
             &end_slate,
@@ -983,6 +983,8 @@ mod tests {
         let timeseries = TimeseriesFile {
             schema_version: 1,
             interval_ns: 1_000_000_000,
+            application_windows: Vec::new(),
+            durability_windows: None,
             slatedb_metrics: Vec::new(),
             samples: vec![
                 TimeseriesSample {

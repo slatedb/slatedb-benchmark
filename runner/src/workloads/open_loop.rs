@@ -33,6 +33,9 @@ pub async fn run_open_phase(
     }
     let worker_count = (target_rate as usize / 100).clamp(32, 256);
     let (sender, receiver) = async_channel::bounded::<Arrival>(target_rate as usize);
+    let scheduler_window = counters
+        .as_ref()
+        .map(|counters| counters.register_window_recorder());
     let mut tasks = JoinSet::new();
     for _ in 0..worker_count {
         let db = Arc::clone(&db);
@@ -56,12 +59,19 @@ pub async fn run_open_phase(
             tokio::time::sleep_until(scheduled.into()).await;
         }
         let now = Instant::now();
+        let mut offered_batch = 0_u64;
+        let mut dropped_batch = 0_u64;
         while scheduled <= now && scheduled < deadline {
             offered += 1;
+            offered_batch += 1;
             if sender.try_send(Arrival { scheduled }).is_err() {
                 dropped += 1;
+                dropped_batch += 1;
             }
             scheduled += period;
+        }
+        if let Some(window) = &scheduler_window {
+            window.record_offered(offered_batch, dropped_batch);
         }
     }
     drop(sender);
@@ -89,7 +99,11 @@ async fn open_worker(
         await_durable: false,
         ..Default::default()
     };
-    let mut stats = WorkerStats::default();
+    let mut stats = WorkerStats::with_window_recorder(
+        counters
+            .as_ref()
+            .map(|counters| counters.register_window_recorder()),
+    );
     while let Ok(arrival) = receiver.recv().await {
         let errors_before = stats.errors;
         let invoked = Instant::now();
@@ -135,12 +149,9 @@ async fn open_worker(
             }
         }
         let completed = Instant::now();
-        stats
-            .histograms
-            .record("scheduling_delay", scheduling_delay);
-        stats.histograms.record(
-            "response",
+        stats.record_open_loop_timing(
             completed.saturating_duration_since(arrival.scheduled),
+            scheduling_delay,
         );
         if let Some(counters) = &counters {
             counters.operations.fetch_add(1, Ordering::Relaxed);

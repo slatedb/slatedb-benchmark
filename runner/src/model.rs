@@ -221,7 +221,34 @@ pub struct TimeseriesFile {
     pub schema_version: u32,
     pub interval_ns: u64,
     pub samples: Vec<TimeseriesSample>,
+    pub application_windows: Vec<ApplicationWindow>,
+    pub durability_windows: Option<Vec<DurabilityWindow>>,
     pub slatedb_metrics: Vec<MetricSeries>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ApplicationWindow {
+    pub start_offset_ns: u64,
+    pub duration_ns: u64,
+    pub completed_operations: u64,
+    pub successful_operations: u64,
+    pub errors: u64,
+    pub payload_bytes: u64,
+    pub offered_operations: Option<u64>,
+    pub dropped_operations: Option<u64>,
+    pub return_latency: Option<LatencySummary>,
+    pub return_latency_by_operation: BTreeMap<String, LatencySummary>,
+    pub response_latency: Option<LatencySummary>,
+    pub scheduling_delay: Option<LatencySummary>,
+    pub batch_latency: Option<LatencySummary>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DurabilityWindow {
+    pub start_offset_ns: u64,
+    pub duration_ns: u64,
+    pub writes_made_durable: u64,
+    pub durability_lag: Option<LatencySummary>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

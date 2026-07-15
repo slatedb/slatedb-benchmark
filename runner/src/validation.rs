@@ -136,6 +136,8 @@ fn validate_invariants(
             }
         }
     }
+    validate_application_windows(result, histograms, timeseries, expected_returns)?;
+    validate_durability_windows(result, timeseries)?;
     if result.application.errors != 0 {
         bail!(
             "result contains {} operation errors",
@@ -242,6 +244,196 @@ fn validate_invariants(
         {
             bail!("open-loop scheduler p99 delay exceeds its one-second queue bound");
         }
+    }
+    Ok(())
+}
+
+fn validate_application_windows(
+    result: &ResultRecord,
+    histograms: &HistogramsFile,
+    timeseries: &TimeseriesFile,
+    expected_returns: u64,
+) -> Result<()> {
+    if timeseries.application_windows.is_empty() {
+        bail!("application time series contains no windows");
+    }
+    validate_window_layout(
+        timeseries
+            .application_windows
+            .iter()
+            .map(|window| (window.start_offset_ns, window.duration_ns)),
+        "application",
+    )?;
+    let completed = timeseries
+        .application_windows
+        .iter()
+        .map(|window| window.completed_operations)
+        .sum::<u64>();
+    let successful = timeseries
+        .application_windows
+        .iter()
+        .map(|window| window.successful_operations)
+        .sum::<u64>();
+    let errors = timeseries
+        .application_windows
+        .iter()
+        .map(|window| window.errors)
+        .sum::<u64>();
+    let return_windows = timeseries
+        .application_windows
+        .iter()
+        .filter_map(|window| window.return_latency.as_ref())
+        .map(|latency| latency.count)
+        .sum::<u64>();
+    if completed != expected_returns || return_windows != expected_returns {
+        bail!(
+            "application windows contain {completed} completions and {return_windows} return latencies for {expected_returns} returned operations"
+        );
+    }
+    if successful != result.application.successful_operations {
+        bail!(
+            "application windows contain {successful} successful operations but result reports {}",
+            result.application.successful_operations
+        );
+    }
+    if errors != result.application.errors {
+        bail!(
+            "application windows contain {errors} errors but result reports {}",
+            result.application.errors
+        );
+    }
+
+    let open_loop = result.application.offered_ops_per_second.is_some();
+    for window in &timeseries.application_windows {
+        let returns = window
+            .return_latency
+            .as_ref()
+            .map(|latency| latency.count)
+            .unwrap_or(0);
+        if returns != window.completed_operations {
+            bail!(
+                "application window contains {returns} return latencies for {} completed operations",
+                window.completed_operations
+            );
+        }
+        if window.successful_operations > window.completed_operations {
+            bail!("application window has more successful operations than completions");
+        }
+        if open_loop {
+            if window.offered_operations.is_none() || window.dropped_operations.is_none() {
+                bail!("open-loop application window is missing scheduler counts");
+            }
+        } else if window.offered_operations.is_some()
+            || window.dropped_operations.is_some()
+            || window.response_latency.is_some()
+            || window.scheduling_delay.is_some()
+        {
+            bail!("closed-loop application window contains open-loop measurements");
+        }
+    }
+    if open_loop {
+        let offered = timeseries
+            .application_windows
+            .iter()
+            .filter_map(|window| window.offered_operations)
+            .sum::<u64>();
+        let dropped = timeseries
+            .application_windows
+            .iter()
+            .filter_map(|window| window.dropped_operations)
+            .sum::<u64>();
+        if offered != result.application.total_operations {
+            bail!(
+                "application windows contain {offered} offered operations but result reports {}",
+                result.application.total_operations
+            );
+        }
+        if Some(dropped) != result.application.dropped_operations {
+            bail!(
+                "application windows contain {dropped} dropped operations but result reports {:?}",
+                result.application.dropped_operations
+            );
+        }
+    }
+
+    for name in ["return", "response", "scheduling_delay", "batch"] {
+        let expected = histograms
+            .histograms
+            .get(name)
+            .map(|histogram| histogram.count)
+            .unwrap_or(0);
+        let actual = timeseries
+            .application_windows
+            .iter()
+            .filter_map(|window| match name {
+                "return" => window.return_latency.as_ref(),
+                "response" => window.response_latency.as_ref(),
+                "scheduling_delay" => window.scheduling_delay.as_ref(),
+                "batch" => window.batch_latency.as_ref(),
+                _ => None,
+            })
+            .map(|latency| latency.count)
+            .sum::<u64>();
+        if actual != expected {
+            bail!("application window {name} count {actual} does not match histogram count {expected}");
+        }
+    }
+    Ok(())
+}
+
+fn validate_durability_windows(result: &ResultRecord, timeseries: &TimeseriesFile) -> Result<()> {
+    let Some(windows) = &timeseries.durability_windows else {
+        if result.durability.lag.is_some() {
+            bail!("durability lag has no time-series windows");
+        }
+        return Ok(());
+    };
+    validate_window_layout(
+        windows
+            .iter()
+            .map(|window| (window.start_offset_ns, window.duration_ns)),
+        "durability",
+    )?;
+    let count = windows
+        .iter()
+        .filter_map(|window| window.durability_lag.as_ref())
+        .map(|latency| latency.count)
+        .sum::<u64>();
+    let expected = result
+        .durability
+        .lag
+        .as_ref()
+        .map(|latency| latency.count)
+        .unwrap_or(0);
+    for window in windows {
+        let latency_count = window
+            .durability_lag
+            .as_ref()
+            .map(|latency| latency.count)
+            .unwrap_or(0);
+        if latency_count != window.writes_made_durable {
+            bail!(
+                "durability window contains {latency_count} lag observations for {} durable writes",
+                window.writes_made_durable
+            );
+        }
+    }
+    if count != expected {
+        bail!("durability windows contain {count} writes but result reports {expected}");
+    }
+    Ok(())
+}
+
+fn validate_window_layout(windows: impl Iterator<Item = (u64, u64)>, name: &str) -> Result<()> {
+    let mut expected_start = 0_u64;
+    for (start, duration) in windows {
+        if duration == 0 {
+            bail!("{name} time-series window has zero duration");
+        }
+        if start != expected_start {
+            bail!("{name} time-series window starts at {start}, expected {expected_start}");
+        }
+        expected_start = start.saturating_add(duration);
     }
     Ok(())
 }

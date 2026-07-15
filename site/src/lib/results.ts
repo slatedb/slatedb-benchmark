@@ -59,12 +59,43 @@ export type Latency = {
   max_ns: number;
 };
 
+export type ApplicationWindow = {
+  start_offset_ns: number;
+  duration_ns: number;
+  completed_operations: number;
+  successful_operations: number;
+  errors: number;
+  payload_bytes: number;
+  offered_operations: number | null;
+  dropped_operations: number | null;
+  return_latency: Latency | null;
+  return_latency_by_operation: Record<string, Latency>;
+  response_latency: Latency | null;
+  scheduling_delay: Latency | null;
+  batch_latency: Latency | null;
+};
+
+export type DurabilityWindow = {
+  start_offset_ns: number;
+  duration_ns: number;
+  writes_made_durable: number;
+  durability_lag: Latency | null;
+};
+
+export type BenchmarkTimeseries = {
+  schema_version: number;
+  interval_ns: number;
+  application_windows: ApplicationWindow[];
+  durability_windows: DurabilityWindow[] | null;
+};
+
 export type ResultRoute = {
   version: string;
   profile: string;
   workload: string;
   variant: string;
   result: BenchmarkResult;
+  timeseries: BenchmarkTimeseries;
   directory: string;
 };
 
@@ -94,13 +125,18 @@ export async function loadResults(): Promise<ResultRoute[]> {
   const routes = await Promise.all(
     files.map(async (file) => {
       const result = JSON.parse(await fs.readFile(file, 'utf8')) as BenchmarkResult;
+      const directory = path.dirname(file);
+      const timeseries = JSON.parse(
+        await fs.readFile(path.join(directory, result.source_files.timeseries), 'utf8'),
+      ) as BenchmarkTimeseries;
       return {
         version: result.identity.slate_version,
         profile: result.identity.profile,
         workload: result.identity.workload,
         variant: result.identity.variant,
         result,
-        directory: path.dirname(file),
+        timeseries,
+        directory,
       };
     }),
   );

@@ -1,109 +1,259 @@
 ---
-import type { ResultRoute } from '../lib/results';
+import type { BenchmarkResult, BenchmarkTimeseries } from '../lib/results';
 
 interface Props {
-  siblings: ResultRoute[];
-  selected: string;
+  result: BenchmarkResult;
+  timeseries: BenchmarkTimeseries;
+  variant: string;
+  rawBase: string;
 }
 
-const { siblings, selected } = Astro.props;
-const chartData = siblings.map(({ variant, result }) => ({
-  variant,
-  selected: variant === selected,
-  p50: result.application.return_latency.p50_ns / 1e6,
-  p95: result.application.return_latency.p95_ns / 1e6,
-  p99: result.application.return_latency.p99_ns / 1e6,
-  p999: result.application.return_latency.p999_ns / 1e6,
-  throughput: result.application.accepted_ops_per_second,
-}));
+type Point = { x: number | string; y: number };
+type ChartDefinition = {
+  key: string;
+  title: string;
+  description: string;
+  unit: string;
+  digits: number;
+  mode: 'time' | 'percentiles';
+  rawHref: string;
+  datasets: Array<{ label: string; color: string; points: Point[] }>;
+};
+
+const { result, timeseries, variant, rawBase } = Astro.props;
+const application = timeseries.application_windows;
+const atEnd = (window: { start_offset_ns: number; duration_ns: number }) =>
+  (window.start_offset_ns + window.duration_ns) / 1e9;
+const seconds = (window: { duration_ns: number }) => window.duration_ns / 1e9;
+const slateSettings = result.configuration.slate_settings as Record<string, unknown> | undefined;
+const awaitsDurability = slateSettings?.await_durable === true;
+
+const latencyRows = application.filter((window) => window.return_latency !== null);
+const latencyChart: ChartDefinition = {
+  key: 'return-latency',
+  title: 'Return latency over time',
+  description: awaitsDurability
+    ? 'SlateDB invocation to API return · includes durability'
+    : 'SlateDB invocation to API return',
+  unit: 'Milliseconds',
+  digits: 3,
+  mode: 'time',
+  rawHref: `${rawBase}/timeseries.json`,
+  datasets: [
+    { label: 'p50', color: '#8b94a3', points: latencyRows.map((window) => ({ x: atEnd(window), y: window.return_latency!.p50_ns / 1e6 })) },
+    { label: 'p95', color: '#5e6878', points: latencyRows.map((window) => ({ x: atEnd(window), y: window.return_latency!.p95_ns / 1e6 })) },
+    { label: 'p99', color: '#b26844', points: latencyRows.map((window) => ({ x: atEnd(window), y: window.return_latency!.p99_ns / 1e6 })) },
+  ],
+};
+
+const throughputChart: ChartDefinition = {
+  key: 'payload-throughput',
+  title: 'Payload throughput',
+  description: 'Application payload returned or written during each window',
+  unit: 'MiB / second',
+  digits: 2,
+  mode: 'time',
+  rawHref: `${rawBase}/timeseries.json`,
+  datasets: [{
+    label: 'MiB/s',
+    color: '#b26844',
+    points: application.map((window) => ({
+      x: atEnd(window),
+      y: window.payload_bytes / 1_048_576 / Math.max(seconds(window), Number.EPSILON),
+    })),
+  }],
+};
+
+const wholeRunLatency = result.application.return_latency;
+const tailLatencyChart: ChartDefinition = {
+  key: 'tail-latency',
+  title: 'Tail latency',
+  description: awaitsDurability
+    ? 'Whole-run return latency percentiles · includes durability'
+    : 'Whole-run return latency percentiles',
+  unit: 'ms',
+  digits: 3,
+  mode: 'percentiles',
+  rawHref: `${rawBase}/result.json`,
+  datasets: [{
+    label: 'Return latency',
+    color: '#b26844',
+    points: [
+      { x: 'p50', y: wholeRunLatency.p50_ns / 1e6 },
+      { x: 'p95', y: wholeRunLatency.p95_ns / 1e6 },
+      { x: 'p99', y: wholeRunLatency.p99_ns / 1e6 },
+      { x: 'p99.9', y: wholeRunLatency.p999_ns / 1e6 },
+    ],
+  }],
+};
+
+const durabilityRows = (timeseries.durability_windows || [])
+  .filter((window) => window.durability_lag !== null);
+const durabilityChart: ChartDefinition | null = durabilityRows.length > 0 ? {
+  key: 'durability-lag',
+  title: 'Durability lag over time',
+  description: 'API return to durable frontier coverage',
+  unit: 'Milliseconds',
+  digits: 3,
+  mode: 'time',
+  rawHref: `${rawBase}/timeseries.json`,
+  datasets: [
+    { label: 'p50', color: '#8b94a3', points: durabilityRows.map((window) => ({ x: atEnd(window), y: window.durability_lag!.p50_ns / 1e6 })) },
+    { label: 'p95', color: '#5e6878', points: durabilityRows.map((window) => ({ x: atEnd(window), y: window.durability_lag!.p95_ns / 1e6 })) },
+    { label: 'p99', color: '#b26844', points: durabilityRows.map((window) => ({ x: atEnd(window), y: window.durability_lag!.p99_ns / 1e6 })) },
+  ],
+} : null;
+
+const charts = [throughputChart, latencyChart, tailLatencyChart, durabilityChart]
+  .filter((chart): chart is ChartDefinition => chart !== null);
 ---
 
-<section class="chart-region" aria-labelledby="chart-title">
+<section class="timeseries-region" aria-labelledby="timeseries-title" data-chart-switcher>
   <div class="section-heading">
     <div>
-      <p class="eyebrow">Variant comparison</p>
-      <h2 id="chart-title">Return latency</h2>
-    </div>
-    <div class="chart-toggle" role="group" aria-label="Chart metric">
-      <button type="button" data-chart-mode="latency" aria-pressed="true">Latency</button>
-      <button type="button" data-chart-mode="throughput" aria-pressed="false">Throughput</button>
+      <p class="eyebrow">Selected variant</p>
+      <h2 id="timeseries-title">Performance <code>{variant}</code></h2>
     </div>
   </div>
-  <div class="canvas-wrap">
-    <canvas id="result-chart" data-results={JSON.stringify(chartData)} aria-describedby="chart-table"></canvas>
+  <div class="chart-tabs" role="tablist" aria-label="Performance charts">
+    {charts.map((chart, index) => (
+      <button
+        type="button"
+        role="tab"
+        id={`${chart.key}-tab`}
+        aria-controls={`${chart.key}-panel`}
+        aria-selected={index === 0 ? 'true' : 'false'}
+        tabindex={index === 0 ? 0 : -1}
+      >
+        {chart.title}
+      </button>
+    ))}
   </div>
-  <div class="table-scroll chart-fallback" id="chart-table">
-    <table>
-      <thead><tr><th>Variant</th><th>p50</th><th>p95</th><th>p99</th><th>p99.9</th><th>Ops/s</th></tr></thead>
-      <tbody>
-        {chartData.map((row) => (
-          <tr class:list={{ selected: row.selected }}>
-            <th scope="row">{row.variant}</th>
-            <td>{row.p50.toFixed(2)} ms</td><td>{row.p95.toFixed(2)} ms</td>
-            <td>{row.p99.toFixed(2)} ms</td><td>{row.p999.toFixed(2)} ms</td>
-            <td>{Math.round(row.throughput).toLocaleString()}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+  <div class="chart-stage">
+    {charts.map((chart, index) => (
+      <figure
+        class="time-chart"
+        id={`${chart.key}-panel`}
+        role="tabpanel"
+        aria-labelledby={`${chart.key}-tab`}
+        hidden={index !== 0}
+      >
+        <figcaption>
+          <div>
+            <h3>{chart.title}</h3>
+            <p id={`${chart.key}-description`}>{chart.description}</p>
+          </div>
+          <a class="chart-raw-link" href={chart.rawHref}>View raw data</a>
+        </figcaption>
+        <div class="time-chart-canvas">
+          <canvas
+            data-time-chart={JSON.stringify(chart)}
+            aria-label={`${chart.title} for ${variant}`}
+            aria-describedby={`${chart.key}-description`}
+          ></canvas>
+        </div>
+      </figure>
+    ))}
   </div>
 </section>
 
 <script>
   import Chart from 'chart.js/auto';
 
-  const canvas = document.querySelector<HTMLCanvasElement>('#result-chart');
-  if (canvas) {
-    const rows = JSON.parse(canvas.dataset.results || '[]');
-    const terracotta = '#b26844';
-    const ink = '#1f2a37';
-    const muted = '#8b94a3';
-    const chart = new Chart(canvas, {
-      type: 'bar',
+  const renderChart = (canvas: HTMLCanvasElement) => {
+    const existing = Chart.getChart(canvas);
+    if (existing) {
+      existing.resize();
+      return;
+    }
+    const chart = JSON.parse(canvas.dataset.timeChart || '{}');
+    const percentiles = chart.mode === 'percentiles';
+    new Chart(canvas, {
+      type: 'line',
       data: {
-        labels: rows.map((row: { variant: string }) => row.variant),
-        datasets: [
-          { label: 'p50', data: rows.map((row: { p50: number }) => row.p50), backgroundColor: muted },
-          { label: 'p95', data: rows.map((row: { p95: number }) => row.p95), backgroundColor: '#5e6878' },
-          { label: 'p99', data: rows.map((row: { p99: number }) => row.p99), backgroundColor: ink },
-          { label: 'p99.9', data: rows.map((row: { p999: number }) => row.p999), backgroundColor: terracotta },
-        ],
+        labels: percentiles ? chart.datasets[0]?.points.map((point: { x: string }) => point.x) : undefined,
+        datasets: chart.datasets.map((dataset: { label: string; color: string; points: Array<{ x: number | string; y: number }> }) => ({
+          label: dataset.label,
+          data: percentiles ? dataset.points.map((point) => point.y) : dataset.points,
+          borderColor: dataset.color,
+          backgroundColor: dataset.color,
+          borderWidth: 1.8,
+          pointRadius: percentiles ? 3 : 0,
+          pointHoverRadius: percentiles ? 5 : 3,
+          tension: 0.16,
+        })),
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
         animation: { duration: 320, easing: 'easeOutQuart' },
+        interaction: { mode: 'index', intersect: false },
         scales: {
-          x: { grid: { display: false }, ticks: { maxRotation: 28, minRotation: 0 } },
-          y: { beginAtZero: true, title: { display: true, text: 'Milliseconds' }, grid: { color: 'rgba(15,22,32,.07)' } },
+          x: {
+            type: percentiles ? 'category' : 'linear',
+            grid: { display: false },
+            title: { display: true, text: percentiles ? 'Percentile' : 'Elapsed seconds' },
+            ticks: { maxTicksLimit: 8 },
+          },
+          y: {
+            beginAtZero: false,
+            title: { display: true, text: chart.unit },
+            grid: { color: 'rgba(15,22,32,.07)' },
+            ticks: { maxTicksLimit: 6 },
+          },
         },
-        plugins: { legend: { position: 'bottom', labels: { usePointStyle: true, boxWidth: 8 } } },
+        plugins: {
+          legend: {
+            display: chart.datasets.length > 1,
+            align: 'end',
+            labels: { usePointStyle: true, pointStyle: 'line', boxWidth: 18 },
+          },
+          tooltip: {
+            callbacks: {
+              title: (items) => percentiles
+                ? String(items[0]?.label || '')
+                : `${Number(items[0]?.parsed.x || 0).toFixed(2)} seconds`,
+              label: (context) => `${context.dataset.label}: ${Number(context.parsed.y).toFixed(chart.digits)} ${chart.unit}`,
+            },
+          },
+        },
       },
     });
+  };
 
-    document.querySelectorAll<HTMLButtonElement>('[data-chart-mode]').forEach((button) => {
-      button.addEventListener('click', () => {
-        const mode = button.dataset.chartMode;
-        document.querySelectorAll<HTMLButtonElement>('[data-chart-mode]').forEach((item) =>
-          item.setAttribute('aria-pressed', String(item === button)),
-        );
-        const heading = document.querySelector('#chart-title');
-        if (mode === 'throughput') {
-          chart.data.datasets = [{ label: 'Accepted ops/s', data: rows.map((row: { throughput: number }) => row.throughput), backgroundColor: terracotta }];
-          if (chart.options.scales?.y && 'title' in chart.options.scales.y) chart.options.scales.y.title!.text = 'Operations / second';
-          if (heading) heading.textContent = 'Accepted throughput';
-        } else {
-          chart.data.datasets = [
-            { label: 'p50', data: rows.map((row: { p50: number }) => row.p50), backgroundColor: muted },
-            { label: 'p95', data: rows.map((row: { p95: number }) => row.p95), backgroundColor: '#5e6878' },
-            { label: 'p99', data: rows.map((row: { p99: number }) => row.p99), backgroundColor: ink },
-            { label: 'p99.9', data: rows.map((row: { p999: number }) => row.p999), backgroundColor: terracotta },
-          ];
-          if (chart.options.scales?.y && 'title' in chart.options.scales.y) chart.options.scales.y.title!.text = 'Milliseconds';
-          if (heading) heading.textContent = 'Return latency';
-        }
-        chart.update();
+  document.querySelectorAll<HTMLElement>('[data-chart-switcher]').forEach((switcher) => {
+    const tabs = [...switcher.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
+    const panels = [...switcher.querySelectorAll<HTMLElement>('[role="tabpanel"]')];
+    const activate = (tab: HTMLButtonElement) => {
+      tabs.forEach((candidate) => {
+        const selected = candidate === tab;
+        candidate.setAttribute('aria-selected', String(selected));
+        candidate.tabIndex = selected ? 0 : -1;
+      });
+      panels.forEach((panel) => {
+        panel.hidden = panel.id !== tab.getAttribute('aria-controls');
+      });
+      const panel = panels.find((candidate) => !candidate.hidden);
+      const canvas = panel?.querySelector<HTMLCanvasElement>('[data-time-chart]');
+      if (canvas) requestAnimationFrame(() => renderChart(canvas));
+    };
+
+    tabs.forEach((tab, index) => {
+      tab.addEventListener('click', () => activate(tab));
+      tab.addEventListener('keydown', (event) => {
+        if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+        event.preventDefault();
+        const nextIndex = event.key === 'Home'
+          ? 0
+          : event.key === 'End'
+            ? tabs.length - 1
+            : (index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+        tabs[nextIndex]?.focus();
+        if (tabs[nextIndex]) activate(tabs[nextIndex]);
       });
     });
-  }
+
+    const selected = tabs.find((tab) => tab.getAttribute('aria-selected') === 'true') || tabs[0];
+    if (selected) activate(selected);
+  });
 </script>

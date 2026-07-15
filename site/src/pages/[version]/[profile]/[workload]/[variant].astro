@@ -1,7 +1,7 @@
 ---
 import ResultChart from '../../../../components/ResultChart.astro';
 import Base from '../../../../layouts/Base.astro';
-import { loadResults, routeHref, type BenchmarkResult } from '../../../../lib/results';
+import { loadResults, routeHref, type BenchmarkResult, type BenchmarkTimeseries } from '../../../../lib/results';
 
 export async function getStaticPaths() {
   const routes = await loadResults();
@@ -10,7 +10,7 @@ export async function getStaticPaths() {
 
 const { route, routes } = Astro.props;
 const result = route.result as BenchmarkResult;
-const siblings = routes.filter((candidate: typeof route) => candidate.version === route.version && candidate.profile === route.profile && candidate.workload === route.workload);
+const timeseries = route.timeseries as BenchmarkTimeseries;
 const catalog = routes.map((candidate: typeof route) => ({ version: candidate.version, profile: candidate.profile, workload: candidate.workload, variant: candidate.variant, href: routeHref(candidate) }));
 const rawBase = `/raw/${route.version}/${route.profile}/${route.workload}/${route.variant}`;
 
@@ -35,6 +35,7 @@ const tables = [
   <header class="site-header">
     <a class="wordmark" href="https://slatedb.io" aria-label="SlateDB home">SlateDB</a>
     <span class="site-name">Benchmarks</span>
+    {route.version.includes('mock') && <span class="data-badge">Mock data</span>}
     <label class="version-control"><span>Version</span><select id="version-select" aria-label="SlateDB version"></select></label>
   </header>
   <main class="result-shell" data-catalog={JSON.stringify(catalog)} data-current={JSON.stringify({ version: route.version, profile: route.profile, workload: route.workload, variant: route.variant })}>
@@ -65,10 +66,10 @@ const tables = [
       <div><span>Cost</span><strong>${Number(result.cost.total).toFixed(5)}</strong><small>{result.cost.currency} measured window</small></div>
     </section>
 
-    <ResultChart siblings={siblings} selected={route.variant} />
+    <ResultChart result={result} timeseries={timeseries} variant={route.variant} rawBase={rawBase} />
 
     <section class="detail-region" aria-labelledby="detail-title">
-      <div class="section-heading"><div><p class="eyebrow">Complete record</p><h2 id="detail-title">Measurements</h2></div></div>
+      <div class="section-heading"><div><p class="eyebrow">Selected variant</p><h2 id="detail-title">Measurements <code>{route.variant}</code></h2></div></div>
       {tables.map(([name, values]) => (
         <div class="metric-group">
           <h3>{name}</h3>

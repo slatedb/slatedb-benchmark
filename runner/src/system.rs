@@ -1,7 +1,8 @@
+use crate::histogram::HistogramSet;
 use crate::instrumented_store::{StoreMetrics, StoreSnapshot};
 use crate::model::{
-    Environment, MetricHistogramValue, MetricSeries, MetricSeriesValue, MetricSnapshot,
-    MetricValue, MetricValueType, ResourceUse, TimeseriesFile, TimeseriesSample,
+    ApplicationWindow, Environment, MetricHistogramValue, MetricSeries, MetricSeriesValue,
+    MetricSnapshot, MetricValue, MetricValueType, ResourceUse, TimeseriesFile, TimeseriesSample,
 };
 use anyhow::{bail, ensure, Result};
 use object_store::path::Path;
@@ -14,7 +15,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use sysinfo::{Disks, Networks, Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 use tokio::sync::watch;
@@ -168,16 +169,179 @@ where
 }
 
 #[derive(Debug, Default)]
+struct ApplicationWindowDelta {
+    completed_operations: u64,
+    successful_operations: u64,
+    errors: u64,
+    payload_bytes: u64,
+    offered_operations: u64,
+    dropped_operations: u64,
+    histograms: HistogramSet,
+}
+
+impl ApplicationWindowDelta {
+    fn merge(&mut self, other: &Self) -> Result<()> {
+        self.completed_operations = self
+            .completed_operations
+            .saturating_add(other.completed_operations);
+        self.successful_operations = self
+            .successful_operations
+            .saturating_add(other.successful_operations);
+        self.errors = self.errors.saturating_add(other.errors);
+        self.payload_bytes = self.payload_bytes.saturating_add(other.payload_bytes);
+        self.offered_operations = self
+            .offered_operations
+            .saturating_add(other.offered_operations);
+        self.dropped_operations = self
+            .dropped_operations
+            .saturating_add(other.dropped_operations);
+        self.histograms.merge(&other.histograms)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ApplicationWindowRecorder {
+    inner: Arc<Mutex<ApplicationWindowDelta>>,
+}
+
+impl ApplicationWindowRecorder {
+    pub fn record_success(&self, operation: &str, latency: Duration, payload_bytes: u64) {
+        let mut window = self.inner.lock().expect("application window lock poisoned");
+        window.completed_operations = window.completed_operations.saturating_add(1);
+        window.successful_operations = window.successful_operations.saturating_add(1);
+        window.payload_bytes = window.payload_bytes.saturating_add(payload_bytes);
+        window.histograms.record("return", latency);
+        window
+            .histograms
+            .record(format!("return/{operation}"), latency);
+    }
+
+    pub fn record_error(&self, operation: &str, latency: Duration) {
+        let mut window = self.inner.lock().expect("application window lock poisoned");
+        window.completed_operations = window.completed_operations.saturating_add(1);
+        window.errors = window.errors.saturating_add(1);
+        window.histograms.record("return", latency);
+        window
+            .histograms
+            .record(format!("return/{operation}"), latency);
+    }
+
+    pub fn record_completion(&self, operation: &str, latency: Duration) {
+        let mut window = self.inner.lock().expect("application window lock poisoned");
+        window.completed_operations = window.completed_operations.saturating_add(1);
+        window.histograms.record("return", latency);
+        window
+            .histograms
+            .record(format!("return/{operation}"), latency);
+    }
+
+    pub fn record_open_loop_timing(&self, response: Duration, scheduling_delay: Duration) {
+        let mut window = self.inner.lock().expect("application window lock poisoned");
+        window.histograms.record("response", response);
+        window
+            .histograms
+            .record("scheduling_delay", scheduling_delay);
+    }
+
+    pub fn record_batch_latency(&self, latency: Duration) {
+        self.inner
+            .lock()
+            .expect("application window lock poisoned")
+            .histograms
+            .record("batch", latency);
+    }
+
+    pub fn record_offered(&self, offered: u64, dropped: u64) {
+        let mut window = self.inner.lock().expect("application window lock poisoned");
+        window.offered_operations = window.offered_operations.saturating_add(offered);
+        window.dropped_operations = window.dropped_operations.saturating_add(dropped);
+    }
+}
+
+#[derive(Debug)]
 pub struct ApplicationCounters {
     pub operations: AtomicU64,
     pub errors: AtomicU64,
+    open_loop: bool,
+    window_shards: Mutex<Vec<Arc<Mutex<ApplicationWindowDelta>>>>,
+}
+
+impl Default for ApplicationCounters {
+    fn default() -> Self {
+        Self::new(false)
+    }
 }
 
 impl ApplicationCounters {
+    pub fn new(open_loop: bool) -> Self {
+        Self {
+            operations: AtomicU64::new(0),
+            errors: AtomicU64::new(0),
+            open_loop,
+            window_shards: Mutex::new(Vec::new()),
+        }
+    }
+
     pub fn reset(&self) {
         self.operations.store(0, Ordering::Relaxed);
         self.errors.store(0, Ordering::Relaxed);
     }
+
+    pub fn register_window_recorder(&self) -> ApplicationWindowRecorder {
+        let inner = Arc::new(Mutex::new(ApplicationWindowDelta::default()));
+        self.window_shards
+            .lock()
+            .expect("application shard registry lock poisoned")
+            .push(Arc::clone(&inner));
+        ApplicationWindowRecorder { inner }
+    }
+
+    fn drain_window(
+        &self,
+        start_offset_ns: u64,
+        duration_ns: u64,
+    ) -> Result<(ApplicationWindow, HistogramSet)> {
+        let shards = self
+            .window_shards
+            .lock()
+            .expect("application shard registry lock poisoned")
+            .clone();
+        let mut merged = ApplicationWindowDelta::default();
+        for shard in shards {
+            let delta =
+                std::mem::take(&mut *shard.lock().expect("application window lock poisoned"));
+            merged.merge(&delta)?;
+        }
+        let summary = |name: &str| {
+            merged
+                .histograms
+                .get(name)
+                .filter(|histogram| !histogram.is_empty())
+                .map(|histogram| histogram.summary())
+        };
+        let window = ApplicationWindow {
+            start_offset_ns,
+            duration_ns,
+            completed_operations: merged.completed_operations,
+            successful_operations: merged.successful_operations,
+            errors: merged.errors,
+            payload_bytes: merged.payload_bytes,
+            offered_operations: self.open_loop.then_some(merged.offered_operations),
+            dropped_operations: self.open_loop.then_some(merged.dropped_operations),
+            return_latency: summary("return"),
+            return_latency_by_operation: merged.histograms.summaries_with_prefix("return/"),
+            response_latency: summary("response"),
+            scheduling_delay: summary("scheduling_delay"),
+            batch_latency: summary("batch"),
+        };
+        Ok((window, merged.histograms))
+    }
+}
+
+pub struct SampledTimeseries {
+    pub samples: Vec<TimeseriesSample>,
+    pub application_windows: Vec<ApplicationWindow>,
+    pub histograms: HistogramSet,
 }
 
 pub fn inspect_environment(provider: &str, endpoint: &str, region: &str) -> Environment {
@@ -268,25 +432,59 @@ pub async fn sample_until_stopped(
     database_path: Path,
     shared_database_bytes: u64,
     mut stop: watch::Receiver<bool>,
-) -> Vec<TimeseriesSample> {
-    let mut samples = Vec::new();
+) -> Result<SampledTimeseries> {
+    let mut sampler = HostSampler::new();
+    let mut samples = vec![sampler.sample(
+        started,
+        &counters,
+        &store_metrics,
+        &slate_metrics,
+        &database_path,
+        shared_database_bytes,
+    )];
+    let mut application_windows = Vec::new();
+    let mut histograms = HistogramSet::default();
+    let mut window_start_ns = 0_u64;
     let mut interval = tokio::time::interval(Duration::from_secs(1));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let mut sampler = HostSampler::new();
+    interval.tick().await;
     loop {
         tokio::select! {
             _ = interval.tick() => {
-                samples.push(sampler.sample(started, &counters, &store_metrics, &slate_metrics, &database_path, shared_database_bytes));
+                let sample = sampler.sample(started, &counters, &store_metrics, &slate_metrics, &database_path, shared_database_bytes);
+                if sample.offset_ns > window_start_ns {
+                    let (window, window_histograms) = counters.drain_window(
+                        window_start_ns,
+                        sample.offset_ns.saturating_sub(window_start_ns),
+                    )?;
+                    histograms.merge(&window_histograms)?;
+                    application_windows.push(window);
+                    window_start_ns = sample.offset_ns;
+                }
+                samples.push(sample);
             }
             changed = stop.changed() => {
                 if changed.is_err() || *stop.borrow() {
-                    samples.push(sampler.sample(started, &counters, &store_metrics, &slate_metrics, &database_path, shared_database_bytes));
+                    let sample = sampler.sample(started, &counters, &store_metrics, &slate_metrics, &database_path, shared_database_bytes);
+                    if sample.offset_ns > window_start_ns {
+                        let (window, window_histograms) = counters.drain_window(
+                            window_start_ns,
+                            sample.offset_ns.saturating_sub(window_start_ns),
+                        )?;
+                        histograms.merge(&window_histograms)?;
+                        application_windows.push(window);
+                    }
+                    samples.push(sample);
                     break;
                 }
             }
         }
     }
-    samples
+    Ok(SampledTimeseries {
+        samples,
+        application_windows,
+        histograms,
+    })
 }
 
 pub fn compact_timeseries(mut samples: Vec<TimeseriesSample>) -> Result<TimeseriesFile> {
@@ -328,6 +526,8 @@ pub fn compact_timeseries(mut samples: Vec<TimeseriesSample>) -> Result<Timeseri
         schema_version: 1,
         interval_ns: 1_000_000_000,
         samples,
+        application_windows: Vec::new(),
+        durability_windows: None,
         slatedb_metrics: series,
     })
 }
@@ -378,6 +578,15 @@ pub fn append_timeseries(target: &mut TimeseriesFile, mut phase: TimeseriesFile)
             phase_series.values = values;
             target.slatedb_metrics.push(phase_series);
         }
+    }
+    target
+        .application_windows
+        .append(&mut phase.application_windows);
+    if let Some(mut phase_windows) = phase.durability_windows {
+        target
+            .durability_windows
+            .get_or_insert_with(Vec::new)
+            .append(&mut phase_windows);
     }
     target.samples.append(&mut phase.samples);
     Ok(())
@@ -614,7 +823,8 @@ fn finite_or_zero(value: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        append_timeseries, compact_timeseries, measure_backpressure, BenchmarkMetricsRecorder,
+        append_timeseries, compact_timeseries, measure_backpressure, ApplicationCounters,
+        BenchmarkMetricsRecorder,
     };
     use crate::model::{
         MetricSnapshot, MetricValue, MetricValueType, TimeseriesFile, TimeseriesSample,
@@ -622,6 +832,31 @@ mod tests {
     use slatedb_common::metrics::{MetricValue as SlateMetricValue, MetricsRecorder};
     use std::collections::BTreeMap;
     use std::time::Duration;
+
+    #[test]
+    fn drains_application_measurements_into_one_window() {
+        let counters = ApplicationCounters::new(true);
+        let worker = counters.register_window_recorder();
+        worker.record_success("read", Duration::from_millis(2), 1024);
+        worker.record_error("read", Duration::from_millis(4));
+        worker.record_open_loop_timing(Duration::from_millis(5), Duration::from_millis(1));
+        worker.record_open_loop_timing(Duration::from_millis(7), Duration::from_millis(1));
+        worker.record_offered(3, 1);
+
+        let (window, histograms) = counters
+            .drain_window(0, 1_000_000_000)
+            .expect("drain application window");
+
+        assert_eq!(window.completed_operations, 2);
+        assert_eq!(window.successful_operations, 1);
+        assert_eq!(window.errors, 1);
+        assert_eq!(window.payload_bytes, 1024);
+        assert_eq!(window.offered_operations, Some(3));
+        assert_eq!(window.dropped_operations, Some(1));
+        assert_eq!(window.return_latency.expect("return latency").count, 2);
+        assert_eq!(window.response_latency.expect("response latency").count, 2);
+        assert_eq!(histograms.get("return").expect("return histogram").len(), 2);
+    }
 
     #[tokio::test]
     async fn measures_backpressure_between_counter_and_memory_recheck() {

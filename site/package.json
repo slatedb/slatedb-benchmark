@@ -5,7 +5,10 @@
   "version": "0.1.0",
   "scripts": {
     "dev": "astro dev",
+    "mock-data": "node scripts/generate-mock-results.mjs",
+    "dev:mock": "npm run mock-data && BENCHMARK_RESULTS_ROOT=../.mock-results/results astro dev",
     "build": "astro check && astro build",
+    "build:mock": "npm run mock-data && BENCHMARK_RESULTS_ROOT=../.mock-results/results npm run build",
     "preview": "astro preview"
   },
   "dependencies": {

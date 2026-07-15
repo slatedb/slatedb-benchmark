@@ -103,7 +103,11 @@ async fn worker_loop(
         await_durable: variant.workload.await_durable,
         ..Default::default()
     };
-    let mut stats = WorkerStats::default();
+    let mut stats = WorkerStats::with_window_recorder(
+        counters
+            .as_ref()
+            .map(|counters| counters.register_window_recorder()),
+    );
     while Instant::now() < deadline {
         let started = Instant::now();
         let (result, backpressure) = measure_backpressure(execute_operation(
@@ -123,7 +127,7 @@ async fn worker_loop(
                 stats.record_success(outcome.name, started.elapsed(), outcome.payload_bytes);
                 stats.batch_keys = stats.batch_keys.saturating_add(outcome.batch_keys);
                 if outcome.batch_keys > 0 {
-                    stats.histograms.record("batch", started.elapsed());
+                    stats.record_batch_latency(started.elapsed());
                 }
                 if outcome.transaction_commit {
                     stats.transaction_commits += 1;
@@ -139,13 +143,7 @@ async fn worker_loop(
                 }
             }
             Err(OperationError::TransactionConflict) => {
-                stats.total += 1;
-                stats.transaction_aborts += 1;
-                stats.transaction_conflicts += 1;
-                stats.histograms.record("return", started.elapsed());
-                stats
-                    .histograms
-                    .record("return/transaction", started.elapsed());
+                stats.record_transaction_conflict(started.elapsed());
                 if let Some(counters) = &counters {
                     counters.operations.fetch_add(1, Ordering::Relaxed);
                 }
@@ -539,7 +537,11 @@ async fn run_bulk_load(
         await_durable: false,
         ..Default::default()
     };
-    let mut stats = WorkerStats::default();
+    let mut stats = WorkerStats::with_window_recorder(
+        counters
+            .as_ref()
+            .map(|counters| counters.register_window_recorder()),
+    );
     for sequence in 0..count {
         let id = if count > 0 {
             (sequence.wrapping_mul(multiplier).wrapping_add(offset)) % count
@@ -645,7 +647,11 @@ async fn capped_writer(
         ..Default::default()
     };
     let mut rng = StdRng::from_os_rng();
-    let mut stats = WorkerStats::default();
+    let mut stats = WorkerStats::with_window_recorder(
+        counters
+            .as_ref()
+            .map(|counters| counters.register_window_recorder()),
+    );
     while Instant::now() < deadline {
         ticker.tick().await;
         let started = Instant::now();

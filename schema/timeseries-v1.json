@@ -3,7 +3,7 @@
   "$id": "https://benchmark.slatedb.io/schema/timeseries-v1.json",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "interval_ns", "samples", "slatedb_metrics"],
+  "required": ["schema_version", "interval_ns", "samples", "application_windows", "durability_windows", "slatedb_metrics"],
   "properties": {
     "schema_version": { "const": 1 },
     "interval_ns": { "const": 1000000000 },
@@ -24,9 +24,63 @@
         }
       }
     },
+    "application_windows": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/applicationWindow" }
+    },
+    "durability_windows": {
+      "anyOf": [
+        { "type": "array", "items": { "$ref": "#/$defs/durabilityWindow" } },
+        { "type": "null" }
+      ]
+    },
     "slatedb_metrics": { "type": "array", "items": { "$ref": "#/$defs/metricSeries" } }
   },
   "$defs": {
+    "latency": {
+      "type": "object", "additionalProperties": false,
+      "required": ["count", "p50_ns", "p95_ns", "p99_ns", "p999_ns", "max_ns"],
+      "properties": {
+        "count": { "type": "integer", "minimum": 1 },
+        "p50_ns": { "type": "integer", "minimum": 0 },
+        "p95_ns": { "type": "integer", "minimum": 0 },
+        "p99_ns": { "type": "integer", "minimum": 0 },
+        "p999_ns": { "type": "integer", "minimum": 0 },
+        "max_ns": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "nullableLatency": {
+      "anyOf": [{ "$ref": "#/$defs/latency" }, { "type": "null" }]
+    },
+    "applicationWindow": {
+      "type": "object", "additionalProperties": false,
+      "required": ["start_offset_ns", "duration_ns", "completed_operations", "successful_operations", "errors", "payload_bytes", "offered_operations", "dropped_operations", "return_latency", "return_latency_by_operation", "response_latency", "scheduling_delay", "batch_latency"],
+      "properties": {
+        "start_offset_ns": { "type": "integer", "minimum": 0 },
+        "duration_ns": { "type": "integer", "exclusiveMinimum": 0 },
+        "completed_operations": { "type": "integer", "minimum": 0 },
+        "successful_operations": { "type": "integer", "minimum": 0 },
+        "errors": { "type": "integer", "minimum": 0 },
+        "payload_bytes": { "type": "integer", "minimum": 0 },
+        "offered_operations": { "anyOf": [{ "type": "integer", "minimum": 0 }, { "type": "null" }] },
+        "dropped_operations": { "anyOf": [{ "type": "integer", "minimum": 0 }, { "type": "null" }] },
+        "return_latency": { "$ref": "#/$defs/nullableLatency" },
+        "return_latency_by_operation": { "type": "object", "additionalProperties": { "$ref": "#/$defs/latency" } },
+        "response_latency": { "$ref": "#/$defs/nullableLatency" },
+        "scheduling_delay": { "$ref": "#/$defs/nullableLatency" },
+        "batch_latency": { "$ref": "#/$defs/nullableLatency" }
+      }
+    },
+    "durabilityWindow": {
+      "type": "object", "additionalProperties": false,
+      "required": ["start_offset_ns", "duration_ns", "writes_made_durable", "durability_lag"],
+      "properties": {
+        "start_offset_ns": { "type": "integer", "minimum": 0 },
+        "duration_ns": { "type": "integer", "exclusiveMinimum": 0 },
+        "writes_made_durable": { "type": "integer", "minimum": 0 },
+        "durability_lag": { "$ref": "#/$defs/nullableLatency" }
+      }
+    },
     "metricSeries": {
       "type": "object", "additionalProperties": false,
       "required": ["name", "description", "labels", "value_type", "boundaries", "values"],

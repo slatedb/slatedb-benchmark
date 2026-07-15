@@ -209,12 +209,22 @@ them.
 
 ## Metrics and results
 
-The runner uses HDR histograms for operation latency, open-loop response
-latency, durability lag, and direct object-store latency. Histograms use
-microsecond resolution and retain three significant digits. The runner also
-writes one-second counters for throughput and resource use; sustained-ingest
-results include the five-minute windows required by `BENCHMARKS.md`. It retains
-aggregate histograms instead of one record per operation.
+The runner uses HDR histograms for return latency, open-loop response latency,
+scheduling delay, durability lag, and direct object-store latency. Histograms
+use microsecond resolution and retain three significant digits. Each workload
+worker records into a private shard. The one-second sampler swaps those shards,
+merges their completed histograms, and emits application windows without a
+global per-operation lock. Those same windows are merged into the aggregate
+histograms, so the summary and time series describe the same observations.
+
+Application windows also contain successful-operation counts and logical
+payload bytes. The site derives ops/s and MiB/s using each window's actual
+duration. Return latency always means SlateDB invocation through API return.
+For asynchronous writes, a separate durability series measures API return
+through durable-frontier coverage. Its windows may extend through the final
+flush and drain. Open-loop response latency and scheduling delay are retained
+as diagnostics but are not primary site charts. Sustained-ingest results also
+include the five-minute windows required by `BENCHMARKS.md`.
 
 ### SlateDB metrics
 
@@ -295,17 +305,21 @@ aesthetic, layout, and CSS styling.
 
 The layout favors density. A slim header contains the SlateDB wordmark and
 version selector. A compact metadata row shows the machine, object store,
-dataset, cache, and durability settings. Summary values sit above one main
-chart with a latency/throughput toggle. A table below the chart exposes all
-percentiles, durability, resource, storage, cost, and object-store baseline
-fields. Each page links to its raw result files and the source commits.
+dataset, cache, and durability settings. Summary values sit above a
+selected-variant chart workspace. Tabs show one chart at a time, with payload
+MiB/s selected by default. The other views are return latency over time,
+whole-run tail latency, and, where applicable, durability lag over time. A
+table below the charts exposes all percentiles, durability, resource, storage,
+cost, and object-store baseline fields. Each page links to its raw result files
+and the source commits.
 
 The header wordmark uses Marcellus, matching `slatedb.io`. Body text uses Inter
 and numeric tables use JetBrains Mono. The site reuses SlateDB's ink,
-off-white, and terracotta color tokens. Charts support angled categorical
-labels and include a tabular fallback. Result charts use a browser charting
-library instead of Mermaid. The site needs client JavaScript only for selectors
-and the chart toggle.
+off-white, and terracotta color tokens. Time-series charts use elapsed time on
+the x-axis, while tail latency uses percentile on the x-axis and milliseconds
+on the y-axis. Each chart links directly to its underlying raw JSON. Result
+charts use a browser charting library instead of Mermaid. The site needs client
+JavaScript only for selectors, chart tabs, and chart rendering.
 
 ## Validation and publication
 

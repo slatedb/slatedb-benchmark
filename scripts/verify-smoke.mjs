@@ -44,16 +44,22 @@ for (const relative of run.results) {
   const fixed = {
     ...timeseries,
     samples: [],
+    application_windows: [],
+    durability_windows: timeseries.durability_windows === null ? null : [],
     slatedb_metrics: timeseries.slatedb_metrics.map((metric) => ({ ...metric, values: [] })),
   };
   const bytes = (value) => Buffer.byteLength(JSON.stringify(value));
+  const largest = (values) => values.length ? Math.max(...values.map(bytes)) : 0;
   const hostSampleBytes = Math.max(...timeseries.samples.map(bytes));
   const metricValueBytes = timeseries.slatedb_metrics.reduce(
     (total, metric) => total + Math.max(...metric.values.map(bytes)) + 1,
     0,
   );
+  const applicationWindowBytes = largest(timeseries.application_windows);
+  const durabilityWindowBytes = largest(timeseries.durability_windows || []);
   const projectedNinetyMinuteBytes =
-    bytes(fixed) + 5_402 * (hostSampleBytes + metricValueBytes + 1);
+    bytes(fixed)
+    + 5_402 * (hostSampleBytes + applicationWindowBytes + durabilityWindowBytes + metricValueBytes + 3);
   if (projectedNinetyMinuteBytes >= 90 * 1024 * 1024) {
     throw new Error(
       `${directory} projects to ${(projectedNinetyMinuteBytes / 1024 / 1024).toFixed(1)} MiB for 90 minutes`,

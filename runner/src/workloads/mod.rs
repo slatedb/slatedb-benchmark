@@ -79,7 +79,8 @@ pub async fn execute_variant(
 
     let start_store = store_metrics.snapshot();
     let start_slate = slate_metrics.snapshot();
-    let counters = Arc::new(ApplicationCounters::default());
+    let open_loop = is_open_loop(variant.workload.kind);
+    let counters = Arc::new(ApplicationCounters::new(open_loop));
     counters.reset();
     let measured_started = Instant::now();
     let (stop_tx, stop_rx) = watch::channel(false);
@@ -94,7 +95,8 @@ pub async fn execute_variant(
     ));
 
     let tracks_lag = may_write(variant.workload.kind) && !variant.workload.await_durable;
-    let tracker = tracks_lag.then(|| DurabilityTracker::start(Arc::clone(&db)));
+    let tracker = tracks_lag.then(|| DurabilityTracker::start(Arc::clone(&db), measured_started));
+    let mut durability_windows = tracks_lag.then(Vec::new);
     let durability_sender = tracker.as_ref().map(DurabilityTracker::sender);
     let configured_duration = Duration::from_millis(variant.measurement_ms());
     let mut stats = if is_open_loop(variant.workload.kind) {
@@ -135,6 +137,7 @@ pub async fn execute_variant(
             let tracked = tracker.finish().await?;
             durability.lag = Some(tracked.lag.summary());
             stats.histograms.insert("durability_lag", tracked.lag);
+            durability_windows = Some(tracked.windows);
             durability.final_durable_sequence = Some(tracked.final_durable_sequence);
             if let Some(first_write) = stats.first_write_return {
                 let seconds = tracked
@@ -155,18 +158,22 @@ pub async fn execute_variant(
     } else if let Some(tracker) = tracker {
         // Close the channel and join the background subscriber even when a
         // short smoke window happens not to select a write operation.
-        tracker.finish().await?;
+        let tracked = tracker.finish().await?;
+        durability_windows = Some(tracked.windows);
     }
 
     let _ = stop_tx.send(true);
-    let samples = sampler.await.context("joining metric sampler")?;
+    let sampled = sampler.await.context("joining metric sampler")??;
+    stats.histograms.merge(&sampled.histograms)?;
     let finished = Instant::now();
     let total_elapsed = finished.saturating_duration_since(measured_started);
     let end_store = store_metrics.snapshot();
     let store_delta = end_store.difference(&start_store);
     let end_slate = slate_metrics.snapshot();
     let storage_counters = storage_counters(&start_slate, &end_slate);
-    let timeseries = system::compact_timeseries(samples)?;
+    let mut timeseries = system::compact_timeseries(sampled.samples)?;
+    timeseries.application_windows = sampled.application_windows;
+    timeseries.durability_windows = durability_windows;
     let mut storage = storage_summary(
         &storage_counters,
         &store_delta,
@@ -178,7 +185,6 @@ pub async fn execute_variant(
     );
     storage.database_size_bytes = 0;
     let resources = system::summarize_resources(&timeseries.samples);
-    let open_loop = is_open_loop(variant.workload.kind);
     let mut application = stats.application(measurement_elapsed, open_loop);
     if open_loop {
         let scheduled_seconds = configured_duration.as_secs_f64().max(f64::EPSILON);

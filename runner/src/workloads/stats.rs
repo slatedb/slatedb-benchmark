@@ -1,5 +1,6 @@
 use crate::histogram::HistogramSet;
 use crate::model::ApplicationPerformance;
+use crate::system::ApplicationWindowRecorder;
 use anyhow::Result;
 use std::time::{Duration, Instant};
 
@@ -20,24 +21,69 @@ pub struct WorkerStats {
     pub first_write_return: Option<Instant>,
     pub last_write_sequence: Option<u64>,
     pub histograms: HistogramSet,
+    window_recorder: Option<ApplicationWindowRecorder>,
 }
 
 impl WorkerStats {
+    pub fn with_window_recorder(window_recorder: Option<ApplicationWindowRecorder>) -> Self {
+        Self {
+            window_recorder,
+            ..Self::default()
+        }
+    }
+
     pub fn record_success(&mut self, operation: &str, latency: Duration, payload_bytes: u64) {
         self.total += 1;
         self.successful += 1;
         self.payload_bytes = self.payload_bytes.saturating_add(payload_bytes);
-        self.histograms.record("return", latency);
-        self.histograms
-            .record(format!("return/{operation}"), latency);
+        if let Some(recorder) = &self.window_recorder {
+            recorder.record_success(operation, latency, payload_bytes);
+        } else {
+            self.histograms.record("return", latency);
+            self.histograms
+                .record(format!("return/{operation}"), latency);
+        }
     }
 
     pub fn record_error(&mut self, operation: &str, latency: Duration) {
         self.total += 1;
         self.errors += 1;
-        self.histograms.record("return", latency);
-        self.histograms
-            .record(format!("return/{operation}"), latency);
+        if let Some(recorder) = &self.window_recorder {
+            recorder.record_error(operation, latency);
+        } else {
+            self.histograms.record("return", latency);
+            self.histograms
+                .record(format!("return/{operation}"), latency);
+        }
+    }
+
+    pub fn record_transaction_conflict(&mut self, latency: Duration) {
+        self.total += 1;
+        self.transaction_aborts += 1;
+        self.transaction_conflicts += 1;
+        if let Some(recorder) = &self.window_recorder {
+            recorder.record_completion("transaction", latency);
+        } else {
+            self.histograms.record("return", latency);
+            self.histograms.record("return/transaction", latency);
+        }
+    }
+
+    pub fn record_open_loop_timing(&mut self, response: Duration, scheduling_delay: Duration) {
+        if let Some(recorder) = &self.window_recorder {
+            recorder.record_open_loop_timing(response, scheduling_delay);
+        } else {
+            self.histograms.record("response", response);
+            self.histograms.record("scheduling_delay", scheduling_delay);
+        }
+    }
+
+    pub fn record_batch_latency(&mut self, latency: Duration) {
+        if let Some(recorder) = &self.window_recorder {
+            recorder.record_batch_latency(latency);
+        } else {
+            self.histograms.record("batch", latency);
+        }
     }
 
     pub fn record_write(&mut self, returned_at: Instant, sequence: u64) {
