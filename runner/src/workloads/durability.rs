@@ -1,5 +1,6 @@
 use crate::histogram::LatencyHistogram;
 use crate::model::DurabilityWindow;
+use crate::system::duration_ns;
 use anyhow::{Context, Result};
 use slatedb::Db;
 use std::collections::BTreeMap;
@@ -134,10 +135,7 @@ impl WindowedDurability {
     }
 
     fn record(&mut self, covered_at: Instant, duration: std::time::Duration) -> Result<()> {
-        let offset_ns = covered_at
-            .saturating_duration_since(self.started)
-            .as_nanos()
-            .min(u64::MAX as u128) as u64;
+        let offset_ns = duration_ns(covered_at.saturating_duration_since(self.started));
         self.advance_to(offset_ns)?;
         self.current.record(duration);
         Ok(())
@@ -166,10 +164,7 @@ impl WindowedDurability {
     }
 
     fn finish(mut self, covered_at: Instant) -> Result<(LatencyHistogram, Vec<DurabilityWindow>)> {
-        let elapsed_ns = covered_at
-            .saturating_duration_since(self.started)
-            .as_nanos()
-            .min(u64::MAX as u128) as u64;
+        let elapsed_ns = duration_ns(covered_at.saturating_duration_since(self.started));
         self.advance_to(elapsed_ns)?;
         let partial_ns = elapsed_ns.saturating_sub(self.current_index.saturating_mul(WINDOW_NS));
         if partial_ns > 0 || !self.current.is_empty() {

@@ -94,7 +94,6 @@ export type ResultRoute = {
   variant: string;
   result: BenchmarkResult;
   timeseries: BenchmarkTimeseries;
-  directory: string;
 };
 
 const resultsRoot = process.env.BENCHMARK_RESULTS_ROOT
@@ -134,7 +133,6 @@ export async function loadResults(): Promise<ResultRoute[]> {
         variant: result.identity.variant,
         result,
         timeseries,
-        directory,
       };
     }),
   );
@@ -154,10 +152,7 @@ export async function rawResultFiles() {
 }
 
 export function latestStable(routes: ResultRoute[]): ResultRoute | undefined {
-  const stable = routes
-    .filter((route) => /^\d+\.\d+\.\d+$/.test(route.version))
-    .sort((left, right) => compareVersion(right.version, left.version))[0];
-  return stable || routes[0];
+  return routes.find((route) => /^\d+\.\d+\.\d+$/.test(route.version)) ?? routes[0];
 }
 
 export function routeHref(route: Pick<ResultRoute, 'version' | 'suite' | 'workload' | 'variant'>) {

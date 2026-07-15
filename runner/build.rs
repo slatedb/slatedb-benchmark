@@ -12,9 +12,10 @@ fn main() {
         .parent()
         .expect("workspace root")
         .to_path_buf();
-    let lock_hash = fs::read(root.join("Cargo.lock"))
-        .map(|bytes| format!("{:x}", Sha256::digest(bytes)))
-        .unwrap_or_else(|_| "unavailable".to_string());
+    let lock_hash = fs::read(root.join("Cargo.lock")).map_or_else(
+        |_| "unavailable".to_string(),
+        |bytes| format!("{:x}", Sha256::digest(bytes)),
+    );
     println!("cargo:rustc-env=BENCHMARK_LOCK_HASH={lock_hash}");
 
     let runner_commit = Command::new("git")
@@ -23,8 +24,10 @@ fn main() {
         .output()
         .ok()
         .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_else(|| "unknown".to_string());
+        .map_or_else(
+            || "unknown".to_string(),
+            |o| String::from_utf8_lossy(&o.stdout).trim().to_string(),
+        );
     println!("cargo:rustc-env=BENCHMARK_RUNNER_COMMIT={runner_commit}");
 
     let version = std::env::var("SLATEDB_VERSION").unwrap_or_else(|_| "0.14.1".to_string());

@@ -1,18 +1,19 @@
+import { execFile } from 'node:child_process';
 import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
+import { promisify } from 'node:util';
+
+const execFileAsync = promisify(execFile);
 
 const root = process.argv[2];
 if (!root) throw new Error('usage: verify-smoke.mjs <run-directory>');
 const run = JSON.parse(await readFile(path.join(root, 'run.json'), 'utf8'));
-const catalog = JSON.parse(
-  await new Promise((resolve, reject) => {
-    import('node:child_process').then(({ execFile }) =>
-      execFile('cargo', ['run', '--quiet', '--', 'catalog', '--suite', 'smoke'], { cwd: process.cwd() }, (error, stdout) =>
-        error ? reject(error) : resolve(stdout),
-      ),
-    );
-  }),
+const { stdout } = await execFileAsync(
+  'cargo',
+  ['run', '--quiet', '--', 'catalog', '--suite', 'smoke'],
+  { cwd: process.cwd() },
 );
+const catalog = JSON.parse(stdout);
 if (run.results.length !== catalog.length) {
   throw new Error(`expected ${catalog.length} results, found ${run.results.length}`);
 }

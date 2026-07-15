@@ -1,5 +1,5 @@
 ---
-import type { BenchmarkResult, BenchmarkTimeseries } from '../lib/results';
+import type { BenchmarkResult, BenchmarkTimeseries, Latency } from '../lib/results';
 
 interface Props {
   result: BenchmarkResult;
@@ -25,10 +25,21 @@ const application = timeseries.application_windows;
 const atEnd = (window: { start_offset_ns: number; duration_ns: number }) =>
   (window.start_offset_ns + window.duration_ns) / 1e9;
 const seconds = (window: { duration_ns: number }) => window.duration_ns / 1e9;
+const latencyDatasets = (rows: Array<{ x: number; latency: Latency }>) => [
+  { label: 'p50', color: '#8b94a3', value: (latency: Latency) => latency.p50_ns },
+  { label: 'p95', color: '#5e6878', value: (latency: Latency) => latency.p95_ns },
+  { label: 'p99', color: '#b26844', value: (latency: Latency) => latency.p99_ns },
+].map(({ label, color, value }) => ({
+  label,
+  color,
+  points: rows.map(({ x, latency }) => ({ x, y: value(latency) / 1e6 })),
+}));
 const slateSettings = result.configuration.slate_settings as Record<string, unknown> | undefined;
 const awaitsDurability = slateSettings?.await_durable === true;
 
-const latencyRows = application.filter((window) => window.return_latency !== null);
+const latencyRows = application
+  .filter((window) => window.return_latency !== null)
+  .map((window) => ({ x: atEnd(window), latency: window.return_latency! }));
 const latencyChart: ChartDefinition = {
   key: 'return-latency',
   title: 'Return latency over time',
@@ -39,11 +50,7 @@ const latencyChart: ChartDefinition = {
   digits: 3,
   mode: 'time',
   rawHref: `${rawBase}/timeseries.json`,
-  datasets: [
-    { label: 'p50', color: '#8b94a3', points: latencyRows.map((window) => ({ x: atEnd(window), y: window.return_latency!.p50_ns / 1e6 })) },
-    { label: 'p95', color: '#5e6878', points: latencyRows.map((window) => ({ x: atEnd(window), y: window.return_latency!.p95_ns / 1e6 })) },
-    { label: 'p99', color: '#b26844', points: latencyRows.map((window) => ({ x: atEnd(window), y: window.return_latency!.p99_ns / 1e6 })) },
-  ],
+  datasets: latencyDatasets(latencyRows),
 };
 
 const throughputChart: ChartDefinition = {
@@ -88,7 +95,8 @@ const tailLatencyChart: ChartDefinition = {
 };
 
 const durabilityRows = (timeseries.durability_windows || [])
-  .filter((window) => window.durability_lag !== null);
+  .filter((window) => window.durability_lag !== null)
+  .map((window) => ({ x: atEnd(window), latency: window.durability_lag! }));
 const durabilityChart: ChartDefinition | null = durabilityRows.length > 0 ? {
   key: 'durability-lag',
   title: 'Durability lag over time',
@@ -97,11 +105,7 @@ const durabilityChart: ChartDefinition | null = durabilityRows.length > 0 ? {
   digits: 3,
   mode: 'time',
   rawHref: `${rawBase}/timeseries.json`,
-  datasets: [
-    { label: 'p50', color: '#8b94a3', points: durabilityRows.map((window) => ({ x: atEnd(window), y: window.durability_lag!.p50_ns / 1e6 })) },
-    { label: 'p95', color: '#5e6878', points: durabilityRows.map((window) => ({ x: atEnd(window), y: window.durability_lag!.p95_ns / 1e6 })) },
-    { label: 'p99', color: '#b26844', points: durabilityRows.map((window) => ({ x: atEnd(window), y: window.durability_lag!.p99_ns / 1e6 })) },
-  ],
+  datasets: latencyDatasets(durabilityRows),
 } : null;
 
 const charts = [throughputChart, latencyChart, tailLatencyChart, durabilityChart]

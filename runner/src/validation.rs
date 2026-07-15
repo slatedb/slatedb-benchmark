@@ -13,7 +13,7 @@ use std::fs;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
-pub fn validate_result(
+pub(crate) fn validate_result(
     result: &ResultRecord,
     histograms: &HistogramsFile,
     timeseries: &TimeseriesFile,
@@ -38,7 +38,7 @@ pub fn validate_result(
     Ok(())
 }
 
-pub fn validate_run(run: &RunManifest, schema_dir: &Path) -> Result<()> {
+pub(crate) fn validate_run(run: &RunManifest, schema_dir: &Path) -> Result<()> {
     let value = serde_json::to_value(run)?;
     validate_schema(&value, &schema_dir.join("run.json"))?;
     reject_secrets(&value, "run")

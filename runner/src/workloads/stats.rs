@@ -1,6 +1,6 @@
 use crate::histogram::HistogramSet;
 use crate::model::ApplicationPerformance;
-use crate::system::ApplicationWindowRecorder;
+use crate::system::{duration_ns, ApplicationWindowRecorder};
 use anyhow::Result;
 use std::time::{Duration, Instant};
 
@@ -90,20 +90,16 @@ impl WorkerStats {
         self.writes += 1;
         self.first_write_return = Some(
             self.first_write_return
-                .map(|current| current.min(returned_at))
-                .unwrap_or(returned_at),
+                .map_or(returned_at, |current| current.min(returned_at)),
         );
         self.last_write_sequence = Some(
             self.last_write_sequence
-                .map(|current| current.max(sequence))
-                .unwrap_or(sequence),
+                .map_or(sequence, |current| current.max(sequence)),
         );
     }
 
     pub fn record_backpressure(&mut self, elapsed: Duration) {
-        self.backpressure_ns = self
-            .backpressure_ns
-            .saturating_add(elapsed.as_nanos().min(u64::MAX as u128) as u64);
+        self.backpressure_ns = self.backpressure_ns.saturating_add(duration_ns(elapsed));
     }
 
     pub fn merge(&mut self, other: &Self) -> Result<()> {
@@ -138,18 +134,23 @@ impl WorkerStats {
 
     pub fn application(&self, elapsed: Duration, open_loop: bool) -> ApplicationPerformance {
         let seconds = elapsed.as_secs_f64().max(f64::EPSILON);
-        let return_latency = self
-            .histograms
-            .get("return")
-            .map(|histogram| histogram.summary())
-            .unwrap_or_default();
-        let response_latency = open_loop
-            .then(|| self.histograms.get("response").map(|h| h.summary()))
-            .flatten();
-        let scheduling_delay = open_loop
-            .then(|| self.histograms.get("scheduling_delay").map(|h| h.summary()))
-            .flatten();
-        let batch_latency = self.histograms.get("batch").map(|h| h.summary());
+        let histogram_summary = |name| {
+            self.histograms
+                .get(name)
+                .map(|histogram| histogram.summary())
+        };
+        let return_latency = histogram_summary("return").unwrap_or_default();
+        let response_latency = if open_loop {
+            histogram_summary("response")
+        } else {
+            None
+        };
+        let scheduling_delay = if open_loop {
+            histogram_summary("scheduling_delay")
+        } else {
+            None
+        };
+        let batch_latency = histogram_summary("batch");
         let transactions = self.transaction_commits + self.transaction_aborts;
         let transaction_rate =
             |count: u64| (transactions > 0).then_some(count as f64 / transactions as f64);
@@ -170,12 +171,9 @@ impl WorkerStats {
             batch_latency,
             key_throughput_per_second: (self.batch_keys > 0)
                 .then_some(self.batch_keys as f64 / seconds),
-            transaction_commits: (self.transaction_commits + self.transaction_aborts > 0)
-                .then_some(self.transaction_commits),
-            transaction_aborts: (self.transaction_commits + self.transaction_aborts > 0)
-                .then_some(self.transaction_aborts),
-            transaction_conflicts: (self.transaction_commits + self.transaction_aborts > 0)
-                .then_some(self.transaction_conflicts),
+            transaction_commits: (transactions > 0).then_some(self.transaction_commits),
+            transaction_aborts: (transactions > 0).then_some(self.transaction_aborts),
+            transaction_conflicts: (transactions > 0).then_some(self.transaction_conflicts),
             transaction_commit_rate: transaction_rate(self.transaction_commits),
             transaction_abort_rate: transaction_rate(self.transaction_aborts),
             transaction_conflict_rate: transaction_rate(self.transaction_conflicts),

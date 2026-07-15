@@ -24,6 +24,10 @@ tokio::task_local! {
     static BACKPRESSURE_MEASUREMENT: RefCell<BackpressureMeasurement>;
 }
 
+pub(crate) fn duration_ns(duration: Duration) -> u64 {
+    u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX)
+}
+
 #[derive(Default)]
 struct BackpressureMeasurement {
     started: Option<Instant>,
@@ -677,7 +681,7 @@ impl HostSampler {
             ..
         } = store_metrics.snapshot();
         TimeseriesSample {
-            offset_ns: started.elapsed().as_nanos().min(u64::MAX as u128) as u64,
+            offset_ns: duration_ns(started.elapsed()),
             operations: counters.operations.load(Ordering::Relaxed),
             errors: counters.errors.load(Ordering::Relaxed),
             cpu_percent,

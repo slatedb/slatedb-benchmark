@@ -1,11 +1,16 @@
 use crate::cli::{RunArgs, WorkerArgs};
 use crate::config::{BenchmarkConfig, SuiteConfig, SuiteExecution, VariantConfig, WorkloadKind};
 use crate::cost::PriceTable;
+use crate::instrumented_store::StoreMetrics;
 use crate::model::{
-    BenchmarkConfiguration, Identity, InitialState, ResultRecord, RunManifest, SourceFiles,
+    BenchmarkConfiguration, EncodedHistogram, Environment, Identity, InitialState,
+    ObjectStoreBaseline, ResultRecord, RunManifest, SourceFiles, TimeseriesFile,
 };
 use crate::object_store_probe::{delete_prefix, probe, ObjectStoreContext};
-use crate::system::{inspect_environment, verify_environment, BenchmarkMetricsRecorder};
+use crate::system::{
+    inspect_environment, sample_until_stopped, verify_environment, ApplicationCounters,
+    BenchmarkMetricsRecorder,
+};
 use crate::validation::{validate_result, validate_run};
 use crate::workloads::{
     execute_variant, extend_with_compaction_phase, populate_dataset, prepare_bulk_load,
@@ -48,6 +53,14 @@ struct GoldenManager {
     root: Path,
     values: HashMap<String, GoldenDatabase>,
     cleanup_paths: Vec<Path>,
+}
+
+struct ResultContext<'a> {
+    environment: &'a Environment,
+    baseline: &'a ObjectStoreBaseline,
+    baseline_histograms: &'a BTreeMap<String, EncodedHistogram>,
+    prices: &'a PriceTable,
+    args: &'a RunArgs,
 }
 
 pub async fn execute(args: RunArgs) -> Result<()> {
@@ -119,19 +132,15 @@ async fn execute_inner(args: &RunArgs) -> Result<()> {
             args.output.join(format!("object-store-{suite_name}.json"))
         };
         write_json(&baseline_path, &baseline)?;
-        result_paths.extend(
-            execute_suite(
-                variants,
-                &benchmark,
-                &object_store,
-                &environment,
-                &baseline,
-                &baseline_histograms,
-                &prices,
-                args,
-            )
-            .await?,
-        );
+        let result_context = ResultContext {
+            environment: &environment,
+            baseline: &baseline,
+            baseline_histograms: &baseline_histograms,
+            prices: &prices,
+            args,
+        };
+        result_paths
+            .extend(execute_suite(variants, &benchmark, &object_store, &result_context).await?);
         object_store_baselines.insert(suite_name, baseline);
     }
 
@@ -158,16 +167,11 @@ async fn execute_inner(args: &RunArgs) -> Result<()> {
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn execute_suite(
     selected: Vec<VariantConfig>,
     benchmark: &BenchmarkConfig,
     object_store: &ObjectStoreContext,
-    environment: &crate::model::Environment,
-    baseline: &crate::model::ObjectStoreBaseline,
-    baseline_histograms: &BTreeMap<String, crate::model::EncodedHistogram>,
-    prices: &PriceTable,
-    args: &RunArgs,
+    result_context: &ResultContext<'_>,
 ) -> Result<Vec<String>> {
     let suite = selected
         .first()
@@ -196,11 +200,7 @@ async fn execute_suite(
                 Arc::clone(&store),
                 object_store.instrumented.metrics(),
                 !object_store.provider.eq_ignore_ascii_case("memory"),
-                environment,
-                baseline,
-                baseline_histograms,
-                prices,
-                args,
+                result_context,
             )
             .await;
         }
@@ -270,7 +270,7 @@ async fn execute_suite(
                     &clone_path,
                     golden.size_bytes,
                     &golden.lsm_digest,
-                    args,
+                    result_context.args,
                 )
                 .await?
             };
@@ -280,12 +280,8 @@ async fn execute_suite(
                 variant,
                 outcome,
                 initial,
-                environment,
-                baseline,
-                baseline_histograms,
-                prices,
                 golden.size_bytes,
-                args,
+                result_context,
             )?);
             delete_prefix(Arc::clone(&store), &clone_path).await?;
         }
@@ -477,19 +473,14 @@ impl GoldenManager {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn run_sequential_suite(
     selected: Vec<VariantConfig>,
     benchmark: &BenchmarkConfig,
     run_root: &Path,
     store: Arc<dyn ObjectStore>,
-    store_metrics: Arc<crate::instrumented_store::StoreMetrics>,
+    store_metrics: Arc<StoreMetrics>,
     fresh_process_variants: bool,
-    environment: &crate::model::Environment,
-    baseline: &crate::model::ObjectStoreBaseline,
-    baseline_histograms: &BTreeMap<String, crate::model::EncodedHistogram>,
-    prices: &PriceTable,
-    args: &RunArgs,
+    result_context: &ResultContext<'_>,
 ) -> Result<Vec<String>> {
     let suite = selected
         .first()
@@ -556,12 +547,12 @@ async fn run_sequential_suite(
         let started = Instant::now();
         let start_store = store_metrics.snapshot();
         let start_slate = recorder.snapshot();
-        let counters = Arc::new(crate::system::ApplicationCounters::default());
+        let counters = Arc::new(ApplicationCounters::default());
         counters
             .operations
             .store(outcome.application.total_operations, Ordering::Relaxed);
         let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
-        let sampler = tokio::spawn(crate::system::sample_until_stopped(
+        let sampler = tokio::spawn(sample_until_stopped(
             started,
             counters,
             Arc::clone(&store_metrics),
@@ -616,12 +607,8 @@ async fn run_sequential_suite(
             &bulk_variant,
             outcome,
             bulk_initial,
-            environment,
-            baseline,
-            baseline_histograms,
-            prices,
             0,
-            args,
+            result_context,
         )?);
     }
 
@@ -636,7 +623,7 @@ async fn run_sequential_suite(
             Arc::clone(&store),
             Arc::clone(&store_metrics),
             fresh_process_variants,
-            args,
+            result_context.args,
         )
         .await?;
         outcome.storage.database_size_bytes = prefix_size(Arc::clone(&store), &path).await?;
@@ -644,12 +631,8 @@ async fn run_sequential_suite(
             variant,
             outcome,
             initial,
-            environment,
-            baseline,
-            baseline_histograms,
-            prices,
             initial_size,
-            args,
+            result_context,
         )?);
     }
     delete_prefix(store, &path).await?;
@@ -669,7 +652,7 @@ async fn execute_rocks_variant(
     variant: &VariantConfig,
     database_path: &Path,
     store: Arc<dyn ObjectStore>,
-    store_metrics: Arc<crate::instrumented_store::StoreMetrics>,
+    store_metrics: Arc<StoreMetrics>,
     fresh_process: bool,
     args: &RunArgs,
 ) -> Result<(WorkloadOutcome, InitialState)> {
@@ -724,17 +707,12 @@ async fn execute_rocks_variant(
     Ok((outcome, initial))
 }
 
-#[allow(clippy::too_many_arguments)]
 fn write_variant_result(
     variant: &VariantConfig,
     outcome: WorkloadOutcome,
     initial_state: InitialState,
-    environment: &crate::model::Environment,
-    baseline: &crate::model::ObjectStoreBaseline,
-    baseline_histograms: &BTreeMap<String, crate::model::EncodedHistogram>,
-    prices: &PriceTable,
     initial_database_bytes: u64,
-    args: &RunArgs,
+    context: &ResultContext<'_>,
 ) -> Result<String> {
     let version = env!("BENCHMARK_SLATE_VERSION");
     let relative_directory = PathBuf::from("results")
@@ -742,17 +720,19 @@ fn write_variant_result(
         .join(&variant.suite.name)
         .join(&variant.workload.name)
         .join(&variant.variant);
-    let directory = args.output.join(&relative_directory);
+    let directory = context.args.output.join(&relative_directory);
     fs::create_dir_all(&directory)?;
     let mut histograms = outcome.histograms.clone();
-    histograms.histograms.extend(baseline_histograms.clone());
+    histograms
+        .histograms
+        .extend(context.baseline_histograms.clone());
     let average_database_bytes = average_database_bytes(
         &outcome.timeseries,
         outcome.elapsed_ns,
         initial_database_bytes,
         outcome.storage.database_size_bytes,
     );
-    let cost = prices.estimate(
+    let cost = context.prices.estimate(
         outcome.elapsed_ns,
         average_database_bytes,
         &outcome.storage,
@@ -771,8 +751,8 @@ fn write_variant_result(
             variant: variant.variant.clone(),
             mode: variant.suite.mode().to_string(),
         },
-        environment: environment.clone(),
-        object_store_baseline: baseline.clone(),
+        environment: context.environment.clone(),
+        object_store_baseline: context.baseline.clone(),
         configuration: BenchmarkConfiguration {
             clients: variant.clients,
             target_rate: variant.target_rate,
@@ -813,7 +793,12 @@ fn write_variant_result(
             timeseries: "timeseries.json".to_string(),
         },
     };
-    validate_result(&result, &histograms, &outcome.timeseries, &args.schema_dir)?;
+    validate_result(
+        &result,
+        &histograms,
+        &outcome.timeseries,
+        &context.args.schema_dir,
+    )?;
     write_json(&directory.join("result.json"), &result)?;
     write_json(&directory.join("histograms.json"), &histograms)?;
     write_compact_json(&directory.join("timeseries.json"), &outcome.timeseries)?;
@@ -962,7 +947,7 @@ fn write_compact_json(path: &FsPath, value: &impl Serialize) -> Result<()> {
 }
 
 fn average_database_bytes(
-    timeseries: &crate::model::TimeseriesFile,
+    timeseries: &TimeseriesFile,
     elapsed_ns: u64,
     initial_bytes: u64,
     final_bytes: u64,

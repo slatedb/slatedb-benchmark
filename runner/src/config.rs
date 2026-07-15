@@ -176,10 +176,6 @@ pub struct VariantConfig {
 }
 
 impl BenchmarkConfig {
-    pub fn load() -> Result<Self> {
-        Self::load_from(Path::new("config"))
-    }
-
     pub fn load_from(config_dir: &Path) -> Result<Self> {
         let mut suite_paths = Vec::new();
         for entry in fs::read_dir(config_dir)
@@ -319,10 +315,7 @@ impl BenchmarkConfig {
         let entries = self
             .suites
             .iter()
-            .filter(|suite| match suite_name {
-                Some(name) => suite.name == name,
-                None => suite.release,
-            })
+            .filter(|suite| suite_name.map_or(suite.release, |name| suite.name == name))
             .flat_map(|suite| {
                 suite.workloads.iter().flat_map(move |workload| {
                     workload.variants.iter().map(move |variant| CatalogEntry {
@@ -347,10 +340,7 @@ impl BenchmarkConfig {
     ) -> Result<Vec<VariantConfig>> {
         let mut selected = Vec::new();
         for suite in &self.suites {
-            let include_suite = match suite_name {
-                Some(name) => suite.name == name,
-                None => suite.release,
-            };
+            let include_suite = suite_name.map_or(suite.release, |name| suite.name == name);
             if !include_suite {
                 continue;
             }
