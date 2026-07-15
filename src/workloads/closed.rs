@@ -63,19 +63,9 @@ pub async fn run_closed_phase(
         let variant = variant.clone();
         let durability = durability.clone();
         let counters = counters.clone();
-        let next_insert = Arc::clone(&state.next_insert);
-        let insert_lock = Arc::clone(&state.insert_lock);
+        let state = state.clone();
         tasks.spawn(async move {
-            worker_loop(
-                db,
-                variant,
-                deadline,
-                durability,
-                counters,
-                next_insert,
-                insert_lock,
-            )
-            .await
+            worker_loop(db, variant, deadline, durability, counters, state).await
         });
     }
     merge_tasks(tasks).await
@@ -87,8 +77,7 @@ async fn worker_loop(
     deadline: Instant,
     durability: Option<DurabilitySender>,
     counters: Option<Arc<ApplicationCounters>>,
-    next_insert: Arc<AtomicU64>,
-    insert_lock: Arc<Mutex<()>>,
+    state: ClosedLoopState,
 ) -> Result<WorkerStats> {
     let mut rng = StdRng::from_os_rng();
     let selector = if matches!(
@@ -115,8 +104,7 @@ async fn worker_loop(
             &variant,
             &selector,
             &write_options,
-            &next_insert,
-            &insert_lock,
+            &state,
             &mut rng,
             &mut stats,
         ))
@@ -185,8 +173,7 @@ async fn execute_operation(
     variant: &VariantConfig,
     selector: &KeySelector,
     write_options: &WriteOptions,
-    next_insert: &AtomicU64,
-    insert_lock: &Mutex<()>,
+    state: &ClosedLoopState,
     rng: &mut StdRng,
     stats: &mut WorkerStats,
 ) -> std::result::Result<OperationOutcome, OperationError> {
@@ -229,15 +216,17 @@ async fn execute_operation(
         }
         WorkloadKind::YcsbD => {
             if rng.random_bool(0.95) {
-                let latest = next_insert.load(Ordering::Acquire).max(1);
+                let latest = state.next_insert.load(Ordering::Acquire).max(1);
                 let window = latest.min(10_000);
                 let id = latest.saturating_sub(1 + rng.random_range(0..window));
                 read(db, variant, id, "read", stats).await
             } else {
-                let _guard = insert_lock.lock().await;
-                let id = next_insert.load(Ordering::Relaxed);
+                let _guard = state.insert_lock.lock().await;
+                let id = state.next_insert.load(Ordering::Relaxed);
                 let outcome = update(db, variant, id, write_options, rng, "insert", stats).await?;
-                next_insert.store(id.saturating_add(1), Ordering::Release);
+                state
+                    .next_insert
+                    .store(id.saturating_add(1), Ordering::Release);
                 Ok(outcome)
             }
         }
@@ -255,7 +244,7 @@ async fn execute_operation(
                 )
                 .await
             } else {
-                let id = next_insert.fetch_add(1, Ordering::Relaxed);
+                let id = state.next_insert.fetch_add(1, Ordering::Relaxed);
                 update(db, variant, id, write_options, rng, "insert", stats).await
             }
         }
@@ -313,7 +302,7 @@ async fn execute_operation(
             .await
         }
         WorkloadKind::SustainedIngest => {
-            let id = next_insert.fetch_add(1, Ordering::Relaxed);
+            let id = state.next_insert.fetch_add(1, Ordering::Relaxed);
             let key = random_unique_key(id, variant.key_bytes(), rng);
             let value = random_value(variant.value_bytes(), rng);
             let handle = stats
@@ -671,19 +660,9 @@ async fn run_with_capped_writer(
         reader_variant.workload.kind = read_kind;
         reader_variant.workload.await_durable = false;
         let counters = counters.clone();
-        let next_insert = Arc::clone(&state.next_insert);
-        let insert_lock = Arc::clone(&state.insert_lock);
+        let state = state.clone();
         tasks.spawn(async move {
-            worker_loop(
-                db,
-                reader_variant,
-                deadline,
-                None,
-                counters,
-                next_insert,
-                insert_lock,
-            )
-            .await
+            worker_loop(db, reader_variant, deadline, None, counters, state).await
         });
     }
     let writer_db = db;

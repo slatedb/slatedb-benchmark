@@ -16,7 +16,7 @@ on:
         default: v0.14.1
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: benchmark-release
@@ -65,6 +65,9 @@ jobs:
 "#;
 
 const SUITE_SETUP: &str = r#"    needs: build-runner
+    permissions:
+      actions: write
+      contents: write
     runs-on: warp-ubuntu-latest-x64-16x
     environment: benchmark
     env:
@@ -172,6 +175,21 @@ pub fn render(benchmark: &BenchmarkConfig) -> Result<String> {
             writeln!(output, "            \"{}\" \\", suite.name)?;
             writeln!(output, "            \"{}\" \\", workload.name)?;
             output.push_str("            publish\n");
+            writeln!(
+                output,
+                "      - name: Deploy {} / {}",
+                suite.name, workload.name
+            )?;
+            output.push_str("        uses: actions/github-script@v9\n");
+            output.push_str("        with:\n");
+            output.push_str("          github-token: ${{ github.token }}\n");
+            output.push_str("          script: |\n");
+            output.push_str("            await github.rest.actions.createWorkflowDispatch({\n");
+            output.push_str("              owner: context.repo.owner,\n");
+            output.push_str("              repo: context.repo.repo,\n");
+            output.push_str("              workflow_id: \"pages.yml\",\n");
+            output.push_str("              ref: \"main\",\n");
+            output.push_str("            });\n");
         }
         output.push_str("      - name: Preserve suite artifacts\n");
         output.push_str("        if: always()\n");
@@ -203,5 +221,20 @@ mod tests {
         let expected = render(&benchmark).expect("render workflow");
         let actual = fs::read_to_string(".github/workflows/release.yml").expect("workflow");
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn release_workflow_dispatches_pages_after_every_publish() {
+        let benchmark = BenchmarkConfig::load_from(Path::new("config")).expect("config");
+        let workflow = render(&benchmark).expect("render workflow");
+        let publishes = workflow
+            .matches("          ./scripts/publish-results.sh")
+            .count();
+        let dispatches = workflow
+            .matches("              workflow_id: \"pages.yml\"")
+            .count();
+
+        assert!(workflow.contains("      actions: write"));
+        assert_eq!(dispatches, publishes);
     }
 }
