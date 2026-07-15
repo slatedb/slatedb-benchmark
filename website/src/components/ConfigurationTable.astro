@@ -1,0 +1,96 @@
+---
+import type { BenchmarkResult } from '../lib/results';
+
+interface Props {
+  configuration: BenchmarkResult['configuration'];
+}
+
+type ConfigurationRow = {
+  path: string[];
+  value: string;
+  empty?: boolean;
+};
+
+const { configuration } = Astro.props;
+const { slate_settings: slateSettings, ...benchmarkConfiguration } = configuration;
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+const label = (key: string) => key
+  .replace(/_(?:ns|bytes)$/, '')
+  .replaceAll('_', ' ')
+  .replace(/\bwal\b/gi, 'WAL')
+  .replace(/\bsst\b/gi, 'SST')
+  .replace(/\bl0\b/gi, 'L0')
+  .replace(/\bttl\b/gi, 'TTL');
+const formatBytes = (bytes: number) => {
+  const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+  let amount = bytes;
+  let index = 0;
+  while (amount >= 1024 && index < units.length - 1) {
+    amount /= 1024;
+    index += 1;
+  }
+  return `${amount.toLocaleString('en-US', {
+    minimumFractionDigits: index === 0 ? 0 : 2,
+    maximumFractionDigits: index === 0 ? 0 : 2,
+  })} ${units[index]}`;
+};
+const formatDuration = (nanoseconds: number) => {
+  if (nanoseconds === 0) return '0 s';
+  const units: [number, string][] = [
+    [3_600_000_000_000, 'h'],
+    [60_000_000_000, 'min'],
+    [1_000_000_000, 's'],
+    [1_000_000, 'ms'],
+    [1_000, 'µs'],
+    [1, 'ns'],
+  ];
+  const [size, unit] = units.find(([size]) => nanoseconds % size === 0) ?? units.at(-1)!;
+  return `${(nanoseconds / size).toLocaleString('en-US')} ${unit}`;
+};
+const formatScalar = (value: unknown, path: string[]) => {
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+  if (typeof value === 'number') {
+    const key = path.at(-1) ?? '';
+    if (key.endsWith('_ns')) return formatDuration(value);
+    if (key.endsWith('_bytes')) return formatBytes(value);
+    return value.toLocaleString('en-US', { maximumFractionDigits: 6 });
+  }
+  return String(value);
+};
+const flatten = (value: unknown, path: string[] = []): ConfigurationRow[] => {
+  if (value === null || value === undefined) return [{ path, value: '—', empty: true }];
+  if (Array.isArray(value)) {
+    return [{ path, value: value.length === 0 ? '—' : value.join(', '), empty: value.length === 0 }];
+  }
+  if (isRecord(value)) {
+    const entries = Object.entries(value);
+    if (entries.length === 0) return [{ path, value: 'Default' }];
+    return entries.flatMap(([key, nested]) => flatten(nested, [...path, key]));
+  }
+  return [{ path, value: formatScalar(value, path) }];
+};
+const groups = [
+  { name: 'Suite, workload & variant', rows: flatten(benchmarkConfiguration) },
+  { name: 'SlateDB settings', rows: flatten(slateSettings) },
+];
+---
+
+<div class="table-scroll">
+  <table class="configuration-table">
+    <thead>
+      <tr><th scope="col">Setting</th><th scope="col">Effective value</th></tr>
+    </thead>
+    {groups.map((group) => (
+      <tbody>
+        <tr class="configuration-group-row"><th colspan="2">{group.name}</th></tr>
+        {group.rows.map((row) => (
+          <tr>
+            <th scope="row">{row.path.map(label).join(' / ')}</th>
+            <td><code class:list={['configuration-value', { 'measurement-empty': row.empty }]}>{row.value}</code></td>
+          </tr>
+        ))}
+      </tbody>
+    ))}
+  </table>
+</div>

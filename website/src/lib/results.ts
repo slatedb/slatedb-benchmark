@@ -25,12 +25,18 @@ export type BenchmarkResult = {
   configuration: Record<string, unknown> & {
     clients: number | null;
     target_rate: number | null;
+    warmup_ns: number;
+    measurement_ns: number;
     record_count: number;
     key_bytes: number;
     value_bytes: number;
     block_cache_bytes: number | null;
     metadata_cache_bytes: number | null;
     object_store_cache_bytes: number | null;
+    sst_block_bytes: number | null;
+    slate_settings: Record<string, unknown>;
+    build_profile: string;
+    enabled_features: string[];
   };
   application: Record<string, unknown> & {
     successful_operations: number;

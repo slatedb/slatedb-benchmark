@@ -1,5 +1,6 @@
 ---
 import MeasurementRows from '../../../../components/MeasurementRows.astro';
+import ConfigurationTable from '../../../../components/ConfigurationTable.astro';
 import ResultChart from '../../../../components/ResultChart.astro';
 import CostCalculator from '../../../../components/CostCalculator.astro';
 import Base from '../../../../layouts/Base.astro';
@@ -119,6 +120,11 @@ const tables = [
 
     <div class="result-content">
       <ResultChart result={result} timeseries={timeseries} variant={route.variant} />
+
+      <section class="detail-region" aria-labelledby="configuration-title">
+        <div class="section-heading"><div><h2 id="configuration-title">Configuration</h2></div></div>
+        <ConfigurationTable configuration={result.configuration} />
+      </section>
 
       <section class="detail-region" aria-labelledby="detail-title">
         <div class="section-heading"><div><h2 id="detail-title">Measurements</h2></div></div>
