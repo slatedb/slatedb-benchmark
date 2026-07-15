@@ -19,113 +19,114 @@ const requestEntries = Object.entries(requests)
 const operationLabel = (operation: string) => operation.replaceAll('_', ' ');
 ---
 
-<section
-  class="detail-region cost-region"
-  aria-labelledby="cost-title"
+<details
+  class="detail-region cost-region section-disclosure"
+  open
   data-cost-section
   data-pricing={JSON.stringify(pricing)}
   data-basis={JSON.stringify(basis)}
 >
-  <div class="section-heading cost-heading">
-    <div>
-      <h2 id="cost-title">Cost</h2>
+  <summary class="section-summary"><h2>Cost</h2></summary>
+
+  <div class="section-body">
+    <div class="cost-toolbar">
       <p>Projected 30-day object-storage bill based on this run.</p>
-    </div>
-    <div class="cost-controls">
-      <label>
-        <span>Provider</span>
-        <select data-cost-provider aria-label="Object store provider">
-          {pricing.providers.map((provider) => <option value={provider.id}>{provider.name}</option>)}
-        </select>
-      </label>
-    </div>
-  </div>
-
-  <div class="cost-statement">
-    <header class="cost-statement-meta">
-      <div><span>Service</span><strong data-cost-basis>—</strong></div>
-      <div><span>Billing period</span><strong>{pricing.units.month_days} days</strong></div>
-    </header>
-
-    <section class="cost-line-group" aria-labelledby="request-charges-title">
-      <div class="cost-line-heading">
-        <h3 id="request-charges-title">Request charges</h3>
-        <p>Measured request volume projected over the billing period</p>
+      <div class="cost-controls">
+        <label>
+          <span>Provider</span>
+          <select data-cost-provider aria-label="Object store provider">
+            {pricing.providers.map((provider) => <option value={provider.id}>{provider.name}</option>)}
+          </select>
+        </label>
       </div>
-      <div class="table-scroll">
-        <table class="cost-line-table">
-          <thead>
-            <tr>
-              <th scope="col">Operation</th>
-              <th scope="col">Monthly requests</th>
-              <th scope="col">Rate / 1k</th>
-              <th scope="col">Amount</th>
-            </tr>
-          </thead>
-          <tbody>
-            {requestEntries.map(([operation, count]) => (
-              <tr data-cost-operation={operation} data-request-count={count}>
-                <th scope="row">{operationLabel(operation)}</th>
-                <td data-label="Monthly usage" data-cost-monthly-requests>—</td>
-                <td data-label="Rate / 1k" data-cost-operation-rate>—</td>
-                <td data-label="Amount" data-cost-operation-total>—</td>
+    </div>
+
+    <div class="cost-statement">
+      <header class="cost-statement-meta">
+        <div><span>Service</span><strong data-cost-basis>—</strong></div>
+        <div><span>Billing period</span><strong>{pricing.units.month_days} days</strong></div>
+      </header>
+
+      <section class="cost-line-group" aria-labelledby="request-charges-title">
+        <div class="cost-line-heading">
+          <h3 id="request-charges-title">Request charges</h3>
+          <p>Measured request volume projected over the billing period</p>
+        </div>
+        <div class="table-scroll">
+          <table class="cost-line-table">
+            <thead>
+              <tr>
+                <th scope="col">Operation</th>
+                <th scope="col">Monthly requests</th>
+                <th scope="col">Rate / 1k</th>
+                <th scope="col">Amount</th>
               </tr>
-            ))}
-          </tbody>
-          <tfoot>
-            <tr><th scope="row" colspan="3">Request subtotal</th><td data-cost-requests>—</td></tr>
-          </tfoot>
-        </table>
-      </div>
-    </section>
+            </thead>
+            <tbody>
+              {requestEntries.map(([operation, count]) => (
+                <tr data-cost-operation={operation} data-request-count={count}>
+                  <th scope="row">{operationLabel(operation)}</th>
+                  <td data-label="Monthly usage" data-cost-monthly-requests>—</td>
+                  <td data-label="Rate / 1k" data-cost-operation-rate>—</td>
+                  <td data-label="Amount" data-cost-operation-total>—</td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr><th scope="row" colspan="3">Request subtotal</th><td data-cost-requests>—</td></tr>
+            </tfoot>
+          </table>
+        </div>
+      </section>
 
-    <section class="cost-line-group" aria-labelledby="storage-charges-title">
-      <div class="cost-line-heading">
-        <h3 id="storage-charges-title">Storage charges</h3>
-        <p>Final database footprint retained for the billing period</p>
-      </div>
-      <div class="table-scroll">
-        <table class="cost-line-table">
-          <thead>
-            <tr>
-              <th scope="col">Item</th>
-              <th scope="col">Stored</th>
-              <th scope="col">Rate / GiB-month</th>
-              <th scope="col">Amount</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <th scope="row">Database storage</th>
-              <td data-label="Stored" data-cost-storage-usage>—</td>
-              <td data-label="Rate / GiB-month" data-cost-storage-rate>—</td>
-              <td data-label="Amount" data-cost-storage>—</td>
-            </tr>
-          </tbody>
-          <tfoot>
-            <tr><th scope="row" colspan="3">Storage subtotal</th><td data-cost-storage>—</td></tr>
-          </tfoot>
-        </table>
-      </div>
-    </section>
+      <section class="cost-line-group" aria-labelledby="storage-charges-title">
+        <div class="cost-line-heading">
+          <h3 id="storage-charges-title">Storage charges</h3>
+          <p>Final database footprint retained for the billing period</p>
+        </div>
+        <div class="table-scroll">
+          <table class="cost-line-table">
+            <thead>
+              <tr>
+                <th scope="col">Item</th>
+                <th scope="col">Stored</th>
+                <th scope="col">Rate / GiB-month</th>
+                <th scope="col">Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <th scope="row">Database storage</th>
+                <td data-label="Stored" data-cost-storage-usage>—</td>
+                <td data-label="Rate / GiB-month" data-cost-storage-rate>—</td>
+                <td data-label="Amount" data-cost-storage>—</td>
+              </tr>
+            </tbody>
+            <tfoot>
+              <tr><th scope="row" colspan="3">Storage subtotal</th><td data-cost-storage>—</td></tr>
+            </tfoot>
+          </table>
+        </div>
+      </section>
 
-    <footer class="cost-grand-total">
-      <div>
-        <span>Estimated monthly total</span>
-        <small>{pricing.currency} · {pricing.units.month_days}-day month</small>
-      </div>
-      <strong data-cost-total aria-live="polite">—</strong>
-    </footer>
+      <footer class="cost-grand-total">
+        <div>
+          <span>Estimated monthly total</span>
+          <small>{pricing.currency} · {pricing.units.month_days}-day month</small>
+        </div>
+        <strong data-cost-total aria-live="polite">—</strong>
+      </footer>
+    </div>
+
+    <div class="cost-context">
+      <p>Request volume is extrapolated from the measured rate; storage uses the final database size. Free tiers, credits, discounts, and taxes are excluded. Compute and storage are assumed to share a region.</p>
+      <p class="cost-context-links">
+        <a data-cost-source href={pricing.providers[0]?.source}>Provider pricing</a>
+        <a href="/raw/prices.json">Raw price table</a>
+      </p>
+    </div>
   </div>
-
-  <div class="cost-context">
-    <p>Request volume is extrapolated from the measured rate; storage uses the final database size. Free tiers, credits, discounts, and taxes are excluded. Compute and storage are assumed to share a region.</p>
-    <p class="cost-context-links">
-      <a data-cost-source href={pricing.providers[0]?.source}>Provider pricing</a>
-      <a href="/raw/prices.json">Raw price table</a>
-    </p>
-  </div>
-</section>
+</details>
 
 <script>
   type PricingProvider = {

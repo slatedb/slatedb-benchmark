@@ -121,24 +121,28 @@ const tables = [
     <div class="result-content">
       <ResultChart result={result} timeseries={timeseries} variant={route.variant} />
 
-      <section class="detail-region" aria-labelledby="configuration-title">
-        <div class="section-heading"><div><h2 id="configuration-title">Configuration</h2></div></div>
-        <ConfigurationTable configuration={result.configuration} />
-      </section>
+      <details class="detail-region section-disclosure">
+        <summary class="section-summary"><h2>Configuration</h2></summary>
+        <div class="section-body">
+          <ConfigurationTable configuration={result.configuration} />
+        </div>
+      </details>
 
-      <section class="detail-region" aria-labelledby="detail-title">
-        <div class="section-heading"><div><h2 id="detail-title">Measurements</h2></div></div>
-        {tables.map(([name, values]) => (
-          <div class="metric-group">
-            <h3>{name}</h3>
-            <div class="table-scroll"><table><tbody>
-              {Object.entries(values).map(([key, value]) => (
-                <MeasurementRows name={key} value={value} />
-              ))}
-            </tbody></table></div>
-          </div>
-        ))}
-      </section>
+      <details class="detail-region section-disclosure" open>
+        <summary class="section-summary"><h2>Measurements</h2></summary>
+        <div class="section-body">
+          {tables.map(([name, values]) => (
+            <div class="metric-group">
+              <h3>{name}</h3>
+              <div class="table-scroll"><table><tbody>
+                {Object.entries(values).map(([key, value]) => (
+                  <MeasurementRows name={key} value={value} />
+                ))}
+              </tbody></table></div>
+            </div>
+          ))}
+        </div>
+      </details>
 
       <CostCalculator result={result} pricing={pricing} />
 
