@@ -16,6 +16,9 @@ const timeseries = route.timeseries as BenchmarkTimeseries;
 const pricing = await loadPricing();
 const catalog = routes.map((candidate: typeof route) => ({ version: candidate.version, suite: candidate.suite, workload: candidate.workload, variant: candidate.variant, href: routeHref(candidate) }));
 const rawBase = `/raw/${route.version}/${route.suite}/${route.workload}/${route.variant}`;
+const configBase = `https://github.com/slatedb/slatedb-benchmark/blob/${result.identity.runner_commit}/config`;
+const suiteConfig = `${route.suite}.suite.toml`;
+const settingsConfig = `${route.suite}.settings.toml`;
 
 const formatBytes = (value: unknown) => {
   const bytes = Number(value || 0);
@@ -78,10 +81,16 @@ const tables = [
       <dl class="metadata-list">
         <div><dt>Machine</dt><dd>{result.environment.runner_type}</dd></div>
         <div><dt>Object store</dt><dd>{result.environment.object_store} · {result.environment.region}</dd></div>
-        <div><dt>Dataset</dt><dd>{result.configuration.record_count.toLocaleString()} × {formatBytes(result.configuration.value_bytes)}</dd></div>
+        <div><dt>Dataset</dt><dd>{result.configuration.record_count.toLocaleString()} × ({formatBytes(result.configuration.key_bytes)} key + {formatBytes(result.configuration.value_bytes)} value)</dd></div>
         <div><dt>Cache</dt><dd>{cacheSummary}</dd></div>
         <div><dt>Durability</dt><dd>{result.durability.lag ? 'Async + tracked' : 'Awaited / read-only'}</dd></div>
       </dl>
+
+      <nav class="config-links" aria-label="Suite configuration files">
+        <span>Configuration</span>
+        <a href={`${configBase}/${suiteConfig}`}>{suiteConfig}<span aria-hidden="true">↗</span></a>
+        <a href={`${configBase}/${settingsConfig}`}>{settingsConfig}<span aria-hidden="true">↗</span></a>
+      </nav>
     </aside>
 
     <div class="result-content">
