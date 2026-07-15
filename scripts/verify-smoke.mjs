@@ -7,7 +7,7 @@ const run = JSON.parse(await readFile(path.join(root, 'run.json'), 'utf8'));
 const catalog = JSON.parse(
   await new Promise((resolve, reject) => {
     import('node:child_process').then(({ execFile }) =>
-      execFile('cargo', ['run', '--quiet', '--', 'catalog', '--profile', 'smoke'], { cwd: process.cwd() }, (error, stdout) =>
+      execFile('cargo', ['run', '--quiet', '--', 'catalog', '--suite', 'smoke'], { cwd: process.cwd() }, (error, stdout) =>
         error ? reject(error) : resolve(stdout),
       ),
     );
@@ -16,11 +16,11 @@ const catalog = JSON.parse(
 if (run.results.length !== catalog.length) {
   throw new Error(`expected ${catalog.length} results, found ${run.results.length}`);
 }
-const expected = new Set(catalog.map((entry) => `${entry.profile}/${entry.workload}/${entry.variant}`));
+const expected = new Set(catalog.map((entry) => `${entry.suite}/${entry.workload}/${entry.variant}`));
 const nonEmptyLsmDigests = new Set();
 for (const relative of run.results) {
   const result = JSON.parse(await readFile(path.join(root, relative), 'utf8'));
-  expected.delete(`${result.identity.profile}/${result.identity.workload}/${result.identity.variant}`);
+  expected.delete(`${result.identity.suite}/${result.identity.workload}/${result.identity.variant}`);
   if (result.configuration.record_count > 0 && result.identity.workload !== 'bulk-load') {
     nonEmptyLsmDigests.add(result.initial_state.lsm_digest_sha256);
   }

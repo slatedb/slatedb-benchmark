@@ -1,5 +1,5 @@
 use crate::cli::{RunArgs, WorkerArgs};
-use crate::config::{ProfileConfig, ProfileExecution, SuiteConfig, VariantConfig, WorkloadKind};
+use crate::config::{BenchmarkConfig, SuiteConfig, SuiteExecution, VariantConfig, WorkloadKind};
 use crate::cost::PriceTable;
 use crate::model::{
     BenchmarkConfiguration, Identity, InitialState, ResultRecord, RunManifest, SourceFiles,
@@ -65,23 +65,20 @@ pub async fn execute(args: RunArgs) -> Result<()> {
 
 async fn execute_inner(args: &RunArgs) -> Result<()> {
     let started_at = Utc::now();
-    let suite = SuiteConfig::load_from(&args.config_dir)?;
-    let selected = suite.select(
-        args.profile.as_deref(),
+    let benchmark = BenchmarkConfig::load_from(&args.config_dir)?;
+    let selected = benchmark.select(
+        args.suite.as_deref(),
         args.workload.as_deref(),
         args.variant.as_deref(),
     )?;
     let mode = selected
         .first()
         .context("benchmark selection is empty")?
-        .profile
+        .suite
         .mode()
         .to_string();
-    if selected
-        .iter()
-        .any(|variant| variant.profile.mode() != mode)
-    {
-        bail!("a benchmark run cannot mix release and non-release profiles");
+    if selected.iter().any(|variant| variant.suite.mode() != mode) {
+        bail!("a benchmark run cannot mix release and non-release suites");
     }
 
     let prices = PriceTable::load(&args.schema_dir)?;
@@ -92,44 +89,40 @@ async fn execute_inner(args: &RunArgs) -> Result<()> {
         &object_store.region,
     );
 
-    let mut by_profile = BTreeMap::<String, Vec<VariantConfig>>::new();
+    let mut by_suite = BTreeMap::<String, Vec<VariantConfig>>::new();
     for variant in selected {
-        by_profile
-            .entry(variant.profile.name.clone())
+        by_suite
+            .entry(variant.suite.name.clone())
             .or_default()
             .push(variant);
     }
-    let profile_count = by_profile.len();
+    let suite_count = by_suite.len();
     let mut object_store_baselines = BTreeMap::new();
     let mut result_paths = Vec::new();
-    for (profile_name, variants) in by_profile {
-        let profile = &variants
-            .first()
-            .context("profile selection is empty")?
-            .profile;
-        verify_environment(&environment, !profile.release)?;
+    for (suite_name, variants) in by_suite {
+        let suite = &variants.first().context("suite selection is empty")?.suite;
+        verify_environment(&environment, !suite.release)?;
         tracing::info!(
-            profile = profile_name,
+            suite = suite_name,
             "probing object store before dataset preparation"
         );
-        let probe_root = object_store.root.clone().join(profile_name.as_str());
+        let probe_root = object_store.root.clone().join(suite_name.as_str());
         let (baseline, baseline_histograms) = probe(
             Arc::clone(&object_store.raw),
             &probe_root,
-            &profile.object_store_probe,
+            &suite.object_store_probe,
         )
         .await?;
-        let baseline_path = if profile_count == 1 {
+        let baseline_path = if suite_count == 1 {
             args.output.join("object-store.json")
         } else {
-            args.output
-                .join(format!("object-store-{profile_name}.json"))
+            args.output.join(format!("object-store-{suite_name}.json"))
         };
         write_json(&baseline_path, &baseline)?;
         result_paths.extend(
-            execute_profile(
+            execute_suite(
                 variants,
-                &suite,
+                &benchmark,
                 &object_store,
                 &environment,
                 &baseline,
@@ -139,7 +132,7 @@ async fn execute_inner(args: &RunArgs) -> Result<()> {
             )
             .await?,
         );
-        object_store_baselines.insert(profile_name, baseline);
+        object_store_baselines.insert(suite_name, baseline);
     }
 
     let run = RunManifest {
@@ -153,7 +146,7 @@ async fn execute_inner(args: &RunArgs) -> Result<()> {
         runner_version: env!("CARGO_PKG_VERSION").to_string(),
         runner_commit: env!("BENCHMARK_RUNNER_COMMIT").to_string(),
         lockfile_sha256: env!("BENCHMARK_LOCK_HASH").to_string(),
-        resolved_configuration: serde_json::to_value(&suite)?,
+        resolved_configuration: serde_json::to_value(&benchmark)?,
         object_store_baselines,
         results: result_paths,
     };
@@ -167,9 +160,9 @@ async fn execute_inner(args: &RunArgs) -> Result<()> {
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn execute_profile(
+async fn execute_suite(
     selected: Vec<VariantConfig>,
-    suite: &SuiteConfig,
+    benchmark: &BenchmarkConfig,
     object_store: &ObjectStoreContext,
     environment: &crate::model::Environment,
     baseline: &crate::model::ObjectStoreBaseline,
@@ -177,15 +170,15 @@ async fn execute_profile(
     prices: &PriceTable,
     args: &RunArgs,
 ) -> Result<Vec<String>> {
-    let profile = selected
+    let suite = selected
         .first()
-        .context("profile selection is empty")?
-        .profile
+        .context("suite selection is empty")?
+        .suite
         .clone();
     let run_root = object_store
         .root
         .clone()
-        .join(profile.name.as_str())
+        .join(suite.name.as_str())
         .join(format!("run-{}", Uuid::new_v4()));
     let store: Arc<dyn ObjectStore> = object_store.instrumented.clone();
     let mut golden_manager = GoldenManager {
@@ -196,10 +189,10 @@ async fn execute_profile(
     };
 
     let run_result = async {
-        if profile.execution == ProfileExecution::Sequential {
-            return run_sequential_profile(
+        if suite.execution == SuiteExecution::Sequential {
+            return run_sequential_suite(
                 selected,
-                suite,
+                benchmark,
                 &run_root,
                 Arc::clone(&store),
                 object_store.instrumented.metrics(),
@@ -234,7 +227,7 @@ async fn execute_profile(
             let db = open_database(
                 clone_path.clone(),
                 Arc::clone(&store),
-                &variant.profile,
+                &variant.suite,
                 &variant.slate_settings,
                 Arc::clone(&recorder),
             )
@@ -256,7 +249,7 @@ async fn execute_profile(
                 let db = open_database(
                     clone_path.clone(),
                     Arc::clone(&store),
-                    &variant.profile,
+                    &variant.suite,
                     &variant.slate_settings,
                     Arc::clone(&recorder),
                 )
@@ -310,12 +303,9 @@ async fn execute_profile(
 }
 
 pub async fn execute_worker(args: WorkerArgs) -> Result<()> {
-    let suite = SuiteConfig::load_from(&args.config_dir)?;
-    let mut selected = suite.select(
-        Some(&args.profile),
-        Some(&args.workload),
-        Some(&args.variant),
-    )?;
+    let benchmark = BenchmarkConfig::load_from(&args.config_dir)?;
+    let mut selected =
+        benchmark.select(Some(&args.suite), Some(&args.workload), Some(&args.variant))?;
     let variant = selected
         .pop()
         .context("worker selection did not resolve to a variant")?;
@@ -331,7 +321,7 @@ pub async fn execute_worker(args: WorkerArgs) -> Result<()> {
     let db = open_database(
         database_path.clone(),
         store,
-        &variant.profile,
+        &variant.suite,
         &variant.slate_settings,
         Arc::clone(&recorder),
     )
@@ -367,8 +357,8 @@ async fn execute_variant_in_fresh_process(
     let mut command = tokio::process::Command::new(executable);
     command
         .arg("worker")
-        .arg("--profile")
-        .arg(&variant.profile.name)
+        .arg("--suite")
+        .arg(&variant.suite.name)
         .arg("--workload")
         .arg(&variant.workload.name)
         .arg("--variant")
@@ -413,7 +403,7 @@ impl GoldenManager {
             record_count,
             variant.key_bytes(),
             variant.value_bytes(),
-            variant.profile.sst_block_bytes.unwrap_or_default(),
+            variant.suite.sst_block_bytes.unwrap_or_default(),
             settings_digest(&variant.slate_settings)?
         );
         if let Some(golden) = self.values.get(&key) {
@@ -429,7 +419,7 @@ impl GoldenManager {
         let db = open_database(
             path.clone(),
             Arc::clone(&self.store),
-            &variant.profile,
+            &variant.suite,
             &variant.slate_settings,
             Arc::clone(&recorder),
         )
@@ -442,7 +432,7 @@ impl GoldenManager {
             prefix_layout,
         )
         .await?;
-        wait_for_compaction(&db, &recorder, &variant.profile).await?;
+        wait_for_compaction(&db, &recorder, &variant.suite).await?;
         db.close().await.context("closing golden database")?;
 
         let admin = AdminBuilder::new(path.clone(), Arc::clone(&self.store)).build();
@@ -489,9 +479,9 @@ impl GoldenManager {
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn run_sequential_profile(
+async fn run_sequential_suite(
     selected: Vec<VariantConfig>,
-    suite: &SuiteConfig,
+    benchmark: &BenchmarkConfig,
     run_root: &Path,
     store: Arc<dyn ObjectStore>,
     store_metrics: Arc<crate::instrumented_store::StoreMetrics>,
@@ -502,37 +492,37 @@ async fn run_sequential_profile(
     prices: &PriceTable,
     args: &RunArgs,
 ) -> Result<Vec<String>> {
-    let profile = selected
+    let suite = selected
         .first()
-        .context("sequential profile selection is empty")?
-        .profile
+        .context("sequential suite selection is empty")?
+        .suite
         .clone();
-    let bulk_workload = profile
+    let bulk_workload = suite
         .workloads
         .iter()
         .find(|workload| workload.kind == WorkloadKind::BulkLoad)
-        .context("sequential profile requires a bulk-load workload")?;
+        .context("sequential suite requires a bulk-load workload")?;
     let bulk_variant_name = bulk_workload
         .variants
         .first()
         .context("bulk-load workload has no variants")?
         .name
         .clone();
-    let mut bulk_variant = suite
+    let mut bulk_variant = benchmark
         .select(
-            Some(&profile.name),
+            Some(&suite.name),
             Some(&bulk_workload.name),
             Some(&bulk_variant_name),
         )?
         .pop()
         .context("bulk-load variant is missing")?;
     bulk_variant.slate_settings = bulk_load_settings(&bulk_variant.slate_settings);
-    let path = run_root.clone().join("sequential-profile");
+    let path = run_root.clone().join("sequential-suite");
     let bulk_recorder = Arc::new(BenchmarkMetricsRecorder::new());
     let bulk_db = open_database(
         path.clone(),
         Arc::clone(&store),
-        &profile,
+        &suite,
         &bulk_variant.slate_settings,
         Arc::clone(&bulk_recorder),
     )
@@ -588,16 +578,16 @@ async fn run_sequential_profile(
         .await
         .context("closing bulk-load database")?;
 
-    let profile_settings = suite.slate_settings(&profile)?;
+    let suite_settings = benchmark.slate_settings(&suite)?;
     let compaction_db = open_database(
         path.clone(),
         Arc::clone(&store),
-        &profile,
-        &profile_settings,
+        &suite,
+        &suite_settings,
         Arc::clone(&recorder),
     )
     .await?;
-    wait_for_compaction(&compaction_db, &recorder, &profile).await?;
+    wait_for_compaction(&compaction_db, &recorder, &suite).await?;
     if let (Some(outcome), Some((started, start_store, start_slate, stop_tx, sampler))) =
         (bulk_outcome.as_mut(), compaction_measurement)
     {
@@ -667,8 +657,8 @@ async fn run_sequential_profile(
     Ok(paths)
 }
 
-fn bulk_load_settings(profile_settings: &Settings) -> Settings {
-    let mut settings = profile_settings.clone();
+fn bulk_load_settings(suite_settings: &Settings) -> Settings {
+    let mut settings = suite_settings.clone();
     settings.wal_enabled = false;
     settings.compactor_options = None;
     settings.l0_max_ssts = u32::MAX as usize;
@@ -688,8 +678,8 @@ async fn execute_rocks_variant(
     let manifest = admin
         .read_manifest(None)
         .await
-        .context("reading RocksDB-profile manifest")?
-        .context("RocksDB-profile manifest does not exist")?;
+        .context("reading RocksDB suite manifest")?
+        .context("RocksDB suite manifest does not exist")?;
     let initial = InitialState {
         checkpoint_id: None,
         manifest_id: Some(manifest.id()),
@@ -710,13 +700,13 @@ async fn execute_rocks_variant(
         let db = open_database(
             database_path.clone(),
             store,
-            &variant.profile,
+            &variant.suite,
             &variant.slate_settings,
             Arc::clone(&recorder),
         )
         .await?;
         if lsm_digest(&db)? != initial.lsm_digest_sha256 {
-            bail!("reopened RocksDB-profile database has an unexpected LSM state");
+            bail!("reopened RocksDB suite database has an unexpected LSM state");
         }
         let outcome = execute_variant(
             Arc::clone(&db),
@@ -729,7 +719,7 @@ async fn execute_rocks_variant(
         .await;
         db.close()
             .await
-            .context("closing RocksDB-profile variant database")?;
+            .context("closing RocksDB suite variant database")?;
         outcome?
     };
     Ok((outcome, initial))
@@ -750,7 +740,7 @@ fn write_variant_result(
     let version = env!("BENCHMARK_SLATE_VERSION");
     let relative_directory = PathBuf::from("results")
         .join(version)
-        .join(&variant.profile.name)
+        .join(&variant.suite.name)
         .join(&variant.workload.name)
         .join(&variant.variant);
     let directory = args.output.join(&relative_directory);
@@ -778,10 +768,10 @@ fn write_variant_result(
             runner_commit: env!("BENCHMARK_RUNNER_COMMIT").to_string(),
             lockfile_sha256: env!("BENCHMARK_LOCK_HASH").to_string(),
             timestamp: Utc::now().to_rfc3339(),
-            profile: variant.profile.name.clone(),
+            suite: variant.suite.name.clone(),
             workload: variant.workload.name.clone(),
             variant: variant.variant.clone(),
-            mode: variant.profile.mode().to_string(),
+            mode: variant.suite.mode().to_string(),
         },
         environment: environment.clone(),
         object_store_baseline: baseline.clone(),
@@ -793,14 +783,14 @@ fn write_variant_result(
             record_count: variant.record_count(),
             key_bytes: variant.key_bytes(),
             value_bytes: variant.value_bytes(),
-            block_cache_bytes: variant.profile.block_cache_bytes,
+            block_cache_bytes: variant.suite.block_cache_bytes,
             metadata_cache_bytes: Some(
                 variant
-                    .profile
+                    .suite
                     .metadata_cache_bytes
                     .unwrap_or(slatedb::db_cache::DEFAULT_META_CACHE_CAPACITY),
             ),
-            sst_block_bytes: variant.profile.sst_block_bytes,
+            sst_block_bytes: variant.suite.sst_block_bytes,
             slate_settings: serde_json::to_value(&variant.slate_settings)?,
             build_profile: if cfg!(debug_assertions) {
                 "debug".to_string()
@@ -852,7 +842,7 @@ async fn clone_database(
 async fn open_database(
     path: Path,
     store: Arc<dyn ObjectStore>,
-    profile: &ProfileConfig,
+    suite: &SuiteConfig,
     settings: &Settings,
     recorder: Arc<BenchmarkMetricsRecorder>,
 ) -> Result<Arc<Db>> {
@@ -860,23 +850,23 @@ async fn open_database(
     let mut builder = Db::builder(path, store)
         .with_settings(settings.clone())
         .with_metrics_recorder(db_recorder);
-    if let Some(cache) = cache_for(profile) {
+    if let Some(cache) = cache_for(suite) {
         builder = builder.with_db_cache(cache);
     }
-    if profile.sst_block_bytes == Some(8192) {
+    if suite.sst_block_bytes == Some(8192) {
         builder = builder.with_sst_block_size(SstBlockSize::Block8Kib);
     }
     Ok(Arc::new(builder.build().await.context("opening SlateDB")?))
 }
 
-fn cache_for(profile: &ProfileConfig) -> Option<Arc<dyn DbCache>> {
-    let block_cache = profile.block_cache_bytes.map(|max_capacity| {
+fn cache_for(suite: &SuiteConfig) -> Option<Arc<dyn DbCache>> {
+    let block_cache = suite.block_cache_bytes.map(|max_capacity| {
         Arc::new(FoyerCache::new_with_opts(FoyerCacheOptions {
             max_capacity,
             ..Default::default()
         })) as Arc<dyn DbCache>
     });
-    let metadata_capacity = profile
+    let metadata_capacity = suite
         .metadata_cache_bytes
         .unwrap_or(slatedb::db_cache::DEFAULT_META_CACHE_CAPACITY);
     let metadata_cache = Some(Arc::new(FoyerCache::new_with_opts(FoyerCacheOptions {
@@ -894,10 +884,10 @@ fn cache_for(profile: &ProfileConfig) -> Option<Arc<dyn DbCache>> {
 async fn wait_for_compaction(
     db: &Db,
     recorder: &BenchmarkMetricsRecorder,
-    profile: &ProfileConfig,
+    suite: &SuiteConfig,
 ) -> Result<()> {
-    let timeout = Duration::from_millis(profile.compaction_timeout_ms);
-    let quiet = Duration::from_millis(profile.compaction_quiet_ms);
+    let timeout = Duration::from_millis(suite.compaction_timeout_ms);
+    let quiet = Duration::from_millis(suite.compaction_quiet_ms);
     let started = Instant::now();
     let mut stable_since = Instant::now();
     let mut manifest_id = db.status().current_manifest.id();
@@ -1005,8 +995,8 @@ mod tests {
     };
     use crate::cli::RunArgs;
     use crate::config::{
-        ProbeConfig, ProfileConfig, ProfileExecution, VariantConfig, VariantDefinition,
-        WorkloadConfig, WorkloadKind,
+        ProbeConfig, SuiteConfig, SuiteExecution, VariantConfig, VariantDefinition, WorkloadConfig,
+        WorkloadKind,
     };
     use crate::instrumented_store::InstrumentedStore;
     use crate::model::{TimeseriesFile, TimeseriesSample};
@@ -1055,15 +1045,15 @@ mod tests {
 
     #[test]
     fn bulk_load_settings_disable_durability_and_l0_backpressure() {
-        let profile_settings = Settings::default();
-        let settings = bulk_load_settings(&profile_settings);
+        let suite_settings = Settings::default();
+        let settings = bulk_load_settings(&suite_settings);
 
         assert!(!settings.wal_enabled);
         assert!(settings.compactor_options.is_none());
         assert_eq!(settings.l0_max_ssts, u32::MAX as usize);
         assert_eq!(settings.l0_max_ssts_per_key, u32::MAX as usize);
-        assert!(profile_settings.wal_enabled);
-        assert!(profile_settings.compactor_options.is_some());
+        assert!(suite_settings.wal_enabled);
+        assert!(suite_settings.compactor_options.is_some());
     }
 
     #[tokio::test]
@@ -1146,10 +1136,10 @@ mod tests {
             warmup_ms: None,
             measurement_ms: None,
         };
-        let profile = ProfileConfig {
+        let suite = SuiteConfig {
             name: "rocksdb".to_string(),
             release: false,
-            execution: ProfileExecution::Sequential,
+            execution: SuiteExecution::Sequential,
             object_store_probe: ProbeConfig {
                 latency_operations: 1,
                 latency_object_bytes: 1,
@@ -1175,7 +1165,7 @@ mod tests {
             ..Default::default()
         };
         let variant = |workload| VariantConfig {
-            profile: profile.clone(),
+            suite: suite.clone(),
             workload,
             variant: "clients-1".to_string(),
             clients: Some(1),
@@ -1183,7 +1173,7 @@ mod tests {
             slate_settings: slate_settings.clone(),
         };
         let args = RunArgs {
-            profile: None,
+            suite: None,
             workload: None,
             variant: None,
             output: PathBuf::new(),
@@ -1197,7 +1187,7 @@ mod tests {
         let db = open_database(
             path.clone(),
             Arc::clone(&store),
-            &profile,
+            &suite,
             &slate_settings,
             recorder,
         )

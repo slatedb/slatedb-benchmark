@@ -11,7 +11,7 @@ use std::path::PathBuf;
     env!("BENCHMARK_SLATE_COMMIT"),
     ")"
 ))]
-#[command(about = "Run and publish the SlateDB release benchmark suite")]
+#[command(about = "Run and publish SlateDB benchmark suites")]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
@@ -29,8 +29,8 @@ pub enum Command {
 #[derive(Debug, Clone, Args)]
 pub struct RunArgs {
     #[arg(long)]
-    pub profile: Option<String>,
-    #[arg(long, requires = "profile")]
+    pub suite: Option<String>,
+    #[arg(long, requires = "suite")]
     pub workload: Option<String>,
     #[arg(long, requires = "workload")]
     pub variant: Option<String>,
@@ -51,7 +51,7 @@ pub struct ValidateArgs {
 #[derive(Debug, Args)]
 pub struct CatalogArgs {
     #[arg(long)]
-    pub profile: Option<String>,
+    pub suite: Option<String>,
     #[arg(long, default_value = "config")]
     pub config_dir: PathBuf,
 }
@@ -59,7 +59,7 @@ pub struct CatalogArgs {
 #[derive(Debug, Clone, Args)]
 pub struct WorkerArgs {
     #[arg(long)]
-    pub profile: String,
+    pub suite: String,
     #[arg(long)]
     pub workload: String,
     #[arg(long)]

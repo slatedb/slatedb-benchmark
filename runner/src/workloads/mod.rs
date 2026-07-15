@@ -61,7 +61,7 @@ pub async fn execute_variant(
     let warmup = Duration::from_millis(variant.warmup_ms());
     if !warmup.is_zero() {
         tracing::info!(
-            profile = variant.profile.name,
+            suite = variant.suite.name,
             workload = variant.workload.name,
             variant = variant.variant,
             "warming benchmark"

@@ -1,17 +1,17 @@
-# Benchmark suite
+# Benchmark suites
 
-Run all profiles for each SlateDB release on a WarpBuild
+Run all suites for each SlateDB release on a WarpBuild
 `warp-ubuntu-latest-x64-16x` runner against Tigris in the `auto` region.
 
 Each workload has one fixed effective configuration. SlateDB settings inherit
-from the library defaults and then the profile. Do not cross product workloads
+from the library defaults and then the suite. Do not cross product workloads
 with additional value sizes, cache sizes, machines, object stores, or SlateDB
 settings.
 
-The `config/` directory contains two files per profile:
-`<profile>.profile.toml` defines the profile, its ordered `[[workloads]]`, and
-their nested variants; `<profile>.settings.toml` contains the profile-wide
-SlateDB settings. The `smoke` profile is a small, non-release integration suite;
+The `config/` directory contains two files per suite:
+`<suite>.suite.toml` defines the suite, its ordered `[[workloads]]`, and
+their nested variants; `<suite>.settings.toml` contains the suite-wide
+SlateDB settings. The `smoke` suite is a small, non-release integration suite;
 it is not a reduced rewrite of the release catalog.
 
 ## Standard results
@@ -19,7 +19,7 @@ it is not a reduced rewrite of the release catalog.
 Every workload emits the same result record. Use `null` for fields that do not
 apply.
 
-- Identity: schema version, SlateDB version and commit, timestamp, profile, and
+- Identity: schema version, SlateDB version and commit, timestamp, suite, and
   workload
 - Environment: runner type, CPU model and core count, RAM, local disk, OS and
   kernel, object store, endpoint, and region
@@ -43,7 +43,7 @@ apply.
 - Cost: compute, request, storage, and transfer cost, both total and per million
   operations
 
-## YCSB profile
+## YCSB suite
 
 - Dataset: 100 million records with 16-byte keys and 1 KiB values
 - Cache: 4 GiB block cache and 512 MiB metadata cache
@@ -65,7 +65,7 @@ results.
    distributed from 1 to 100 records.
 6. `ycsb-f`: 50% reads and 50% read-modify-write operations.
 
-## RocksDB profile
+## RocksDB suite
 
 Follow RocksDB's published
 [`benchmark.sh` sequence](https://github.com/facebook/rocksdb/wiki/performance-benchmarks)
@@ -88,7 +88,7 @@ Run the tests below in order against the same database.
    order. Disable the WAL and compactor, and do not wait for durability during
    individual writes. Set both L0 SST limits to `u32::MAX` so the uncompacted L0
    can hold the complete load. Flush all memtables after loading, restore the
-   profile settings, and wait for compaction to finish. RocksDB also uses its
+   suite settings, and wait for compaction to finish. RocksDB also uses its
    vector memtable and an explicit full compaction; SlateDB has no exact
    equivalents.
 2. `random-read`: Read uniformly random existing keys.
@@ -109,11 +109,11 @@ Run the tests below in order against the same database.
    for durability.
 
 RocksDB publishes both buffered-I/O and direct-I/O variants. Direct I/O does not
-apply to SlateDB's object-store path, so this profile omits that variant.
+apply to SlateDB's object-store path, so this suite omits that variant.
 
-## SlateDB-specific profile
+## SlateDB-specific suite
 
-Use the YCSB profile settings unless a test specifies otherwise.
+Use the YCSB suite settings unless a test specifies otherwise.
 
 1. `cold-read`: Run uniform random reads after restarting SlateDB and clearing
    its caches. Skip the warmup.
@@ -135,6 +135,6 @@ rates of 1,000, 5,000, and 10,000 ops/s.
 
 ## Out of scope
 
-Do not add configuration variants within a profile. Do not publish comparisons
+Do not add configuration variants within a suite. Do not publish comparisons
 or deltas between SlateDB versions. Criterion microbenchmarks and regression
 alerts remain in the SlateDB repository.

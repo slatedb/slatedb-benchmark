@@ -72,9 +72,9 @@ function variantSettings(variant) {
   return { target, clients, scale };
 }
 
-function mockThroughput(profile, workload, clients, target) {
+function mockThroughput(suite, workload, clients, target) {
   if (target !== null) return target * 0.96;
-  const base = profile === 'rocksdb' ? 32_000 : workload === 'prefix-scan' ? 2_400 : 48_000;
+  const base = suite === 'rocksdb' ? 32_000 : workload === 'prefix-scan' ? 2_400 : 48_000;
   return base * Math.sqrt(clients ?? 1);
 }
 
@@ -164,21 +164,21 @@ function mockTimeseries({ throughput, valueBytes, databaseSize, isWrite, awaitDu
 await rm(outputRoot, { recursive: true, force: true });
 const resultPaths = [];
 
-for (const profile of published.profiles) {
-  for (const workload of profile.workloads) {
+for (const suite of published.suites) {
+  for (const workload of suite.workloads) {
     for (const variantDefinition of workload.variants) {
       const variant = variantDefinition.name;
       const { clients, target, scale } = variantSettings(variantDefinition);
       const latency = latencyTemplates[scale];
       const operations = latency.summary.count;
-      const throughput = mockThroughput(profile.name, workload.name, clients, target);
+      const throughput = mockThroughput(suite.name, workload.name, clients, target);
       const isWrite = writeWorkloads.has(workload.name);
       const awaitDurable = Boolean(workload.await_durable);
-      const measurementMs = workload.measurement_ms ?? profile.measurement_ms;
+      const measurementMs = workload.measurement_ms ?? suite.measurement_ms;
       const measurementNs = measurementMs * 1_000_000;
-      const recordCount = workload.record_count ?? profile.record_count;
-      const keyBytes = workload.key_bytes ?? profile.key_bytes;
-      const valueBytes = workload.value_bytes ?? profile.value_bytes;
+      const recordCount = workload.record_count ?? suite.record_count;
+      const keyBytes = workload.key_bytes ?? suite.key_bytes;
+      const valueBytes = workload.value_bytes ?? suite.value_bytes;
       const databaseSize = Math.max(16 * 1024 * 1024, Math.round(recordCount * (keyBytes + valueBytes) * 0.42));
       const compute = Math.max(0.00001, measurementMs / 60_000 * 0.032);
       const requests = operations * 0.0000006;
@@ -198,7 +198,7 @@ for (const profile of published.profiles) {
           runner_commit: zeroCommit,
           lockfile_sha256: zeroHash,
           timestamp,
-          profile: profile.name,
+          suite: suite.name,
           workload: workload.name,
           variant,
           mode: 'smoke',
@@ -220,14 +220,14 @@ for (const profile of published.profiles) {
         configuration: {
           clients,
           target_rate: target,
-          warmup_ns: (workload.warmup_ms ?? profile.warmup_ms) * 1_000_000,
+          warmup_ns: (workload.warmup_ms ?? suite.warmup_ms) * 1_000_000,
           measurement_ns: measurementNs,
           record_count: recordCount,
           key_bytes: keyBytes,
           value_bytes: valueBytes,
-          block_cache_bytes: profile.block_cache_bytes,
-          metadata_cache_bytes: profile.metadata_cache_bytes,
-          sst_block_bytes: profile.sst_block_bytes ?? null,
+          block_cache_bytes: suite.block_cache_bytes,
+          metadata_cache_bytes: suite.metadata_cache_bytes,
+          sst_block_bytes: suite.sst_block_bytes ?? null,
           slate_settings: {
             flush_interval: '100ms',
             wal_enabled: workload.kind !== 'bulk-load',
@@ -241,7 +241,7 @@ for (const profile of published.profiles) {
             l0_flush_parallelism: 4,
             max_unflushed_bytes: 8388608,
             compactor_options: workload.kind === 'bulk-load' ? null : {},
-            compression_codec: profile.name === 'rocksdb' ? 'Zstd' : null,
+            compression_codec: suite.name === 'rocksdb' ? 'Zstd' : null,
             object_store_cache_options: {},
             garbage_collector_options: {},
             metric_level: 'Info',
@@ -326,7 +326,7 @@ for (const profile of published.profiles) {
           total_per_million_operations: totalCost * perMillion,
         },
         initial_state: {
-          checkpoint_id: profile.name === 'rocksdb' ? null : '00000000-0000-4000-8000-000000000000',
+          checkpoint_id: suite.name === 'rocksdb' ? null : '00000000-0000-4000-8000-000000000000',
           manifest_id: 1,
           lsm_digest_sha256: zeroHash,
         },
@@ -355,7 +355,7 @@ for (const profile of published.profiles) {
         slatedb_metrics: [],
       };
 
-      const relativeDirectory = path.join('results', version, profile.name, workload.name, variant);
+      const relativeDirectory = path.join('results', version, suite.name, workload.name, variant);
       const directory = path.join(outputRoot, relativeDirectory);
       await mkdir(directory, { recursive: true });
       await Promise.all([
@@ -381,7 +381,7 @@ const run = {
   lockfile_sha256: zeroHash,
   resolved_configuration: published,
   object_store_baselines: Object.fromEntries(
-    published.profiles.map((profile) => [profile.name, objectStoreBaseline]),
+    published.suites.map((suite) => [suite.name, objectStoreBaseline]),
   ),
   results: resultPaths,
 };
@@ -399,33 +399,33 @@ async function writeJson(file, value) {
 
 async function loadReleaseConfiguration(configRoot) {
   const entries = await readdir(configRoot, { withFileTypes: true });
-  const profiles = [];
-  const profileSuffix = '.profile.toml';
-  const profileEntries = entries
-    .filter((entry) => entry.isFile() && entry.name.endsWith(profileSuffix))
+  const suites = [];
+  const suiteSuffix = '.suite.toml';
+  const suiteEntries = entries
+    .filter((entry) => entry.isFile() && entry.name.endsWith(suiteSuffix))
     .sort((a, b) => a.name.localeCompare(b.name));
-  for (const entry of profileEntries) {
-    const profileName = entry.name.slice(0, -profileSuffix.length);
-    const profilePath = path.join(configRoot, entry.name);
-    const profile = parseToml(await readFile(profilePath, 'utf8'));
-    if (!profile.release) continue;
+  for (const entry of suiteEntries) {
+    const suiteName = entry.name.slice(0, -suiteSuffix.length);
+    const suitePath = path.join(configRoot, entry.name);
+    const suite = parseToml(await readFile(suitePath, 'utf8'));
+    if (!suite.release) continue;
 
-    const workloads = profile.workloads.map((workload) => ({
+    const workloads = suite.workloads.map((workload) => ({
       ...workload,
       warmup_ms: workload.warmup === undefined ? undefined : durationMs(workload.warmup),
       measurement_ms: workload.measurement === undefined ? undefined : durationMs(workload.measurement),
     }));
-    profiles.push({
-      ...profile,
-      name: profileName,
-      warmup_ms: durationMs(profile.warmup),
-      measurement_ms: durationMs(profile.measurement),
-      compaction_quiet_ms: durationMs(profile.compaction_quiet),
-      compaction_timeout_ms: durationMs(profile.compaction_timeout),
+    suites.push({
+      ...suite,
+      name: suiteName,
+      warmup_ms: durationMs(suite.warmup),
+      measurement_ms: durationMs(suite.measurement),
+      compaction_quiet_ms: durationMs(suite.compaction_quiet),
+      compaction_timeout_ms: durationMs(suite.compaction_timeout),
       workloads,
     });
   }
-  return { schema_version: 1, profiles };
+  return { schema_version: 1, suites };
 }
 
 function durationMs(value) {

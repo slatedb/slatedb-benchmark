@@ -16,7 +16,7 @@ The repository layout is:
 
 ```text
 runner/                 Rust benchmark runner and workload implementations
-config/                 `<profile>.profile.toml` and `<profile>.settings.toml`
+config/                 `<suite>.suite.toml` and `<suite>.settings.toml`
 schema/                 Versioned JSON schemas and price tables
 results/<version>/      Published result records and histograms
 site/                   Static website
@@ -32,59 +32,59 @@ correction to a published result.
 
 ### SlateDB settings
 
-The runner discovers a profile from each `config/*.profile.toml`; the filename
-prefix is the profile name. Each profile declares its ordered `[[workloads]]`
+The runner discovers a suite from each `config/*.suite.toml`; the filename
+prefix is the suite name. Each suite declares its ordered `[[workloads]]`
 array, with nested `[[workloads.variants]]` records containing a display name
 and either `clients` or `target_rate`. Behavior is never inferred from a variant
-name. The RocksDB profile uses declaration order to preserve its stateful
+name. The RocksDB suite uses declaration order to preserve its stateful
 benchmark sequence.
 
-SlateDB engine settings are checked-in profile TOML rather than generated from
+SlateDB engine settings are checked-in suite TOML rather than generated from
 benchmark configuration. SlateDB's settings loader resolves them in this order:
 
 ```text
 SlateDB Settings::default()
-  -> config/<profile>.settings.toml
+  -> config/<suite>.settings.toml
 ```
 
-Profile settings are required, and every workload normally uses the same
+Suite settings are required, and every workload normally uses the same
 effective SlateDB settings. Bulk load is an execution-phase exception: the
-runner clones the profile settings, disables the WAL and compactor, and sets
+runner clones the suite settings, disables the WAL and compactor, and sets
 `l0_max_ssts` and `l0_max_ssts_per_key` to `u32::MAX`. After loading and
 flushing the complete dataset, it reopens the database with the original
-profile settings and waits for compaction to finish. Every result records the
+suite settings and waits for compaction to finish. Every result records the
 effective `Settings` object used for its measured workload.
 
 Dataset sizes, operation mixes, timings, durability behavior, cache capacity,
 SST block size, object-store probe parameters, release eligibility, workloads,
-variants, and execution model live in `profile.toml`. Cache and SST block size
+variants, and execution model live in `suite.toml`. Cache and SST block size
 are attached as `DbBuilder` components and are not fields in SlateDB's
 `Settings` type. Human-readable durations in TOML are resolved to milliseconds
 internally and nanoseconds in result records.
 
-The `smoke` directory is an ordinary profile with `release = false`. Its few
-purpose-built workloads cover the important runner paths with small datasets.
-Release discovery excludes non-release profiles unless one is named
-explicitly, so Docker runs it with `--profile smoke` and the release workflow
+The `smoke.suite.toml` file defines an ordinary suite with `release = false`.
+Its few purpose-built workloads cover the important runner paths with small datasets.
+Release discovery excludes non-release suites unless one is named
+explicitly, so Docker runs it with `--suite smoke` and the release workflow
 continues to name `rocksdb`, `ycsb`, and `slatedb`.
 
 ## Execution
 
 A release workflow accepts a SlateDB tag or commit, builds the runner once, and
-runs one sequential job per profile:
+runs one sequential job per suite:
 
 ```text
-build runner -> [inspect host -> probe object store -> prepare profile data
-              -> run profile workloads -> validate -> publish profile]
+build runner -> [inspect host -> probe object store -> prepare suite data
+              -> run suite workloads -> validate -> publish suite]
              -> rebuild and deploy site from main
 ```
 
 The workflow builds the runner in release mode on the configured WarpBuild
 host. It verifies the runner type, CPU count, memory, and object-store endpoint
-before starting. Profile jobs use `max-parallel: 1`, so one measured workload
-runs at a time and profiles do not compete for the object store. Dataset
+before starting. Suite jobs use `max-parallel: 1`, so one measured workload
+runs at a time and suites do not compete for the object store. Dataset
 preparation, object-store probes, and cleanup never overlap a measurement
-window. A failed profile does not cancel the remaining profile jobs.
+window. A failed suite does not cancel the remaining suite jobs.
 
 The runner uses monotonic time for durations and latency. Wall-clock time is
 used only for result timestamps. Warmup data is discarded and metric counters
@@ -113,7 +113,7 @@ result records the checkpoint ID, manifest ID, and a digest of the initial LSM
 state. These fields confirm that every variant began with the same logical data
 and SST layout.
 
-The RocksDB-derived profile is different by design: it runs its ordered
+The RocksDB-derived suite is different by design: it runs its ordered
 workloads against the database produced by `bulk-load`. The database path and
 mutations carry forward, but the runner closes the database between variants.
 Each published variant runs in a fresh worker process with a newly constructed
@@ -125,10 +125,10 @@ the runner cannot clear caches managed inside Tigris.
 
 ### Object-store baseline
 
-At the start of each selected profile, before its dataset preparation or
+At the start of each selected suite, before its dataset preparation or
 workload execution, the runner probes the Tigris bucket and endpoint through
 the object-store client without opening SlateDB. Probe parameters belong to
-the profile, so the probe runs exactly once per profile. The release latency
+the suite, so the probe runs exactly once per suite. The release latency
 probe performs 2,000
 sequential PUTs and GETs of 8 KiB objects and records their histograms and
 required percentiles.
@@ -209,21 +209,21 @@ export SLATEDB_BENCH_BUCKET=slatedb-benchmarks
 export SLATEDB_BENCH_PREFIX="manual/$USER"
 ```
 
-`--profile` runs one profile, adding `--workload` runs all of that workload's
+`--suite` runs one suite, adding `--workload` runs all of that workload's
 variants, and adding `--variant` runs one variant. Workload and variant
 selectors require their parent selectors. For example:
 
 ```console
 $ ./target/release/slatedb-benchmark run \
-    --profile ycsb \
+    --suite ycsb \
     --workload ycsb-a \
     --variant clients-16 \
     --output .runs/ycsb-a
 {"status":"ok","run":".runs/ycsb-a/run.json"}
 ```
 
-Omitting the selectors runs all release profiles and variants. Profiles with
-`release = false`, including `smoke`, require an explicit `--profile`:
+Omitting the selectors runs all release suites and variants. Suites with
+`release = false`, including `smoke`, require an explicit `--suite`:
 
 ```console
 $ ./target/release/slatedb-benchmark run --output .runs/release
@@ -231,12 +231,12 @@ $ ./target/release/slatedb-benchmark run --output .runs/release
 ```
 
 The read-only `catalog` command prints the discovered release identities as
-JSON without running a benchmark. Passing `--profile smoke` includes that
-explicit non-release profile instead. CI uses this output to verify that a
+JSON without running a benchmark. Passing `--suite smoke` includes that
+explicit non-release suite instead. CI uses this output to verify that a
 smoke run produced exactly its configured result set.
 
-Each `run` invocation probes the object store once per selected profile, before
-preparing that profile's data. It writes progress to stderr and one JSON status
+Each `run` invocation probes the object store once per selected suite, before
+preparing that suite's data. It writes progress to stderr and one JSON status
 line to stdout. The output tree is shown below. The output directory must not
 exist before the command starts.
 
@@ -251,7 +251,7 @@ exist before the command starts.
 ```
 
 `run.json` records the selected work, source commits, resolved configuration,
-per-profile object-store baselines, and result paths. The runner exits nonzero on
+per-suite object-store baselines, and result paths. The runner exits nonzero on
 configuration, execution, or validation failure and does not write a success
 line. Manual results use the published schema but remain under `.runs/`; only
 the release workflow copies validated results into `results/` and publishes
@@ -306,7 +306,7 @@ Each variant produces one self-contained JSON summary plus its encoded
 histograms and time series:
 
 ```text
-results/<version>/<profile>/<workload>/<variant>/
+results/<version>/<suite>/<workload>/<variant>/
   result.json
   histograms.json
   timeseries.json
@@ -343,18 +343,18 @@ the latest stable SlateDB release and provides a version dropdown. Routes keep
 the selection shareable:
 
 ```text
-/<version>/<profile>/<workload>/<variant>/
+/<version>/<suite>/<workload>/<variant>/
 ```
 
 The page displays one version and never computes a delta against another
-version. Profile, workload, concurrency, and target-rate controls select result
+version. Suite, workload, concurrency, and target-rate controls select result
 variants within that version.
 
 Use `~/Code/slatedb/website` as the visual reference for the site's design
 aesthetic, layout, and CSS styling.
 
 The layout favors density. A slim header contains the SlateDB wordmark. On wide
-screens, a sticky context rail groups the version, profile, workload, and
+screens, a sticky context rail groups the version, suite, workload, and
 variant selectors with machine, object-store, dataset, cache, and durability
 facts. The results canvas beside it starts with an active chart description and
 a right-aligned chart dropdown. A download icon beside the dropdown links to
@@ -385,14 +385,14 @@ covers all measured writes, resource samples span the measurement window, and
 the workload used the expected initial manifest. Secrets, credentials, and
 signed URLs are rejected from result files.
 
-The workflow publishes each profile after all required variants in that profile
-pass validation. Publication copies the validated profile output into a fresh
-checkout of `main`, commits only that profile's result sources, and rebases
+The workflow publishes each suite after all required variants in that suite
+pass validation. Publication copies the validated suite output into a fresh
+checkout of `main`, commits only that suite's result sources, and rebases
 before pushing. A non-fast-forward push refetches, rebases, rebuilds the site,
 and retries instead of pushing from the benchmark's original stale checkout.
 A separate Pages workflow deploys after each results push, so successful
-profiles become visible without waiting for the entire release. Failed and
-interrupted profiles keep their logs and partial output as CI artifacts, while
-the remaining profiles continue. Rerunning a failed matrix job replaces only
-that profile's unpublished files. The published schema omits trial and
+suites become visible without waiting for the entire release. Failed and
+interrupted suites keep their logs and partial output as CI artifacts, while
+the remaining suites continue. Rerunning a failed matrix job replaces only
+that suite's unpublished files. The published schema omits trial and
 repetition fields.

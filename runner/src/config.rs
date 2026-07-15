@@ -6,9 +6,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize)]
-pub struct SuiteConfig {
+pub struct BenchmarkConfig {
     pub schema_version: u32,
-    pub profiles: Vec<ProfileConfig>,
+    pub suites: Vec<SuiteConfig>,
     #[serde(skip)]
     config_dir: PathBuf,
 }
@@ -25,16 +25,16 @@ pub struct ProbeConfig {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum ProfileExecution {
+pub enum SuiteExecution {
     Isolated,
     Sequential,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct ProfileConfig {
+pub struct SuiteConfig {
     pub name: String,
     pub release: bool,
-    pub execution: ProfileExecution,
+    pub execution: SuiteExecution,
     pub object_store_probe: ProbeConfig,
     pub compaction_quiet_ms: u64,
     pub compaction_timeout_ms: u64,
@@ -49,7 +49,7 @@ pub struct ProfileConfig {
     pub workloads: Vec<WorkloadConfig>,
 }
 
-impl ProfileConfig {
+impl SuiteConfig {
     pub fn mode(&self) -> &'static str {
         if self.release {
             "published"
@@ -110,10 +110,10 @@ pub enum WorkloadKind {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ProfileFile {
+struct SuiteFile {
     schema_version: u32,
     release: bool,
-    execution: ProfileExecution,
+    execution: SuiteExecution,
     object_store_probe: ProbeFile,
     compaction_quiet: String,
     compaction_timeout: String,
@@ -162,14 +162,14 @@ struct WorkloadFile {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CatalogEntry {
-    pub profile: String,
+    pub suite: String,
     pub workload: String,
     pub variant: String,
 }
 
 #[derive(Debug, Clone)]
 pub struct VariantConfig {
-    pub profile: ProfileConfig,
+    pub suite: SuiteConfig,
     pub workload: WorkloadConfig,
     pub variant: String,
     pub clients: Option<usize>,
@@ -177,13 +177,13 @@ pub struct VariantConfig {
     pub slate_settings: Settings,
 }
 
-impl SuiteConfig {
+impl BenchmarkConfig {
     pub fn load() -> Result<Self> {
         Self::load_from(Path::new("config"))
     }
 
     pub fn load_from(config_dir: &Path) -> Result<Self> {
-        let mut profile_paths = Vec::new();
+        let mut suite_paths = Vec::new();
         for entry in fs::read_dir(config_dir)
             .with_context(|| format!("reading configuration directory {}", config_dir.display()))?
         {
@@ -192,93 +192,89 @@ impl SuiteConfig {
                 && entry
                     .file_name()
                     .to_str()
-                    .is_some_and(|name| name.ends_with(".profile.toml"))
+                    .is_some_and(|name| name.ends_with(".suite.toml"))
             {
-                profile_paths.push(entry.path());
+                suite_paths.push(entry.path());
             }
         }
-        profile_paths.sort();
-        if profile_paths.is_empty() {
+        suite_paths.sort();
+        if suite_paths.is_empty() {
             bail!(
-                "configuration directory {} contains no *.profile.toml files",
+                "configuration directory {} contains no *.suite.toml files",
                 config_dir.display()
             );
         }
 
-        let profiles = profile_paths
+        let suites = suite_paths
             .iter()
-            .map(|profile_path| load_profile(profile_path))
+            .map(|suite_path| load_suite(suite_path))
             .collect::<Result<Vec<_>>>()?;
-        let suite = Self {
+        let benchmark = Self {
             schema_version: 1,
-            profiles,
+            suites,
             config_dir: config_dir.to_path_buf(),
         };
-        suite.validate()?;
-        Ok(suite)
+        benchmark.validate()?;
+        Ok(benchmark)
     }
 
     fn validate(&self) -> Result<()> {
         let mut identities = BTreeSet::new();
-        let mut profile_names = BTreeSet::new();
-        for profile in &self.profiles {
-            if !profile_names.insert(profile.name.clone()) {
-                bail!("duplicate profile {}", profile.name);
+        let mut suite_names = BTreeSet::new();
+        for suite in &self.suites {
+            if !suite_names.insert(suite.name.clone()) {
+                bail!("duplicate suite {}", suite.name);
             }
-            if profile.workloads.is_empty() {
-                bail!("profile {} has no workloads", profile.name);
+            if suite.workloads.is_empty() {
+                bail!("suite {} has no workloads", suite.name);
             }
-            if profile.key_bytes == 0 || profile.value_bytes == 0 {
-                bail!("profile {} has a zero-sized key or value", profile.name);
+            if suite.key_bytes == 0 || suite.value_bytes == 0 {
+                bail!("suite {} has a zero-sized key or value", suite.name);
             }
-            if profile.sst_block_bytes.is_some_and(|size| size != 8192) {
+            if suite.sst_block_bytes.is_some_and(|size| size != 8192) {
                 bail!(
-                    "profile {} requests an unsupported SST block size",
-                    profile.name
+                    "suite {} requests an unsupported SST block size",
+                    suite.name
                 );
             }
-            if profile.compaction_quiet_ms == 0 || profile.compaction_timeout_ms == 0 {
+            if suite.compaction_quiet_ms == 0 || suite.compaction_timeout_ms == 0 {
                 bail!(
-                    "profile {} has a zero compaction quiet period or timeout",
-                    profile.name
+                    "suite {} has a zero compaction quiet period or timeout",
+                    suite.name
                 );
             }
-            validate_probe(profile)?;
-            self.slate_settings(profile)
-                .with_context(|| format!("loading SlateDB settings for {}", profile.name))?;
+            validate_probe(suite)?;
+            self.slate_settings(suite)
+                .with_context(|| format!("loading SlateDB settings for {}", suite.name))?;
 
-            if profile.execution == ProfileExecution::Sequential {
-                validate_sequential_profile(profile)?;
+            if suite.execution == SuiteExecution::Sequential {
+                validate_sequential_suite(suite)?;
             }
 
             let mut workload_names = BTreeSet::new();
-            for workload in &profile.workloads {
+            for workload in &suite.workloads {
                 if !workload_names.insert(&workload.name) {
                     bail!(
-                        "profile {} contains duplicate workload {}",
-                        profile.name,
+                        "suite {} contains duplicate workload {}",
+                        suite.name,
                         workload.name
                     );
                 }
                 if workload.variants.is_empty() {
-                    bail!(
-                        "workload {}/{} has no variants",
-                        profile.name,
-                        workload.name
-                    );
+                    bail!("workload {}/{} has no variants", suite.name, workload.name);
                 }
                 for variant in &workload.variants {
                     if variant.name.trim().is_empty() {
                         bail!(
                             "workload {}/{} has a variant with an empty name",
-                            profile.name,
+                            suite.name,
                             workload.name
                         );
                     }
                     if variant.clients == Some(0) || variant.target_rate == Some(0) {
                         bail!(
                             "variant {}/{}/{} has zero concurrency or target rate",
-                            profile.name,
+                            suite.name,
                             workload.name,
                             variant.name
                         );
@@ -291,7 +287,7 @@ impl SuiteConfig {
                         if variant.target_rate.is_none() || variant.clients.is_some() {
                             bail!(
                                 "open-loop variant {}/{}/{} must define only target_rate",
-                                profile.name,
+                                suite.name,
                                 workload.name,
                                 variant.name
                             );
@@ -299,19 +295,19 @@ impl SuiteConfig {
                     } else if variant.clients.is_none() || variant.target_rate.is_some() {
                         bail!(
                             "closed-loop variant {}/{}/{} must define only clients",
-                            profile.name,
+                            suite.name,
                             workload.name,
                             variant.name
                         );
                     }
                     if !identities.insert((
-                        profile.name.clone(),
+                        suite.name.clone(),
                         workload.name.clone(),
                         variant.name.clone(),
                     )) {
                         bail!(
                             "duplicate benchmark variant {}/{}/{}",
-                            profile.name,
+                            suite.name,
                             workload.name,
                             variant.name
                         );
@@ -322,18 +318,18 @@ impl SuiteConfig {
         Ok(())
     }
 
-    pub fn catalog(&self, profile_name: Option<&str>) -> Result<Vec<CatalogEntry>> {
+    pub fn catalog(&self, suite_name: Option<&str>) -> Result<Vec<CatalogEntry>> {
         let entries = self
-            .profiles
+            .suites
             .iter()
-            .filter(|profile| match profile_name {
-                Some(name) => profile.name == name,
-                None => profile.release,
+            .filter(|suite| match suite_name {
+                Some(name) => suite.name == name,
+                None => suite.release,
             })
-            .flat_map(|profile| {
-                profile.workloads.iter().flat_map(move |workload| {
+            .flat_map(|suite| {
+                suite.workloads.iter().flat_map(move |workload| {
                     workload.variants.iter().map(move |variant| CatalogEntry {
-                        profile: profile.name.clone(),
+                        suite: suite.name.clone(),
                         workload: workload.name.clone(),
                         variant: variant.name.clone(),
                     })
@@ -341,28 +337,28 @@ impl SuiteConfig {
             })
             .collect::<Vec<_>>();
         if entries.is_empty() {
-            bail!("profile selector did not match any configured benchmark variants");
+            bail!("suite selector did not match any configured benchmark variants");
         }
         Ok(entries)
     }
 
     pub fn select(
         &self,
-        profile_name: Option<&str>,
+        suite_name: Option<&str>,
         workload_name: Option<&str>,
         variant_name: Option<&str>,
     ) -> Result<Vec<VariantConfig>> {
         let mut selected = Vec::new();
-        for profile in &self.profiles {
-            let include_profile = match profile_name {
-                Some(name) => profile.name == name,
-                None => profile.release,
+        for suite in &self.suites {
+            let include_suite = match suite_name {
+                Some(name) => suite.name == name,
+                None => suite.release,
             };
-            if !include_profile {
+            if !include_suite {
                 continue;
             }
-            let slate_settings = self.slate_settings(profile)?;
-            for workload in &profile.workloads {
+            let slate_settings = self.slate_settings(suite)?;
+            for workload in &suite.workloads {
                 if workload_name.is_some_and(|name| name != workload.name) {
                     continue;
                 }
@@ -371,7 +367,7 @@ impl SuiteConfig {
                         continue;
                     }
                     selected.push(VariantConfig {
-                        profile: profile.clone(),
+                        suite: suite.clone(),
                         workload: workload.clone(),
                         variant: variant.name.clone(),
                         clients: variant.clients,
@@ -387,10 +383,10 @@ impl SuiteConfig {
         Ok(selected)
     }
 
-    pub fn slate_settings(&self, profile: &ProfileConfig) -> Result<Settings> {
+    pub fn slate_settings(&self, suite: &SuiteConfig) -> Result<Settings> {
         let path = self
             .config_dir
-            .join(format!("{}.settings.toml", profile.name));
+            .join(format!("{}.settings.toml", suite.name));
         Settings::from_file(&path)
             .with_context(|| format!("loading SlateDB settings file {}", path.display()))
     }
@@ -400,46 +396,44 @@ impl VariantConfig {
     pub fn record_count(&self) -> u64 {
         self.workload
             .record_count
-            .unwrap_or(self.profile.record_count)
+            .unwrap_or(self.suite.record_count)
     }
 
     pub fn key_bytes(&self) -> usize {
-        self.workload.key_bytes.unwrap_or(self.profile.key_bytes)
+        self.workload.key_bytes.unwrap_or(self.suite.key_bytes)
     }
 
     pub fn value_bytes(&self) -> usize {
-        self.workload
-            .value_bytes
-            .unwrap_or(self.profile.value_bytes)
+        self.workload.value_bytes.unwrap_or(self.suite.value_bytes)
     }
 
     pub fn warmup_ms(&self) -> u64 {
-        self.workload.warmup_ms.unwrap_or(self.profile.warmup_ms)
+        self.workload.warmup_ms.unwrap_or(self.suite.warmup_ms)
     }
 
     pub fn measurement_ms(&self) -> u64 {
         self.workload
             .measurement_ms
-            .unwrap_or(self.profile.measurement_ms)
+            .unwrap_or(self.suite.measurement_ms)
     }
 }
 
-fn load_profile(profile_path: &Path) -> Result<ProfileConfig> {
-    let file_name = profile_path
+fn load_suite(suite_path: &Path) -> Result<SuiteConfig> {
+    let file_name = suite_path
         .file_name()
         .and_then(|name| name.to_str())
-        .context("profile file name is not valid UTF-8")?;
+        .context("suite file name is not valid UTF-8")?;
     let name = file_name
-        .strip_suffix(".profile.toml")
+        .strip_suffix(".suite.toml")
         .filter(|name| !name.is_empty())
-        .with_context(|| format!("invalid profile file name {}", profile_path.display()))?
+        .with_context(|| format!("invalid suite file name {}", suite_path.display()))?
         .to_string();
-    let file: ProfileFile = read_toml(profile_path)?;
+    let file: SuiteFile = read_toml(suite_path)?;
     if file.schema_version != 1 {
         bail!(
             "unsupported configuration schema {} in {}",
             file.schema_version,
-            profile_path.display()
+            suite_path.display()
         );
     }
 
@@ -460,25 +454,21 @@ fn load_profile(profile_path: &Path) -> Result<ProfileConfig> {
                     .warmup
                     .as_deref()
                     .map(|value| {
-                        parse_duration_ms(value, profile_path, &format!("{field_prefix}.warmup"))
+                        parse_duration_ms(value, suite_path, &format!("{field_prefix}.warmup"))
                     })
                     .transpose()?,
                 measurement_ms: workload
                     .measurement
                     .as_deref()
                     .map(|value| {
-                        parse_duration_ms(
-                            value,
-                            profile_path,
-                            &format!("{field_prefix}.measurement"),
-                        )
+                        parse_duration_ms(value, suite_path, &format!("{field_prefix}.measurement"))
                     })
                     .transpose()?,
             })
         })
         .collect::<Result<Vec<_>>>()?;
 
-    Ok(ProfileConfig {
+    Ok(SuiteConfig {
         name,
         release: file.release,
         execution: file.execution,
@@ -489,23 +479,23 @@ fn load_profile(profile_path: &Path) -> Result<ProfileConfig> {
             throughput_concurrency: file.object_store_probe.throughput_concurrency,
             throughput_warmup_ms: parse_duration_ms(
                 &file.object_store_probe.throughput_warmup,
-                profile_path,
+                suite_path,
                 "object_store_probe.throughput_warmup",
             )?,
             throughput_measurement_ms: parse_duration_ms(
                 &file.object_store_probe.throughput_measurement,
-                profile_path,
+                suite_path,
                 "object_store_probe.throughput_measurement",
             )?,
         },
         compaction_quiet_ms: parse_duration_ms(
             &file.compaction_quiet,
-            profile_path,
+            suite_path,
             "compaction_quiet",
         )?,
         compaction_timeout_ms: parse_duration_ms(
             &file.compaction_timeout,
-            profile_path,
+            suite_path,
             "compaction_timeout",
         )?,
         record_count: file.record_count,
@@ -513,8 +503,8 @@ fn load_profile(profile_path: &Path) -> Result<ProfileConfig> {
         value_bytes: file.value_bytes,
         block_cache_bytes: file.block_cache_bytes,
         metadata_cache_bytes: file.metadata_cache_bytes,
-        warmup_ms: parse_duration_ms(&file.warmup, profile_path, "warmup")?,
-        measurement_ms: parse_duration_ms(&file.measurement, profile_path, "measurement")?,
+        warmup_ms: parse_duration_ms(&file.warmup, suite_path, "warmup")?,
+        measurement_ms: parse_duration_ms(&file.measurement, suite_path, "measurement")?,
         sst_block_bytes: file.sst_block_bytes,
         workloads,
     })
@@ -537,8 +527,8 @@ fn parse_duration_ms(value: &str, path: &Path, field: &str) -> Result<u64> {
         .with_context(|| format!("{field} in {} is too large", path.display()))
 }
 
-fn validate_probe(profile: &ProfileConfig) -> Result<()> {
-    let probe = &profile.object_store_probe;
+fn validate_probe(suite: &SuiteConfig) -> Result<()> {
+    let probe = &suite.object_store_probe;
     if probe.latency_operations == 0
         || probe.latency_object_bytes == 0
         || probe.throughput_object_bytes == 0
@@ -546,23 +536,23 @@ fn validate_probe(profile: &ProfileConfig) -> Result<()> {
         || probe.throughput_measurement_ms == 0
     {
         bail!(
-            "object-store probe settings for profile {} must be positive",
-            profile.name
+            "object-store probe settings for suite {} must be positive",
+            suite.name
         );
     }
     Ok(())
 }
 
-fn validate_sequential_profile(profile: &ProfileConfig) -> Result<()> {
-    let bulk_loads = profile
+fn validate_sequential_suite(suite: &SuiteConfig) -> Result<()> {
+    let bulk_loads = suite
         .workloads
         .iter()
         .filter(|workload| workload.kind == WorkloadKind::BulkLoad)
         .count();
-    if bulk_loads != 1 || profile.workloads[0].kind != WorkloadKind::BulkLoad {
+    if bulk_loads != 1 || suite.workloads[0].kind != WorkloadKind::BulkLoad {
         bail!(
-            "sequential profile {} must begin with exactly one bulk-load workload",
-            profile.name
+            "sequential suite {} must begin with exactly one bulk-load workload",
+            suite.name
         );
     }
     Ok(())
@@ -570,7 +560,7 @@ fn validate_sequential_profile(profile: &ProfileConfig) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::SuiteConfig;
+    use super::BenchmarkConfig;
     use slatedb::config::CompressionCodec;
     use std::collections::BTreeMap;
     use std::path::Path;
@@ -578,33 +568,31 @@ mod tests {
 
     #[test]
     fn release_catalog_contains_every_documented_variant() {
-        let suite = SuiteConfig::load_from(Path::new("../config")).expect("config");
-        assert_eq!(suite.catalog(None).expect("catalog").len(), 42);
+        let benchmark = BenchmarkConfig::load_from(Path::new("../config")).expect("config");
+        assert_eq!(benchmark.catalog(None).expect("catalog").len(), 42);
     }
 
     #[test]
-    fn smoke_is_a_small_non_release_profile() {
-        let suite = SuiteConfig::load_from(Path::new("../config")).expect("config");
-        let release = suite.catalog(None).expect("release catalog");
-        let smoke = suite.catalog(Some("smoke")).expect("smoke catalog");
+    fn smoke_is_a_small_non_release_suite() {
+        let benchmark = BenchmarkConfig::load_from(Path::new("../config")).expect("config");
+        let release = benchmark.catalog(None).expect("release catalog");
+        let smoke = benchmark.catalog(Some("smoke")).expect("smoke catalog");
         assert!(smoke.len() < release.len());
-        assert!(smoke.iter().all(|entry| entry.profile == "smoke"));
-        assert!(release.iter().all(|entry| entry.profile != "smoke"));
+        assert!(smoke.iter().all(|entry| entry.suite == "smoke"));
+        assert!(release.iter().all(|entry| entry.suite != "smoke"));
     }
 
     #[test]
-    fn catalog_has_the_documented_profile_workload_variant_counts() {
-        let suite = SuiteConfig::load_from(Path::new("../config")).expect("config");
-        let mut profiles = BTreeMap::new();
+    fn catalog_has_the_documented_suite_workload_variant_counts() {
+        let benchmark = BenchmarkConfig::load_from(Path::new("../config")).expect("config");
+        let mut suites = BTreeMap::new();
         let mut workloads = BTreeMap::new();
-        for entry in suite.catalog(None).expect("catalog") {
-            *profiles.entry(entry.profile.clone()).or_insert(0) += 1;
-            *workloads
-                .entry((entry.profile, entry.workload))
-                .or_insert(0) += 1;
+        for entry in benchmark.catalog(None).expect("catalog") {
+            *suites.entry(entry.suite.clone()).or_insert(0) += 1;
+            *workloads.entry((entry.suite, entry.workload)).or_insert(0) += 1;
         }
         assert_eq!(
-            profiles,
+            suites,
             BTreeMap::from([
                 ("rocksdb".to_string(), 9),
                 ("slatedb".to_string(), 15),
@@ -616,8 +604,8 @@ mod tests {
 
     #[test]
     fn variants_are_explicit_configuration() {
-        let suite = SuiteConfig::load_from(Path::new("../config")).expect("config");
-        let variant = suite
+        let benchmark = BenchmarkConfig::load_from(Path::new("../config")).expect("config");
+        let variant = benchmark
             .select(Some("rocksdb"), Some("read-while-writing"), None)
             .expect("variant")
             .pop()
@@ -629,14 +617,14 @@ mod tests {
 
     #[test]
     fn rocksdb_workloads_follow_declaration_order() {
-        let suite = SuiteConfig::load_from(Path::new("../config")).expect("config");
-        let profile = suite
-            .profiles
+        let benchmark = BenchmarkConfig::load_from(Path::new("../config")).expect("config");
+        let suite = benchmark
+            .suites
             .iter()
-            .find(|profile| profile.name == "rocksdb")
-            .expect("rocksdb profile");
+            .find(|suite| suite.name == "rocksdb")
+            .expect("rocksdb suite");
         assert_eq!(
-            profile
+            suite
                 .workloads
                 .iter()
                 .map(|workload| workload.name.as_str())
@@ -656,24 +644,24 @@ mod tests {
     }
 
     #[test]
-    fn profile_settings_overlay_slatedb_defaults() {
-        let suite = SuiteConfig::load_from(Path::new("../config")).expect("config");
-        let profile = suite
-            .profiles
+    fn suite_settings_overlay_slatedb_defaults() {
+        let benchmark = BenchmarkConfig::load_from(Path::new("../config")).expect("config");
+        let suite = benchmark
+            .suites
             .iter()
-            .find(|profile| profile.name == "rocksdb")
-            .expect("rocksdb profile");
+            .find(|suite| suite.name == "rocksdb")
+            .expect("rocksdb suite");
 
-        let profile_settings = suite.slate_settings(profile).expect("profile settings");
+        let suite_settings = benchmark.slate_settings(suite).expect("suite settings");
         assert_eq!(
-            profile_settings.flush_interval,
+            suite_settings.flush_interval,
             Some(Duration::from_millis(100))
         );
         assert_eq!(
-            profile_settings.compression_codec,
+            suite_settings.compression_codec,
             Some(CompressionCodec::Zstd)
         );
-        assert!(profile_settings.wal_enabled);
-        assert!(profile_settings.compactor_options.is_some());
+        assert!(suite_settings.wal_enabled);
+        assert!(suite_settings.compactor_options.is_some());
     }
 }

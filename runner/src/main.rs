@@ -25,10 +25,11 @@ async fn main() -> Result<()> {
             Ok(())
         }
         Command::Catalog(args) => {
-            let suite = slatedb_benchmark::config::SuiteConfig::load_from(&args.config_dir)?;
+            let benchmark =
+                slatedb_benchmark::config::BenchmarkConfig::load_from(&args.config_dir)?;
             println!(
                 "{}",
-                serde_json::to_string_pretty(&suite.catalog(args.profile.as_deref())?)?
+                serde_json::to_string_pretty(&benchmark.catalog(args.suite.as_deref())?)?
             );
             Ok(())
         }

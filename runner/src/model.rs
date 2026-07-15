@@ -43,7 +43,7 @@ pub struct Identity {
     pub runner_commit: String,
     pub lockfile_sha256: String,
     pub timestamp: String,
-    pub profile: String,
+    pub suite: String,
     pub workload: String,
     pub variant: String,
     pub mode: String,

@@ -11,7 +11,7 @@ export type BenchmarkResult = {
     runner_version: string;
     runner_commit: string;
     timestamp: string;
-    profile: string;
+    suite: string;
     workload: string;
     variant: string;
     mode: string;
@@ -91,7 +91,7 @@ export type BenchmarkTimeseries = {
 
 export type ResultRoute = {
   version: string;
-  profile: string;
+  suite: string;
   workload: string;
   variant: string;
   result: BenchmarkResult;
@@ -131,7 +131,7 @@ export async function loadResults(): Promise<ResultRoute[]> {
       ) as BenchmarkTimeseries;
       return {
         version: result.identity.slate_version,
-        profile: result.identity.profile,
+        suite: result.identity.suite,
         workload: result.identity.workload,
         variant: result.identity.variant,
         result,
@@ -162,14 +162,14 @@ export function latestStable(routes: ResultRoute[]): ResultRoute | undefined {
   return stable || routes[0];
 }
 
-export function routeHref(route: Pick<ResultRoute, 'version' | 'profile' | 'workload' | 'variant'>) {
-  return `/${route.version}/${route.profile}/${route.workload}/${route.variant}/`;
+export function routeHref(route: Pick<ResultRoute, 'version' | 'suite' | 'workload' | 'variant'>) {
+  return `/${route.version}/${route.suite}/${route.workload}/${route.variant}/`;
 }
 
 function compareRoutes(left: ResultRoute, right: ResultRoute) {
   return (
     compareVersion(right.version, left.version) ||
-    left.profile.localeCompare(right.profile) ||
+    left.suite.localeCompare(right.suite) ||
     left.workload.localeCompare(right.workload) ||
     left.variant.localeCompare(right.variant, undefined, { numeric: true })
   );

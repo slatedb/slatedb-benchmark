@@ -50,14 +50,14 @@ jobs:
 
   benchmark:
     needs: build-runner
-    name: Benchmark ${{ matrix.profile }}
+    name: Benchmark ${{ matrix.suite }}
     runs-on: warp-ubuntu-latest-x64-16x
     environment: benchmark
     strategy:
       fail-fast: false
       max-parallel: 1
       matrix:
-        profile: [rocksdb, ycsb, slatedb]
+        suite: [rocksdb, ycsb, slatedb]
     env:
       CLOUD_PROVIDER: aws
       AWS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
@@ -65,7 +65,7 @@ jobs:
       AWS_REGION: auto
       AWS_ENDPOINT_URL_S3: https://fly.storage.tigris.dev
       SLATEDB_BENCH_BUCKET: ${{ secrets.TIGRIS_BUCKET }}
-      SLATEDB_BENCH_PREFIX: release/${{ inputs.slate_version }}/${{ matrix.profile }}
+      SLATEDB_BENCH_PREFIX: release/${{ inputs.slate_version }}/${{ matrix.suite }}
       SLATEDB_BENCH_REGION: fra
       SLATEDB_BENCH_RUNNER_TYPE: warp-ubuntu-latest-x64-16x
     steps:
@@ -77,19 +77,19 @@ jobs:
           path: bin
       - name: Prepare runner binary
         run: chmod +x bin/slatedb-benchmark
-      - name: Run ${{ matrix.profile }} profile
+      - name: Run ${{ matrix.suite }} suite
         run: |
           bin/slatedb-benchmark run \
-            --profile "${{ matrix.profile }}" \
-            --output ".runs/${{ matrix.profile }}"
-      - name: Validate ${{ matrix.profile }} output
-        run: bin/slatedb-benchmark validate --output ".runs/${{ matrix.profile }}"
-      - name: Preserve profile artifacts
+            --suite "${{ matrix.suite }}" \
+            --output ".runs/${{ matrix.suite }}"
+      - name: Validate ${{ matrix.suite }} output
+        run: bin/slatedb-benchmark validate --output ".runs/${{ matrix.suite }}"
+      - name: Preserve suite artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: benchmark-${{ inputs.slate_version }}-${{ matrix.profile }}
-          path: .runs/${{ matrix.profile }}
+          name: benchmark-${{ inputs.slate_version }}-${{ matrix.suite }}
+          path: .runs/${{ matrix.suite }}
           if-no-files-found: ignore
           overwrite: true
       - name: Check out current main for publication
@@ -103,10 +103,10 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: publish/site/package-lock.json
-      - name: Publish ${{ matrix.profile }} results
+      - name: Publish ${{ matrix.suite }} results
         run: |
           ./scripts/publish-results.sh \
-            ".runs/${{ matrix.profile }}" \
+            ".runs/${{ matrix.suite }}" \
             "${{ inputs.slate_version }}" \
-            "${{ matrix.profile }}" \
+            "${{ matrix.suite }}" \
             publish
