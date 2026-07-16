@@ -125,20 +125,33 @@ impl KeySelector {
         }
     }
 
-    pub fn sample(&self, rng: &mut impl Rng) -> u64 {
-        self.sample_with_record_count(self.record_count, rng)
+    pub fn ycsb_insert_aware(initial_record_count: u64) -> Self {
+        Self::zipfian(initial_record_count.saturating_mul(2))
     }
 
-    pub fn sample_with_record_count(&self, record_count: u64, rng: &mut impl Rng) -> u64 {
-        if record_count == 0 {
+    pub fn sample(&self, rng: &mut impl Rng) -> u64 {
+        if self.record_count == 0 {
             return 0;
         }
         match &self.zipf {
             Some(zipf) => {
                 let rank = (zipf.sample(rng) as u64).saturating_sub(1);
-                ycsb_scramble(rank) % record_count
+                ycsb_scramble(rank) % self.record_count
             }
-            None => rng.random_range(0..record_count),
+            None => rng.random_range(0..self.record_count),
+        }
+    }
+
+    pub fn sample_existing(&self, acknowledged_record_count: u64, rng: &mut impl Rng) -> u64 {
+        let acknowledged_record_count = acknowledged_record_count.min(self.record_count);
+        if acknowledged_record_count == 0 {
+            return 0;
+        }
+        loop {
+            let id = self.sample(rng);
+            if id < acknowledged_record_count {
+                return id;
+            }
         }
     }
 }
@@ -293,15 +306,20 @@ mod tests {
     }
 
     #[test]
-    fn scrambled_zipfian_domain_expands_with_inserted_keys() {
+    fn insert_aware_zipfian_rejects_unacknowledged_keys_from_a_fixed_domain() {
         let mut rng = rand::rngs::StdRng::seed_from_u64(23);
-        let selector = KeySelector::zipfian(100);
-        let samples = (0..10_000)
-            .map(|_| selector.sample_with_record_count(200, &mut rng))
+        let selector = KeySelector::ycsb_insert_aware(100);
+        let initial_samples = (0..10_000)
+            .map(|_| selector.sample_existing(100, &mut rng))
+            .collect::<Vec<_>>();
+        let expanded_samples = (0..10_000)
+            .map(|_| selector.sample_existing(200, &mut rng))
             .collect::<Vec<_>>();
 
-        assert!(samples.iter().all(|sample| *sample < 200));
-        assert!(samples.iter().any(|sample| *sample >= 100));
+        assert_eq!(selector.record_count, 200);
+        assert!(initial_samples.iter().all(|sample| *sample < 100));
+        assert!(expanded_samples.iter().all(|sample| *sample < 200));
+        assert!(expanded_samples.iter().any(|sample| *sample >= 100));
     }
 
     #[test]

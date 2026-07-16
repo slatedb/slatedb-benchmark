@@ -113,6 +113,9 @@ async fn worker_loop(
     let mut rng = StdRng::from_os_rng();
     let selector = match variant.workload.kind.key_distribution() {
         KeyDistribution::Uniform => KeySelector::uniform(variant.record_count()),
+        KeyDistribution::Zipfian if variant.workload.kind == WorkloadKind::YcsbE => {
+            KeySelector::ycsb_insert_aware(variant.record_count())
+        }
         KeyDistribution::Zipfian => KeySelector::zipfian(variant.record_count()),
     };
     let mut latest_selector = (variant.workload.kind == WorkloadKind::YcsbD)
@@ -257,7 +260,7 @@ async fn execute_operation(
                 scan(
                     db,
                     variant,
-                    selector.sample_with_record_count(state.acknowledged_insert(), rng),
+                    selector.sample_existing(state.acknowledged_insert(), rng),
                     length,
                     false,
                     "scan",
