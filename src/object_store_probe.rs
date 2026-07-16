@@ -192,6 +192,15 @@ async fn run_probe(
         upload_mib_per_second: throughput_mib(upload_bytes, upload_elapsed),
         download_mib_per_second: throughput_mib(download_bytes, download_elapsed),
     };
+    tracing::info!(
+        put_p50_ms = baseline.put_latency.p50_ns as f64 / 1_000_000.0,
+        put_p99_ms = baseline.put_latency.p99_ns as f64 / 1_000_000.0,
+        get_p50_ms = baseline.get_latency.p50_ns as f64 / 1_000_000.0,
+        get_p99_ms = baseline.get_latency.p99_ns as f64 / 1_000_000.0,
+        upload_mib_per_second = baseline.upload_mib_per_second,
+        download_mib_per_second = baseline.download_mib_per_second,
+        "object-store probe network performance"
+    );
     let histograms = BTreeMap::from([
         ("object_store/put".to_string(), put_latency.encode()?),
         ("object_store/get".to_string(), get_latency.encode()?),
