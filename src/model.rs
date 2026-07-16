@@ -73,8 +73,7 @@ pub struct ObjectStoreBaseline {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BenchmarkConfiguration {
-    pub clients: Option<usize>,
-    pub target_rate: Option<u64>,
+    pub clients: usize,
     pub warmup_ns: u64,
     pub measurement_ns: u64,
     pub record_count: u64,
@@ -95,16 +94,11 @@ pub struct ApplicationPerformance {
     pub successful_operations: u64,
     pub accepted_ops_per_second: f64,
     pub completed_ops_per_second: f64,
-    pub offered_ops_per_second: Option<f64>,
-    pub dropped_operations: Option<u64>,
-    pub dropped_ops_per_second: Option<f64>,
     pub payload_mib_per_second: f64,
     pub errors: u64,
     pub return_latency: LatencySummary,
     pub return_latency_by_operation: BTreeMap<String, LatencySummary>,
     pub api_latency: BTreeMap<String, LatencySummary>,
-    pub response_latency: Option<LatencySummary>,
-    pub scheduling_delay: Option<LatencySummary>,
     pub batch_latency: Option<LatencySummary>,
     pub key_throughput_per_second: Option<f64>,
     pub transaction_commits: Option<u64>,
@@ -245,13 +239,9 @@ pub struct ApplicationWindow {
     pub read_payload_bytes: u64,
     pub write_payload_bytes: u64,
     pub payload_bytes: u64,
-    pub offered_operations: Option<u64>,
-    pub dropped_operations: Option<u64>,
     pub return_latency: Option<LatencySummary>,
     pub return_latency_by_operation: BTreeMap<String, LatencySummary>,
     pub api_latency: BTreeMap<String, LatencySummary>,
-    pub response_latency: Option<LatencySummary>,
-    pub scheduling_delay: Option<LatencySummary>,
     pub batch_latency: Option<LatencySummary>,
 }
 

@@ -38,8 +38,7 @@ correction to a published result.
 The runner discovers a suite from each `config/*.suite.toml`; the filename
 prefix is the suite name. Each suite declares its ordered `[[workloads]]`
 array, with nested `[[workloads.variants]]` records containing a display name
-and its load control. Closed-loop variants define `clients`; open-loop variants
-define `target_rate`. Bulk load requires exactly one client because its
+and its client count. Bulk load requires exactly one client because its
 record-count-driven loader is single-threaded. Behavior is never inferred from
 a variant name. The RocksDB suite uses declaration order to preserve its
 stateful benchmark sequence.
@@ -157,7 +156,7 @@ writer, and creates a named, non-expiring detached checkpoint of the final
 manifest.
 
 Each benchmark variant uses a new shallow clone from that checkpoint. A variant
-combines a workload with one configured concurrency or target rate. SlateDB
+combines a workload with one configured concurrency. SlateDB
 copies the manifest and references the golden database's immutable SSTs; it
 does not copy the dataset. Writes and compaction output belong to the clone.
 The runner checks the clone's initial manifest against the checkpoint before
@@ -222,29 +221,6 @@ its next operation after the prior operation returns. Their latency histograms
 measure return latency under fixed concurrency. A stall increases the latency
 of in-flight operations and reduces the number of operations the clients can
 start, so throughput must be read with the latency distribution.
-
-The two open-loop workloads use a monotonic fixed-rate scheduler. The scheduler
-creates arrivals at 1,000, 5,000, and 10,000 ops/s without waiting for earlier
-requests to finish. A bounded queue holds up to one second of target traffic;
-the runner counts arrivals that exceed the bound as dropped. Each shipped
-variant derives one worker per operation in that one-second arrival window from
-the target rate, so the harness can keep operations in flight without imposing
-a hidden 256-worker ceiling or requiring a separate concurrency setting. It
-records:
-
-- response latency from scheduled arrival to completion
-- return latency from SlateDB invocation to completion
-- scheduling delay, offered ops/s, accepted ops/s, completed ops/s, and the scheduler's dropped operation count and rate
-
-Open-loop results record the requested rate as `configuration.target_rate`;
-their `configuration.clients` field is `null`. Accepted operations are offered
-arrivals that entered the worker queue. Offered, accepted, and dropped rates use
-the scheduler's generation interval. Completed and payload rates use the full
-measurement interval, including the final worker drain. This keeps slow returns
-from being misreported as scheduler underproduction while preserving their
-effect on completed throughput. Validation requires the scheduler to offer at
-least 95% of the target rate. Queue drops and high scheduling delay indicate a
-saturated system and remain publishable benchmark results.
 
 ### Durability
 
@@ -369,8 +345,7 @@ them.
 ## Metrics and results
 
 The runner uses HDR histograms for return latency, SlateDB API latency,
-open-loop response latency, scheduling delay, durability lag, and direct
-object-store latency. Histograms use microsecond resolution and retain three
+durability lag, and direct object-store latency. Histograms use microsecond resolution and retain three
 significant digits. Each workload worker records into a private shard. The
 one-second sampler swaps those shards, merges their completed histograms, and
 emits application windows without a global per-operation lock. Those same
@@ -399,9 +374,8 @@ variants share a `scan()` histogram that includes iterator exhaustion. Setup,
 warmup, database open, and database close are excluded.
 For asynchronous writes, a separate durability series measures API return
 through durable-frontier coverage. Its windows may extend through the final
-flush and drain. Open-loop response latency and scheduling delay are retained
-as diagnostics but are not primary website charts. Sustained-ingest results also
-include the five-minute windows required by `BENCHMARKS.md`.
+flush and drain. Sustained-ingest results also include the five-minute windows
+required by `BENCHMARKS.md`.
 
 ### SlateDB metrics
 
@@ -442,7 +416,7 @@ results/<version>/<suite>/<workload>/<variant>/
   timeseries.json
 ```
 
-The `variant` path component names the configured concurrency or target rate.
+The `variant` path component names the configured concurrency.
 The repository publishes one result per variant. JSON stores durations in
 nanoseconds, sizes in bytes, and counts as integers; the website converts them for
 display. Fields that do not apply are present with `null`, as required by the

@@ -181,8 +181,6 @@ struct ApplicationWindowDelta {
     errors: u64,
     read_payload_bytes: u64,
     write_payload_bytes: u64,
-    offered_operations: u64,
-    dropped_operations: u64,
     histograms: HistogramSet,
 }
 
@@ -201,12 +199,6 @@ impl ApplicationWindowDelta {
         self.write_payload_bytes = self
             .write_payload_bytes
             .saturating_add(other.write_payload_bytes);
-        self.offered_operations = self
-            .offered_operations
-            .saturating_add(other.offered_operations);
-        self.dropped_operations = self
-            .dropped_operations
-            .saturating_add(other.dropped_operations);
         self.histograms.merge(&other.histograms)
     }
 
@@ -216,8 +208,6 @@ impl ApplicationWindowDelta {
         self.errors = 0;
         self.read_payload_bytes = 0;
         self.write_payload_bytes = 0;
-        self.offered_operations = 0;
-        self.dropped_operations = 0;
         self.histograms.reset();
     }
 }
@@ -327,43 +317,6 @@ impl ApplicationWindowRecorder {
         });
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub fn record_open_loop_completion(
-        &self,
-        operation: &str,
-        api: &str,
-        successful: bool,
-        return_latency: Duration,
-        api_latency: Duration,
-        response_latency: Duration,
-        scheduling_delay: Duration,
-        read_payload_bytes: u64,
-        write_payload_bytes: u64,
-    ) {
-        self.update(|window| {
-            window.completed_operations = window.completed_operations.saturating_add(1);
-            if successful {
-                window.successful_operations = window.successful_operations.saturating_add(1);
-                window.read_payload_bytes =
-                    window.read_payload_bytes.saturating_add(read_payload_bytes);
-                window.write_payload_bytes = window
-                    .write_payload_bytes
-                    .saturating_add(write_payload_bytes);
-            } else {
-                window.errors = window.errors.saturating_add(1);
-            }
-            window.histograms.record("return", return_latency);
-            window
-                .histograms
-                .record(format!("return/{operation}"), return_latency);
-            window.histograms.record(format!("api/{api}"), api_latency);
-            window.histograms.record("response", response_latency);
-            window
-                .histograms
-                .record("scheduling_delay", scheduling_delay);
-        });
-    }
-
     pub fn record_batch_latency(&self, latency: Duration) {
         self.update(|window| window.histograms.record("batch", latency));
     }
@@ -371,35 +324,26 @@ impl ApplicationWindowRecorder {
     pub fn record_api_latency(&self, api: &str, latency: Duration) {
         self.update(|window| window.histograms.record(format!("api/{api}"), latency));
     }
-
-    pub fn record_offered(&self, offered: u64, dropped: u64) {
-        self.update(|window| {
-            window.offered_operations = window.offered_operations.saturating_add(offered);
-            window.dropped_operations = window.dropped_operations.saturating_add(dropped);
-        });
-    }
 }
 
 #[derive(Debug)]
 pub struct ApplicationCounters {
     pub operations: AtomicU64,
     pub errors: AtomicU64,
-    open_loop: bool,
     window_shards: Mutex<Vec<Arc<Mutex<ApplicationWindowShard>>>>,
 }
 
 impl Default for ApplicationCounters {
     fn default() -> Self {
-        Self::new(false)
+        Self::new()
     }
 }
 
 impl ApplicationCounters {
-    pub fn new(open_loop: bool) -> Self {
+    pub fn new() -> Self {
         Self {
             operations: AtomicU64::new(0),
             errors: AtomicU64::new(0),
-            open_loop,
             window_shards: Mutex::new(Vec::new()),
         }
     }
@@ -466,13 +410,9 @@ impl ApplicationCounters {
             payload_bytes: merged
                 .read_payload_bytes
                 .saturating_add(merged.write_payload_bytes),
-            offered_operations: self.open_loop.then_some(merged.offered_operations),
-            dropped_operations: self.open_loop.then_some(merged.dropped_operations),
             return_latency: summary("return"),
             return_latency_by_operation: merged.histograms.summaries_with_prefix("return/"),
             api_latency: merged.histograms.summaries_with_prefix("api/"),
-            response_latency: summary("response"),
-            scheduling_delay: summary("scheduling_delay"),
             batch_latency: summary("batch"),
         };
         Ok((window, merged.histograms))
@@ -1018,13 +958,12 @@ mod tests {
 
     #[test]
     fn drains_application_measurements_into_one_window() {
-        let counters = ApplicationCounters::new(true);
+        let counters = ApplicationCounters::new();
         let worker = counters.register_window_recorder();
         worker.record_success("read-modify-write", Duration::from_millis(2), 1024, 256);
         worker.record_background_success("writer-update", Duration::from_secs(1), 0, 128);
         worker.record_error("read", Duration::from_millis(4));
         worker.record_api_latency("get", Duration::from_millis(3));
-        worker.record_offered(3, 1);
 
         let (window, histograms) = counters
             .drain_window(0, 1_000_000_000)
@@ -1036,11 +975,8 @@ mod tests {
         assert_eq!(window.read_payload_bytes, 1024);
         assert_eq!(window.write_payload_bytes, 384);
         assert_eq!(window.payload_bytes, 1408);
-        assert_eq!(window.offered_operations, Some(3));
-        assert_eq!(window.dropped_operations, Some(1));
         assert_eq!(window.return_latency.expect("return latency").count, 2);
         assert_eq!(window.return_latency_by_operation["writer-update"].count, 1);
-        assert!(window.response_latency.is_none());
         assert_eq!(window.api_latency["get"].count, 1);
         assert_eq!(histograms.get("return").expect("return histogram").len(), 2);
         assert_eq!(
@@ -1054,20 +990,10 @@ mod tests {
     }
 
     #[test]
-    fn records_open_loop_completion_and_resets_reusable_window_buffers() {
-        let counters = ApplicationCounters::new(true);
+    fn resets_reusable_window_buffers() {
+        let counters = ApplicationCounters::new();
         let worker = counters.register_window_recorder();
-        worker.record_open_loop_completion(
-            "read",
-            "get",
-            true,
-            Duration::from_millis(2),
-            Duration::from_millis(1),
-            Duration::from_millis(3),
-            Duration::from_micros(50),
-            1024,
-            0,
-        );
+        worker.record_success("read", Duration::from_millis(2), 1024, 0);
 
         let (first, first_histograms) = counters
             .drain_window(0, 1_000_000_000)
@@ -1077,15 +1003,6 @@ mod tests {
         assert_eq!(first.errors, 0);
         assert_eq!(first.read_payload_bytes, 1024);
         assert_eq!(first.return_latency.expect("return latency").count, 1);
-        assert_eq!(first.api_latency["get"].count, 1);
-        assert_eq!(first.response_latency.expect("response latency").count, 1);
-        assert_eq!(
-            first
-                .scheduling_delay
-                .expect("scheduling delay latency")
-                .count,
-            1
-        );
         assert_eq!(
             first_histograms
                 .get("return/read")
@@ -1094,17 +1011,7 @@ mod tests {
             1
         );
 
-        worker.record_open_loop_completion(
-            "read",
-            "get",
-            false,
-            Duration::from_millis(4),
-            Duration::from_millis(3),
-            Duration::from_millis(5),
-            Duration::from_micros(75),
-            0,
-            0,
-        );
+        worker.record_error("read", Duration::from_millis(4));
         let (second, _) = counters
             .drain_window(1_000_000_000, 1_000_000_000)
             .expect("drain second application window");

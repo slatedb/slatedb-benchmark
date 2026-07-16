@@ -165,62 +165,6 @@ export function buildCharts(
     ],
   };
 
-  const openLoopRows = application.flatMap((window) => {
-    if (window.offered_operations === null || window.dropped_operations === null) return [];
-    const duration = seconds(window);
-    return [{
-      x: atEnd(window),
-      offered: window.offered_operations / duration,
-      accepted: Math.max(0, window.offered_operations - window.dropped_operations) / duration,
-      completed: window.completed_operations / duration,
-      dropped: window.dropped_operations / duration,
-    }];
-  });
-  const openLoopLoadChart: ChartDefinition | null = openLoopRows.length > 0 ? {
-    key: 'open-loop-load',
-    title: 'Open-loop load',
-    description: 'Offered arrivals and the rates accepted, completed, or dropped under load',
-    unit: 'Operations / second',
-    digits: 0,
-    datasets: [
-      {
-        label: 'Offered',
-        color: '#1f2a37',
-        width: 2.2,
-        points: openLoopRows.map(({ x, offered }) => ({ x, y: offered })),
-      },
-      {
-        label: 'Accepted',
-        color: '#3f6f8f',
-        points: openLoopRows.map(({ x, accepted }) => ({ x, y: accepted })),
-      },
-      {
-        label: 'Completed',
-        color: '#47745f',
-        dash: [7, 5],
-        points: openLoopRows.map(({ x, completed }) => ({ x, y: completed })),
-      },
-      {
-        label: 'Dropped',
-        color: '#b26844',
-        dash: [2, 4],
-        points: openLoopRows.map(({ x, dropped }) => ({ x, y: dropped })),
-      },
-    ],
-  } : null;
-  const schedulingDelayRows = application.flatMap((window) => {
-    const latency = window.scheduling_delay;
-    return latency ? [{ x: atEnd(window), latency }] : [];
-  });
-  const schedulingDelayChart: ChartDefinition | null = schedulingDelayRows.length > 0 ? {
-    key: 'scheduling-delay',
-    title: 'Scheduling delay',
-    description: 'Scheduled arrival to the start of the SlateDB operation',
-    unit: 'Milliseconds',
-    digits: 3,
-    datasets: latencyDatasets(schedulingDelayRows),
-  } : null;
-
   const apiLabel = (api: string) => `${api}()`;
   const apiChartLabel = (api: string) => `${api.replace(/^transaction\./, '')}()`;
   const apiDescription = (api: string) => {
@@ -273,8 +217,6 @@ export function buildCharts(
 
   return [
     throughputChart,
-    openLoopLoadChart,
-    schedulingDelayChart,
     ...apiCharts,
     durabilityChart,
   ]

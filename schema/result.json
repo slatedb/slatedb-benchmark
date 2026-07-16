@@ -61,9 +61,9 @@
     },
     "configuration": {
       "type": "object", "additionalProperties": false,
-      "required": ["clients", "target_rate", "warmup_ns", "measurement_ns", "record_count", "key_bytes", "value_bytes", "block_cache_bytes", "metadata_cache_bytes", "object_store_cache_bytes", "sst_block_bytes", "slate_settings", "build_profile", "enabled_features"],
+      "required": ["clients", "warmup_ns", "measurement_ns", "record_count", "key_bytes", "value_bytes", "block_cache_bytes", "metadata_cache_bytes", "object_store_cache_bytes", "sst_block_bytes", "slate_settings", "build_profile", "enabled_features"],
       "properties": {
-        "clients": { "$ref": "#/$defs/nullableInteger" }, "target_rate": { "$ref": "#/$defs/nullableInteger" },
+        "clients": { "type": "integer", "minimum": 1 },
         "warmup_ns": { "type": "integer", "minimum": 0 }, "measurement_ns": { "type": "integer", "minimum": 0 },
         "record_count": { "type": "integer", "minimum": 0 }, "key_bytes": { "type": "integer", "minimum": 1 }, "value_bytes": { "type": "integer", "minimum": 1 },
         "block_cache_bytes": { "$ref": "#/$defs/nullableInteger" }, "metadata_cache_bytes": { "$ref": "#/$defs/nullableInteger" },
@@ -74,17 +74,14 @@
     },
     "application": {
       "type": "object", "additionalProperties": false,
-      "required": ["total_operations", "successful_operations", "accepted_ops_per_second", "completed_ops_per_second", "offered_ops_per_second", "dropped_operations", "dropped_ops_per_second", "payload_mib_per_second", "errors", "return_latency", "return_latency_by_operation", "api_latency", "response_latency", "scheduling_delay", "batch_latency", "key_throughput_per_second", "transaction_commits", "transaction_aborts", "transaction_conflicts", "transaction_commit_rate", "transaction_abort_rate", "transaction_conflict_rate"],
+      "required": ["total_operations", "successful_operations", "accepted_ops_per_second", "completed_ops_per_second", "payload_mib_per_second", "errors", "return_latency", "return_latency_by_operation", "api_latency", "batch_latency", "key_throughput_per_second", "transaction_commits", "transaction_aborts", "transaction_conflicts", "transaction_commit_rate", "transaction_abort_rate", "transaction_conflict_rate"],
       "properties": {
         "total_operations": { "type": "integer", "minimum": 0 }, "successful_operations": { "type": "integer", "minimum": 0 },
         "accepted_ops_per_second": { "type": "number", "minimum": 0 }, "completed_ops_per_second": { "type": "number", "minimum": 0 },
-        "offered_ops_per_second": { "$ref": "#/$defs/nullableNumber" }, "dropped_operations": { "$ref": "#/$defs/nullableInteger" }, "dropped_ops_per_second": { "$ref": "#/$defs/nullableNumber" },
         "payload_mib_per_second": { "type": "number", "minimum": 0 }, "errors": { "type": "integer", "minimum": 0 },
         "return_latency": { "$ref": "#/$defs/latency" },
         "return_latency_by_operation": { "type": "object", "additionalProperties": { "$ref": "#/$defs/latency" } },
         "api_latency": { "type": "object", "additionalProperties": { "$ref": "#/$defs/latency" } },
-        "response_latency": { "anyOf": [{ "$ref": "#/$defs/latency" }, { "type": "null" }] },
-        "scheduling_delay": { "anyOf": [{ "$ref": "#/$defs/latency" }, { "type": "null" }] },
         "batch_latency": { "anyOf": [{ "$ref": "#/$defs/latency" }, { "type": "null" }] },
         "key_throughput_per_second": { "$ref": "#/$defs/nullableNumber" },
         "transaction_commits": { "$ref": "#/$defs/nullableInteger" }, "transaction_aborts": { "$ref": "#/$defs/nullableInteger" },

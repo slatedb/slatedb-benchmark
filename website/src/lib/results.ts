@@ -23,8 +23,7 @@ export type BenchmarkResult = {
     get_latency: Latency;
   };
   configuration: Record<string, unknown> & {
-    clients: number | null;
-    target_rate: number | null;
+    clients: number;
     warmup_ns: number;
     measurement_ns: number;
     record_count: number;
@@ -42,16 +41,11 @@ export type BenchmarkResult = {
     successful_operations: number;
     accepted_ops_per_second: number;
     completed_ops_per_second: number;
-    offered_ops_per_second: number | null;
-    dropped_operations: number | null;
-    dropped_ops_per_second: number | null;
     payload_mib_per_second: number;
     errors: number;
     return_latency: Latency;
     return_latency_by_operation: Record<string, Latency>;
     api_latency: Record<string, Latency>;
-    response_latency: Latency | null;
-    scheduling_delay: Latency | null;
   };
   durability: Record<string, unknown> & {
     lag: Latency | null;
@@ -113,13 +107,9 @@ export type ApplicationWindow = {
   read_payload_bytes: number;
   write_payload_bytes: number;
   payload_bytes: number;
-  offered_operations: number | null;
-  dropped_operations: number | null;
   return_latency: Latency | null;
   return_latency_by_operation: Record<string, Latency>;
   api_latency: Record<string, Latency>;
-  response_latency: Latency | null;
-  scheduling_delay: Latency | null;
   batch_latency: Latency | null;
 };
 

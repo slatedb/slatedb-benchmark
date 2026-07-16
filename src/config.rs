@@ -76,10 +76,7 @@ pub struct WorkloadConfig {
 #[serde(deny_unknown_fields)]
 pub struct VariantDefinition {
     pub name: String,
-    #[serde(default)]
-    pub clients: Option<usize>,
-    #[serde(default)]
-    pub target_rate: Option<u64>,
+    pub clients: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -104,8 +101,6 @@ pub enum WorkloadKind {
     SustainedIngest,
     TransactionContention,
     PrefixScan,
-    OpenLoopRead,
-    OpenLoopReadUpdate,
 }
 
 #[derive(Debug, Deserialize)]
@@ -172,8 +167,7 @@ pub struct VariantConfig {
     pub suite: SuiteConfig,
     pub workload: WorkloadConfig,
     pub variant: String,
-    pub clients: Option<usize>,
-    pub target_rate: Option<u64>,
+    pub clients: usize,
     pub slate_settings: Settings,
 }
 
@@ -271,37 +265,17 @@ impl BenchmarkConfig {
                 }
                 for variant in &workload.variants {
                     validate_identity_component(&variant.name, "variant")?;
-                    if variant.clients == Some(0) || variant.target_rate == Some(0) {
+                    if variant.clients == 0 {
                         bail!(
-                            "variant {}/{}/{} has zero concurrency or target rate",
+                            "variant {}/{}/{} has zero clients",
                             suite.name,
                             workload.name,
                             variant.name
                         );
                     }
-                    let open_loop = matches!(
-                        workload.kind,
-                        WorkloadKind::OpenLoopRead | WorkloadKind::OpenLoopReadUpdate
-                    );
-                    if workload.kind == WorkloadKind::BulkLoad && variant.clients != Some(1) {
+                    if workload.kind == WorkloadKind::BulkLoad && variant.clients != 1 {
                         bail!(
                             "bulk-load variant {}/{}/{} must define exactly one client",
-                            suite.name,
-                            workload.name,
-                            variant.name
-                        );
-                    } else if open_loop {
-                        if variant.clients.is_some() || variant.target_rate.is_none() {
-                            bail!(
-                                "open-loop variant {}/{}/{} must define only target_rate",
-                                suite.name,
-                                workload.name,
-                                variant.name
-                            );
-                        }
-                    } else if variant.clients.is_none() || variant.target_rate.is_some() {
-                        bail!(
-                            "closed-loop variant {}/{}/{} must define only clients",
                             suite.name,
                             workload.name,
                             variant.name
@@ -372,7 +346,6 @@ impl BenchmarkConfig {
                         workload: workload.clone(),
                         variant: variant.name.clone(),
                         clients: variant.clients,
-                        target_rate: variant.target_rate,
                         slate_settings: slate_settings.clone(),
                     });
                 }
@@ -590,7 +563,7 @@ mod tests {
     #[test]
     fn release_catalog_contains_every_documented_variant() {
         let benchmark = BenchmarkConfig::load_from(Path::new("config")).expect("config");
-        assert_eq!(benchmark.catalog(None).expect("catalog").len(), 42);
+        assert_eq!(benchmark.catalog(None).expect("catalog").len(), 36);
     }
 
     #[test]
@@ -616,11 +589,11 @@ mod tests {
             suites,
             BTreeMap::from([
                 ("rocksdb".to_string(), 9),
-                ("slatedb".to_string(), 15),
+                ("slatedb".to_string(), 9),
                 ("ycsb".to_string(), 18),
             ])
         );
-        assert_eq!(workloads.len(), 21);
+        assert_eq!(workloads.len(), 19);
     }
 
     #[test]
@@ -632,21 +605,7 @@ mod tests {
             .pop()
             .expect("configured variant");
         assert_eq!(variant.variant, "readers-64-writer-1");
-        assert_eq!(variant.clients, Some(64));
-        assert_eq!(variant.target_rate, None);
-    }
-
-    #[test]
-    fn open_loop_variants_configure_only_target_rate() {
-        let benchmark = BenchmarkConfig::load_from(Path::new("config")).expect("config");
-        let variant = benchmark
-            .select(Some("slatedb"), Some("open-loop-read"), Some("rate-10000"))
-            .expect("variant")
-            .pop()
-            .expect("configured variant");
-
-        assert_eq!(variant.clients, None);
-        assert_eq!(variant.target_rate, Some(10_000));
+        assert_eq!(variant.clients, 64);
     }
 
     #[test]
@@ -685,7 +644,7 @@ mod tests {
             .iter_mut()
             .find(|suite| suite.name == "rocksdb")
             .expect("rocksdb suite");
-        suite.workloads[0].variants[0].clients = Some(64);
+        suite.workloads[0].variants[0].clients = 64;
 
         let error = benchmark
             .validate()

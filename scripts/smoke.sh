@@ -15,7 +15,7 @@ trap cleanup EXIT
 
 rm -rf .runs/docker-smoke
 docker compose build runner
-workloads=(open-loop-read-update prefix-scan read-write transaction-contention)
+workloads=(prefix-scan read-write transaction-contention)
 for workload in "${workloads[@]}"; do
   docker compose run --rm --entrypoint slatedb-benchmark runner \
     run \

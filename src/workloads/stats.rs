@@ -13,8 +13,6 @@ pub struct WorkerStats {
     pub read_payload_bytes: u64,
     pub write_payload_bytes: u64,
     pub writes: u64,
-    pub offered: u64,
-    pub dropped: u64,
     pub batch_keys: u64,
     pub transaction_commits: u64,
     pub transaction_aborts: u64,
@@ -159,49 +157,6 @@ impl WorkerStats {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub fn record_open_loop_completion(
-        &mut self,
-        operation: &str,
-        api: &str,
-        successful: bool,
-        return_latency: Duration,
-        api_latency: Duration,
-        response_latency: Duration,
-        scheduling_delay: Duration,
-        payload: Payload,
-    ) {
-        self.total += 1;
-        if successful {
-            self.successful += 1;
-            self.read_payload_bytes = self.read_payload_bytes.saturating_add(payload.read_bytes);
-            self.write_payload_bytes = self.write_payload_bytes.saturating_add(payload.write_bytes);
-        } else {
-            self.errors += 1;
-        }
-
-        if let Some(recorder) = &self.window_recorder {
-            recorder.record_open_loop_completion(
-                operation,
-                api,
-                successful,
-                return_latency,
-                api_latency,
-                response_latency,
-                scheduling_delay,
-                payload.read_bytes,
-                payload.write_bytes,
-            );
-        } else {
-            self.histograms.record("return", return_latency);
-            self.histograms
-                .record(format!("return/{operation}"), return_latency);
-            self.histograms.record(format!("api/{api}"), api_latency);
-            self.histograms.record("response", response_latency);
-            self.histograms.record("scheduling_delay", scheduling_delay);
-        }
-    }
-
     pub fn record_batch_latency(&mut self, latency: Duration) {
         if let Some(recorder) = &self.window_recorder {
             recorder.record_batch_latency(latency);
@@ -259,8 +214,6 @@ impl WorkerStats {
             .write_payload_bytes
             .saturating_add(other.write_payload_bytes);
         self.writes = self.writes.saturating_add(other.writes);
-        self.offered = self.offered.saturating_add(other.offered);
-        self.dropped = self.dropped.saturating_add(other.dropped);
         self.batch_keys = self.batch_keys.saturating_add(other.batch_keys);
         self.transaction_commits = self
             .transaction_commits
@@ -283,51 +236,23 @@ impl WorkerStats {
         self.histograms.merge(&other.histograms)
     }
 
-    pub fn application(
-        &self,
-        elapsed: Duration,
-        scheduler_elapsed: Option<Duration>,
-    ) -> ApplicationPerformance {
-        let open_loop = scheduler_elapsed.is_some();
+    pub fn application(&self, elapsed: Duration) -> ApplicationPerformance {
         let seconds = elapsed.as_secs_f64().max(f64::EPSILON);
-        let scheduler_seconds = scheduler_elapsed
-            .unwrap_or(elapsed)
-            .as_secs_f64()
-            .max(f64::EPSILON);
         let histogram_summary = |name| {
             self.histograms
                 .get(name)
                 .map(|histogram| histogram.summary())
         };
         let return_latency = histogram_summary("return").unwrap_or_default();
-        let response_latency = if open_loop {
-            histogram_summary("response")
-        } else {
-            None
-        };
-        let scheduling_delay = if open_loop {
-            histogram_summary("scheduling_delay")
-        } else {
-            None
-        };
         let batch_latency = histogram_summary("batch");
         let transactions = self.transaction_commits + self.transaction_aborts;
         let transaction_rate =
             |count: u64| (transactions > 0).then_some(count as f64 / transactions as f64);
-        let accepted = if open_loop {
-            self.offered.saturating_sub(self.dropped)
-        } else {
-            self.successful
-        };
-        let completed = self.total.saturating_sub(self.dropped);
         ApplicationPerformance {
             total_operations: self.total,
             successful_operations: self.successful,
-            accepted_ops_per_second: accepted as f64 / scheduler_seconds,
-            completed_ops_per_second: completed as f64 / seconds,
-            offered_ops_per_second: open_loop.then_some(self.offered as f64 / scheduler_seconds),
-            dropped_operations: open_loop.then_some(self.dropped),
-            dropped_ops_per_second: open_loop.then_some(self.dropped as f64 / scheduler_seconds),
+            accepted_ops_per_second: self.successful as f64 / seconds,
+            completed_ops_per_second: self.total as f64 / seconds,
             payload_mib_per_second: Payload::read_write(
                 self.read_payload_bytes,
                 self.write_payload_bytes,
@@ -339,8 +264,6 @@ impl WorkerStats {
             return_latency,
             return_latency_by_operation: self.histograms.summaries_with_prefix("return/"),
             api_latency: self.histograms.summaries_with_prefix("api/"),
-            response_latency,
-            scheduling_delay,
             batch_latency,
             key_throughput_per_second: (self.batch_keys > 0)
                 .then_some(self.batch_keys as f64 / seconds),
@@ -373,30 +296,11 @@ mod tests {
     }
 
     #[test]
-    fn application_uses_scheduler_window_for_arrival_rates() {
-        let stats = WorkerStats {
-            total: 10,
-            successful: 7,
-            offered: 10,
-            dropped: 2,
-            ..Default::default()
-        };
-
-        let application = stats.application(Duration::from_secs(2), Some(Duration::from_secs(1)));
-
-        assert_eq!(application.dropped_operations, Some(2));
-        assert_eq!(application.offered_ops_per_second, Some(10.0));
-        assert_eq!(application.accepted_ops_per_second, 8.0);
-        assert_eq!(application.completed_ops_per_second, 4.0);
-        assert_eq!(application.dropped_ops_per_second, Some(2.0));
-    }
-
-    #[test]
     fn application_counts_transaction_conflicts_as_completed() {
         let mut stats = WorkerStats::default();
         stats.record_transaction_conflict(Duration::from_millis(1));
 
-        let application = stats.application(Duration::from_secs(1), None);
+        let application = stats.application(Duration::from_secs(1));
 
         assert_eq!(application.total_operations, 1);
         assert_eq!(application.successful_operations, 0);
@@ -412,7 +316,7 @@ mod tests {
             Payload::read_write(1024 * 1024, 2 * 1024 * 1024),
         );
 
-        let application = stats.application(Duration::from_secs(1), None);
+        let application = stats.application(Duration::from_secs(1));
 
         assert_eq!(application.payload_mib_per_second, 3.0);
     }
@@ -423,7 +327,7 @@ mod tests {
         stats.record_success("read", Duration::from_millis(1), Payload::read(1));
         stats.record_background_success("writer-update", Duration::from_secs(1), Payload::write(1));
 
-        let application = stats.application(Duration::from_secs(1), None);
+        let application = stats.application(Duration::from_secs(1));
 
         assert_eq!(application.total_operations, 2);
         assert_eq!(application.return_latency.count, 1);

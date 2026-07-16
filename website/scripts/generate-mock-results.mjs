@@ -61,21 +61,17 @@ const writeWorkloads = new Set([
   'ycsb-a', 'ycsb-b', 'ycsb-d', 'ycsb-e', 'ycsb-f',
   'bulk-load', 'overwrite', 'read-while-writing', 'forward-range-while-writing',
   'reverse-range-while-writing', 'sustained-ingest', 'transaction-contention',
-  'open-loop-read-update',
 ]);
 
 function variantSettings(variant) {
-  const target = variant.target_rate ?? null;
-  const clients = variant.clients ?? null;
-  const scale = target !== null ? (target >= 10_000 ? 'large' : target >= 5_000 ? 'medium' : 'small')
-    : clients >= 64 ? 'large' : clients >= 16 ? 'medium' : 'small';
-  return { target, clients, scale };
+  const clients = variant.clients;
+  const scale = clients >= 64 ? 'large' : clients >= 16 ? 'medium' : 'small';
+  return { clients, scale };
 }
 
-function mockThroughput(suite, workload, clients, target) {
-  if (target !== null) return target * 0.96;
+function mockThroughput(suite, workload, clients) {
   const base = suite === 'rocksdb' ? 32_000 : workload === 'prefix-scan' ? 2_400 : 48_000;
-  return base * Math.sqrt(clients ?? 1);
+  return base * Math.sqrt(clients);
 }
 
 function sample(offset_ns, operations, throughput, databaseSize, networkBytesSent, networkBytesReceived) {
@@ -120,7 +116,6 @@ function payloadPerOperation(workload, keyBytes, valueBytes, throughput) {
     case 'ycsb-d': return { read: 0.95 * valueBytes, write: 0.05 * valueBytes };
     case 'ycsb-e': return { read: 0.95 * 50.5 * (keyBytes + valueBytes), write: 0.05 * valueBytes };
     case 'ycsb-f': return { read: valueBytes, write: 0.5 * valueBytes };
-    case 'open-loop-read-update': return { read: 0.5 * valueBytes, write: 0.5 * valueBytes };
     case 'transaction-contention': return { read: 5 * valueBytes, write: 5 * valueBytes };
     case 'multi-random-read': return { read: 10 * valueBytes, write: 0 };
     case 'forward-range':
@@ -143,7 +138,6 @@ function apiCallsForWorkload(workload) {
     case 'ycsb-d': return { get: 0.95, put: 0.05 };
     case 'ycsb-e': return { scan: 0.95, put: 0.05 };
     case 'ycsb-f': return { get: 1, put: 0.5 };
-    case 'open-loop-read-update': return { get: 0.5, put: 0.5 };
     case 'multi-random-read': return { get: 10 };
     case 'forward-range':
     case 'reverse-range':
@@ -254,7 +248,7 @@ function mockCompactorMetrics(samples, throughput, payload, isWrite) {
   ];
 }
 
-function mockTimeseries({ windowCount, throughput, payload, databaseSize, isWrite, awaitDurable, openLoop, latency, apiCalls }) {
+function mockTimeseries({ windowCount, throughput, payload, databaseSize, isWrite, awaitDurable, latency, apiCalls }) {
   let cumulativeOperations = 0;
   let networkBytesSent = 0;
   let networkBytesReceived = 0;
@@ -267,8 +261,6 @@ function mockTimeseries({ windowCount, throughput, payload, databaseSize, isWrit
       + Math.sin(index / 503) * 0.018
       - (isStallWindow(index, windowCount) ? 0.18 : 0);
     const successful = Math.max(1, Math.round(throughput * traffic));
-    const offered = openLoop ? Math.round(throughput / 0.96) : null;
-    const dropped = openLoop ? Math.max(0, offered - successful) : null;
     const returnLatency = windowLatency(latency.summary, successful, index, windowCount);
     const apiLatency = Object.fromEntries(Object.entries(apiCalls).map(([api, multiplier]) => [
       api,
@@ -304,22 +296,9 @@ function mockTimeseries({ windowCount, throughput, payload, databaseSize, isWrit
       read_payload_bytes: readPayloadBytes,
       write_payload_bytes: writePayloadBytes,
       payload_bytes: readPayloadBytes + writePayloadBytes,
-      offered_operations: offered,
-      dropped_operations: dropped,
       return_latency: returnLatency,
       return_latency_by_operation: { operation: returnLatency },
       api_latency: apiLatency,
-      response_latency: openLoop
-        ? windowLatency(latency.summary, successful, index, windowCount, 1.08)
-        : null,
-      scheduling_delay: openLoop
-        ? windowLatency(
-          { p50_ns: 40_000, p95_ns: 90_000, p99_ns: 180_000, p999_ns: 400_000, max_ns: 700_000 },
-          successful,
-          index,
-          windowCount,
-        )
-        : null,
       batch_latency: null,
     });
     if (durabilityWindows) {
@@ -350,9 +329,9 @@ for (const suite of published.suites) {
   for (const workload of suite.workloads) {
     for (const variantDefinition of workload.variants) {
       const variant = variantDefinition.name;
-      const { clients, target, scale } = variantSettings(variantDefinition);
+      const { clients, scale } = variantSettings(variantDefinition);
       const latency = latencyTemplates[scale];
-      const throughput = mockThroughput(suite.name, workload.name, clients, target);
+      const throughput = mockThroughput(suite.name, workload.name, clients);
       const isWrite = writeWorkloads.has(workload.name);
       const awaitDurable = Boolean(workload.await_durable);
       const measurementMs = workload.measurement_ms ?? suite.measurement_ms;
@@ -365,18 +344,13 @@ for (const suite of published.suites) {
       const payload = payloadPerOperation(workload.name, keyBytes, valueBytes, throughput);
       const apiCalls = apiCallsForWorkload(workload.name);
       const databaseSize = Math.max(16 * 1024 * 1024, Math.round(recordCount * (keyBytes + valueBytes) * 0.42));
-      const openLoop = target !== null;
       const transaction = workload.name === 'transaction-contention';
       const windowed = mockTimeseries({
-        windowCount, throughput, payload, databaseSize, isWrite, awaitDurable, openLoop, latency, apiCalls,
+        windowCount, throughput, payload, databaseSize, isWrite, awaitDurable, latency, apiCalls,
       });
       const finalSample = windowed.samples.at(-1);
       const operations = finalSample?.operations ?? 0;
       const completedRate = operations / windowCount;
-      const offeredOperations = openLoop ? Math.round((target ?? 0) * windowCount) : null;
-      const droppedOperations = offeredOperations === null
-        ? null
-        : Math.max(0, offeredOperations - operations);
       const aggregateLatency = latencySummary(latency.summary, operations);
       const aggregateMachineTraffic = {
         upload: finalSample?.network_bytes_sent ?? 0,
@@ -426,7 +400,6 @@ for (const suite of published.suites) {
         object_store_baseline: objectStoreBaseline,
         configuration: {
           clients,
-          target_rate: target,
           warmup_ns: (workload.warmup_ms ?? suite.warmup_ms) * 1_000_000,
           measurement_ns: measurementNs,
           record_count: recordCount,
@@ -466,9 +439,6 @@ for (const suite of published.suites) {
           successful_operations: operations,
           accepted_ops_per_second: completedRate,
           completed_ops_per_second: completedRate,
-          offered_ops_per_second: openLoop ? target : null,
-          dropped_operations: droppedOperations,
-          dropped_ops_per_second: droppedOperations === null ? null : droppedOperations / windowCount,
           payload_mib_per_second: completedRate * (payload.read + payload.write) / 1_048_576,
           errors: 0,
           return_latency: aggregateLatency,
@@ -484,8 +454,6 @@ for (const suite of published.suites) {
             ])),
             ...(isWrite ? { flush: latencySummary(latency.summary, 1, apiLatencyFactor('flush')) } : {}),
           },
-          response_latency: openLoop ? aggregateLatency : null,
-          scheduling_delay: openLoop ? aggregateLatency : null,
           batch_latency: null,
           key_throughput_per_second: workload.name === 'multi-random-read' ? throughput * 10 : null,
           transaction_commits: transaction ? operations : null,
@@ -592,10 +560,6 @@ for (const suite of published.suites) {
           ])),
           ...(isWrite ? { 'api/flush': { ...latency.histogram, count: 1 } } : {}),
           ...objectStoreHistograms,
-          ...(openLoop ? {
-            response: { ...latency.histogram, count: operations },
-            scheduling_delay: { ...latency.histogram, count: operations },
-          } : {}),
           ...(durabilityLag ? { durability_lag: { ...latency.histogram, count: operations } } : {}),
         },
       };

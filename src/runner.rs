@@ -873,14 +873,6 @@ fn enabled_features() -> Vec<String> {
         .collect()
 }
 
-fn result_clients(variant: &VariantConfig) -> Option<usize> {
-    if variant.workload.kind == WorkloadKind::BulkLoad {
-        Some(1)
-    } else {
-        variant.clients
-    }
-}
-
 fn write_variant_result(
     variant: &VariantConfig,
     mut outcome: WorkloadOutcome,
@@ -924,8 +916,7 @@ fn write_variant_result(
         environment: context.environment.clone(),
         object_store_baseline: context.baseline.clone(),
         configuration: BenchmarkConfiguration {
-            clients: result_clients(variant),
-            target_rate: variant.target_rate,
+            clients: variant.clients,
             warmup_ns: variant.warmup_ms().saturating_mul(1_000_000),
             measurement_ns: variant.measurement_ms().saturating_mul(1_000_000),
             record_count: variant.record_count(),
@@ -1158,7 +1149,6 @@ mod tests {
     use super::{
         average_database_bytes, bulk_load_settings, close_database_after, enabled_features,
         execute_rocks_variant, lsm_digest, object_store_cache_directory, open_database,
-        result_clients,
     };
     use crate::cli::RunArgs;
     use crate::config::{
@@ -1263,20 +1253,6 @@ mod tests {
     }
 
     #[test]
-    fn bulk_load_result_reports_the_single_loader() {
-        let benchmark =
-            BenchmarkConfig::load_from(std::path::Path::new("config")).expect("benchmark config");
-        let mut variant = benchmark
-            .select(Some("rocksdb"), Some("bulk-load"), None)
-            .expect("bulk-load variant")
-            .pop()
-            .expect("configured bulk-load variant");
-
-        variant.clients = Some(64);
-        assert_eq!(result_clients(&variant), Some(1));
-    }
-
-    #[test]
     fn object_store_cache_directory_is_temporary() -> Result<()> {
         let benchmark = BenchmarkConfig::load_from(std::path::Path::new("config"))?;
         let suite = benchmark
@@ -1363,8 +1339,7 @@ mod tests {
             kind: WorkloadKind::Overwrite,
             variants: vec![VariantDefinition {
                 name: "clients-1".to_string(),
-                clients: Some(1),
-                target_rate: None,
+                clients: 1,
             }],
             await_durable: false,
             record_count: None,
@@ -1378,8 +1353,7 @@ mod tests {
             kind: WorkloadKind::RandomRead,
             variants: vec![VariantDefinition {
                 name: "clients-1".to_string(),
-                clients: Some(1),
-                target_rate: None,
+                clients: 1,
             }],
             await_durable: false,
             record_count: None,
@@ -1421,8 +1395,7 @@ mod tests {
             suite: suite.clone(),
             workload,
             variant: "clients-1".to_string(),
-            clients: Some(1),
-            target_rate: None,
+            clients: 1,
             slate_settings: slate_settings.clone(),
         };
         let args = RunArgs {

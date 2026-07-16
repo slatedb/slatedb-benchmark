@@ -53,9 +53,7 @@ pub async fn run_closed_phase(
         return run_with_capped_writer(db, variant, duration, durability, counters, state).await;
     }
 
-    let clients = variant
-        .clients
-        .context("closed-loop variant has no clients")?;
+    let clients = variant.clients;
     let deadline = Instant::now() + duration;
     let mut tasks = JoinSet::new();
     for _ in 0..clients {
@@ -682,7 +680,7 @@ async fn run_with_capped_writer(
     counters: Option<Arc<ApplicationCounters>>,
     state: &ClosedLoopState,
 ) -> Result<WorkerStats> {
-    let clients = variant.clients.context("reader count is missing")?;
+    let clients = variant.clients;
     let deadline = Instant::now() + duration;
     let read_kind = match variant.workload.kind {
         WorkloadKind::ReadWhileWriting => WorkloadKind::RandomRead,

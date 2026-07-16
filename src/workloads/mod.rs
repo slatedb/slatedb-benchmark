@@ -1,6 +1,5 @@
 mod closed;
 mod durability;
-mod open_loop;
 mod stats;
 mod util;
 
@@ -89,12 +88,8 @@ pub async fn execute_variant(
             variant = variant.variant,
             "warming benchmark"
         );
-        if is_open_loop(variant.workload.kind) {
-            open_loop::run_open_phase(Arc::clone(&db), variant, warmup, None, None).await?;
-        } else {
-            closed::run_closed_phase(Arc::clone(&db), variant, warmup, None, None, &closed_state)
-                .await?;
-        }
+        closed::run_closed_phase(Arc::clone(&db), variant, warmup, None, None, &closed_state)
+            .await?;
         if may_write(variant.workload.kind) {
             db.flush().await.context("draining warmup writes")?;
         }
@@ -102,8 +97,7 @@ pub async fn execute_variant(
 
     let start_store = store_metrics.snapshot();
     let start_slate = slate_metrics.snapshot();
-    let open_loop = is_open_loop(variant.workload.kind);
-    let counters = Arc::new(ApplicationCounters::new(open_loop));
+    let counters = Arc::new(ApplicationCounters::new());
     counters.reset();
     let measured_started = Instant::now();
     let (stop_tx, stop_rx) = watch::channel(false);
@@ -120,30 +114,15 @@ pub async fn execute_variant(
     let tracker = tracks_lag.then(|| DurabilityTracker::start(Arc::clone(&db), measured_started));
     let durability_sender = tracker.as_ref().map(DurabilityTracker::sender);
     let configured_duration = Duration::from_millis(variant.measurement_ms());
-    let (mut stats, scheduler_elapsed) = if is_open_loop(variant.workload.kind) {
-        let (stats, elapsed) = open_loop::run_open_phase(
-            Arc::clone(&db),
-            variant,
-            configured_duration,
-            durability_sender,
-            Some(Arc::clone(&counters)),
-        )
-        .await?;
-        (stats, Some(elapsed))
-    } else {
-        (
-            closed::run_closed_phase(
-                Arc::clone(&db),
-                variant,
-                configured_duration,
-                durability_sender,
-                Some(Arc::clone(&counters)),
-                &closed_state,
-            )
-            .await?,
-            None,
-        )
-    };
+    let mut stats = closed::run_closed_phase(
+        Arc::clone(&db),
+        variant,
+        configured_duration,
+        durability_sender,
+        Some(Arc::clone(&counters)),
+        &closed_state,
+    )
+    .await?;
     let generation_stopped = Instant::now();
     let measurement_elapsed = generation_stopped.saturating_duration_since(measured_started);
     let final_api_recorder = counters.register_window_recorder();
@@ -180,7 +159,7 @@ pub async fn execute_variant(
     );
     storage.database_size_bytes = 0;
     let resources = system::summarize_resources(&timeseries.samples);
-    let application = stats.application(measurement_elapsed, scheduler_elapsed);
+    let application = stats.application(measurement_elapsed);
     Ok(WorkloadOutcome {
         application,
         durability,
@@ -544,13 +523,6 @@ fn gauge_value(metrics: &Metrics, name: &str) -> Option<i64> {
         .max()
 }
 
-fn is_open_loop(kind: WorkloadKind) -> bool {
-    matches!(
-        kind,
-        WorkloadKind::OpenLoopRead | WorkloadKind::OpenLoopReadUpdate
-    )
-}
-
 fn may_write(kind: WorkloadKind) -> bool {
     !matches!(
         kind,
@@ -561,6 +533,5 @@ fn may_write(kind: WorkloadKind) -> bool {
             | WorkloadKind::ReverseRange
             | WorkloadKind::ColdRead
             | WorkloadKind::PrefixScan
-            | WorkloadKind::OpenLoopRead
     )
 }

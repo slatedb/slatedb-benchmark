@@ -146,28 +146,11 @@ fn validate_invariants(
         validate_histogram_summary(histograms, &format!("api/{api}"), summary)?;
     }
     for (name, summary) in [
-        ("response", result.application.response_latency.as_ref()),
-        (
-            "scheduling_delay",
-            result.application.scheduling_delay.as_ref(),
-        ),
         ("batch", result.application.batch_latency.as_ref()),
         ("durability_lag", result.durability.lag.as_ref()),
     ] {
         if let Some(summary) = summary {
             validate_histogram_summary(histograms, name, summary)?;
-        }
-    }
-    if result.application.offered_ops_per_second.is_some() {
-        for name in ["response", "scheduling_delay"] {
-            let count = histograms
-                .histograms
-                .get(name)
-                .map(|histogram| histogram.count)
-                .unwrap_or(0);
-            if count != expected_returns {
-                bail!("{name} histogram count {count} does not match returned operation count {expected_returns}");
-            }
         }
     }
     validate_application_windows(
@@ -269,19 +252,6 @@ fn validate_invariants(
     {
         bail!("initial LSM digest is not a SHA-256 hex digest");
     }
-    if let (Some(target), Some(offered)) = (
-        result.configuration.target_rate,
-        result.application.offered_ops_per_second,
-    ) {
-        validate_open_loop_offered_rate(target, offered)?;
-    }
-    Ok(())
-}
-
-fn validate_open_loop_offered_rate(target: u64, offered: f64) -> Result<()> {
-    if offered < target as f64 * 0.95 {
-        bail!("scheduler offered only {offered:.2} ops/s for target {target}");
-    }
     Ok(())
 }
 
@@ -341,7 +311,6 @@ fn validate_application_windows(
         );
     }
 
-    let open_loop = result.application.offered_ops_per_second.is_some();
     for window in &timeseries.application_windows {
         let directional_payload = window
             .read_payload_bytes
@@ -384,44 +353,9 @@ fn validate_application_windows(
         if window.successful_operations > window.completed_operations {
             bail!("application window has more successful operations than completions");
         }
-        if open_loop {
-            if window.offered_operations.is_none() || window.dropped_operations.is_none() {
-                bail!("open-loop application window is missing scheduler counts");
-            }
-        } else if window.offered_operations.is_some()
-            || window.dropped_operations.is_some()
-            || window.response_latency.is_some()
-            || window.scheduling_delay.is_some()
-        {
-            bail!("closed-loop application window contains open-loop measurements");
-        }
-    }
-    if open_loop {
-        let offered = timeseries
-            .application_windows
-            .iter()
-            .filter_map(|window| window.offered_operations)
-            .sum::<u64>();
-        let dropped = timeseries
-            .application_windows
-            .iter()
-            .filter_map(|window| window.dropped_operations)
-            .sum::<u64>();
-        if offered != result.application.total_operations {
-            bail!(
-                "application windows contain {offered} offered operations but result reports {}",
-                result.application.total_operations
-            );
-        }
-        if Some(dropped) != result.application.dropped_operations {
-            bail!(
-                "application windows contain {dropped} dropped operations but result reports {:?}",
-                result.application.dropped_operations
-            );
-        }
     }
 
-    for name in ["return", "response", "scheduling_delay", "batch"] {
+    for name in ["return", "batch"] {
         let expected = histograms
             .histograms
             .get(name)
@@ -432,8 +366,6 @@ fn validate_application_windows(
             .iter()
             .filter_map(|window| match name {
                 "return" => window.return_latency.as_ref(),
-                "response" => window.response_latency.as_ref(),
-                "scheduling_delay" => window.scheduling_delay.as_ref(),
                 "batch" => window.batch_latency.as_ref(),
                 _ => None,
             })
@@ -531,21 +463,7 @@ fn validate_return_histogram_count(
     return_count: u64,
     background_return_count: u64,
 ) -> Result<u64> {
-    let open_loop_fields = [
-        application.offered_ops_per_second.is_some(),
-        application.dropped_operations.is_some(),
-        application.dropped_ops_per_second.is_some(),
-    ];
-    if open_loop_fields.iter().any(|present| *present)
-        && !open_loop_fields.iter().all(|present| *present)
-    {
-        bail!("open-loop scheduler counters and rates must either all be present or all be absent");
-    }
-    let dropped = application.dropped_operations.unwrap_or(0);
-    let expected_returns = application
-        .total_operations
-        .checked_sub(dropped)
-        .context("scheduler dropped more operations than were offered")?;
+    let expected_returns = application.total_operations;
     let expected_headline_returns = expected_returns
         .checked_sub(background_return_count)
         .context("background operations exceed returned operations")?;
@@ -659,25 +577,8 @@ fn find_named(root: &Path, name: &str) -> Result<Vec<PathBuf>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{validate_open_loop_offered_rate, validate_return_histogram_count};
+    use super::validate_return_histogram_count;
     use crate::model::ApplicationPerformance;
-
-    #[test]
-    fn open_loop_return_count_uses_scheduler_drop_count() {
-        let application = ApplicationPerformance {
-            total_operations: 10,
-            offered_ops_per_second: Some(10.0),
-            dropped_operations: Some(2),
-            dropped_ops_per_second: Some(2.0),
-            ..Default::default()
-        };
-
-        assert!(validate_return_histogram_count(&application, 7, 0).is_err());
-        assert_eq!(
-            validate_return_histogram_count(&application, 8, 0).expect("valid return count"),
-            8
-        );
-    }
 
     #[test]
     fn background_operations_are_excluded_from_headline_return_count() {
@@ -691,12 +592,5 @@ mod tests {
                 .expect("valid background return count"),
             10
         );
-    }
-
-    #[test]
-    fn open_loop_validation_requires_offered_rate_not_completed_capacity() {
-        validate_open_loop_offered_rate(10_000, 10_000.0)
-            .expect("a scheduler that maintains the offered rate is valid");
-        assert!(validate_open_loop_offered_rate(10_000, 9_499.0).is_err());
     }
 }

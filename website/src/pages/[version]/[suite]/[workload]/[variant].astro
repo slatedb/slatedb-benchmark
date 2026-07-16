@@ -39,11 +39,6 @@ const cacheSummary = [
 const durabilityMode = result.durability.final_flush_drain_ns == null
   ? null
   : result.durability.lag ? 'Async' : 'Sync';
-const saturated = result.configuration.target_rate !== null && (
-  (result.application.dropped_operations ?? 0) > 0
-  || (result.application.scheduling_delay?.p99_ns ?? 0) > 1_000_000_000
-);
-
 const {
   object_store_operations: logicalObjectStoreOperations,
   object_store_requests: objectStoreRequests,
@@ -101,14 +96,6 @@ tables.push(['Object-store baseline', result.object_store_baseline]);
     </a>
     <span class="site-name">Benchmarks</span>
     {route.version.includes('mock') && <span class="data-badge">Mock data</span>}
-    {saturated && (
-      <span
-        class="data-badge"
-        title="The workload saturated before all offered operations could begin promptly"
-      >
-        Saturated
-      </span>
-    )}
   </header>
   <main class="result-shell" data-catalog={JSON.stringify(catalog)} data-current={JSON.stringify({ version: route.version, suite: route.suite, workload: route.workload, variant: route.variant })}>
     <aside class="result-context" aria-label="Benchmark context">
