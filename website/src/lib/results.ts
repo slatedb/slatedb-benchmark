@@ -41,6 +41,8 @@ export type BenchmarkResult = {
   };
   application: Record<string, unknown> & {
     successful_operations: number;
+    read_hits: number | null;
+    read_misses: number | null;
     payload_mib_per_second: number;
     errors: number;
     return_latency: Latency;
@@ -140,6 +142,8 @@ export type ApplicationWindow = {
   errors: number;
   read_payload_bytes: number;
   write_payload_bytes: number;
+  read_hits: number;
+  read_misses: number;
   return_latency: Latency | null;
   return_latency_by_operation: Record<string, Latency>;
   api_latency: Record<string, Latency>;

@@ -180,6 +180,8 @@ struct ApplicationWindowDelta {
     errors: u64,
     read_payload_bytes: u64,
     write_payload_bytes: u64,
+    read_hits: u64,
+    read_misses: u64,
     histograms: HistogramSet,
 }
 
@@ -198,6 +200,8 @@ impl ApplicationWindowDelta {
         self.write_payload_bytes = self
             .write_payload_bytes
             .saturating_add(other.write_payload_bytes);
+        self.read_hits = self.read_hits.saturating_add(other.read_hits);
+        self.read_misses = self.read_misses.saturating_add(other.read_misses);
         self.histograms.merge(&other.histograms)
     }
 
@@ -207,6 +211,8 @@ impl ApplicationWindowDelta {
         self.errors = 0;
         self.read_payload_bytes = 0;
         self.write_payload_bytes = 0;
+        self.read_hits = 0;
+        self.read_misses = 0;
         self.histograms.reset();
     }
 }
@@ -234,12 +240,16 @@ impl ApplicationWindowRecorder {
         latency: Duration,
         read_payload_bytes: u64,
         write_payload_bytes: u64,
+        read_hits: u64,
+        read_misses: u64,
     ) {
         self.record_success_internal(
             operation,
             latency,
             read_payload_bytes,
             write_payload_bytes,
+            read_hits,
+            read_misses,
             true,
         );
     }
@@ -250,12 +260,16 @@ impl ApplicationWindowRecorder {
         latency: Duration,
         read_payload_bytes: u64,
         write_payload_bytes: u64,
+        read_hits: u64,
+        read_misses: u64,
     ) {
         self.record_success_internal(
             operation,
             latency,
             read_payload_bytes,
             write_payload_bytes,
+            read_hits,
+            read_misses,
             false,
         );
     }
@@ -266,6 +280,8 @@ impl ApplicationWindowRecorder {
         latency: Duration,
         read_payload_bytes: u64,
         write_payload_bytes: u64,
+        read_hits: u64,
+        read_misses: u64,
         include_in_headline: bool,
     ) {
         self.update(|window| {
@@ -276,6 +292,8 @@ impl ApplicationWindowRecorder {
             window.write_payload_bytes = window
                 .write_payload_bytes
                 .saturating_add(write_payload_bytes);
+            window.read_hits = window.read_hits.saturating_add(read_hits);
+            window.read_misses = window.read_misses.saturating_add(read_misses);
             if include_in_headline {
                 window.histograms.record("return", latency);
             }
@@ -397,6 +415,8 @@ impl ApplicationWindowRegistry {
             errors: merged.errors,
             read_payload_bytes: merged.read_payload_bytes,
             write_payload_bytes: merged.write_payload_bytes,
+            read_hits: merged.read_hits,
+            read_misses: merged.read_misses,
             return_latency: summary("return"),
             return_latency_by_operation: merged.histograms.summaries_with_prefix("return/"),
             api_latency: merged.histograms.summaries_with_prefix("api/"),
@@ -917,8 +937,15 @@ mod tests {
     fn drains_application_measurements_into_one_window() {
         let windows = ApplicationWindowRegistry::new();
         let worker = windows.register_window_recorder();
-        worker.record_success("read-modify-write", Duration::from_millis(2), 1024, 256);
-        worker.record_background_success("writer-update", Duration::from_secs(1), 0, 128);
+        worker.record_success(
+            "read-modify-write",
+            Duration::from_millis(2),
+            1024,
+            256,
+            1,
+            0,
+        );
+        worker.record_background_success("writer-update", Duration::from_secs(1), 0, 128, 0, 0);
         worker.record_error("read", Duration::from_millis(4));
         worker.record_api_latency("get", Duration::from_millis(3));
 
@@ -931,6 +958,8 @@ mod tests {
         assert_eq!(window.errors, 1);
         assert_eq!(window.read_payload_bytes, 1024);
         assert_eq!(window.write_payload_bytes, 384);
+        assert_eq!(window.read_hits, 1);
+        assert_eq!(window.read_misses, 0);
         assert_eq!(window.return_latency.expect("return latency").count, 2);
         assert_eq!(window.return_latency_by_operation["writer-update"].count, 1);
         assert_eq!(window.api_latency["get"].count, 1);
@@ -949,7 +978,7 @@ mod tests {
     fn resets_reusable_window_buffers() {
         let windows = ApplicationWindowRegistry::new();
         let worker = windows.register_window_recorder();
-        worker.record_success("read", Duration::from_millis(2), 1024, 0);
+        worker.record_success("read", Duration::from_millis(2), 1024, 0, 1, 0);
 
         let (first, first_histograms) = windows
             .drain_window(0, 1_000_000_000)
@@ -958,6 +987,8 @@ mod tests {
         assert_eq!(first.successful_operations, 1);
         assert_eq!(first.errors, 0);
         assert_eq!(first.read_payload_bytes, 1024);
+        assert_eq!(first.read_hits, 1);
+        assert_eq!(first.read_misses, 0);
         assert_eq!(first.return_latency.expect("return latency").count, 1);
         assert_eq!(
             first_histograms
@@ -975,6 +1006,8 @@ mod tests {
         assert_eq!(second.successful_operations, 0);
         assert_eq!(second.errors, 1);
         assert_eq!(second.read_payload_bytes, 0);
+        assert_eq!(second.read_hits, 0);
+        assert_eq!(second.read_misses, 0);
 
         let (empty, empty_histograms) = windows
             .drain_window(2_000_000_000, 1_000_000_000)

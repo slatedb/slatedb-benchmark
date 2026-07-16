@@ -109,6 +109,8 @@ fn default_scale() -> f64 {
 pub struct ApplicationPerformance {
     pub total_operations: u64,
     pub successful_operations: u64,
+    pub read_hits: Option<u64>,
+    pub read_misses: Option<u64>,
     pub payload_mib_per_second: f64,
     pub errors: u64,
     pub return_latency: LatencySummary,
@@ -237,6 +239,8 @@ pub struct ApplicationWindow {
     pub errors: u64,
     pub read_payload_bytes: u64,
     pub write_payload_bytes: u64,
+    pub read_hits: u64,
+    pub read_misses: u64,
     pub return_latency: Option<LatencySummary>,
     pub return_latency_by_operation: BTreeMap<String, LatencySummary>,
     pub api_latency: BTreeMap<String, LatencySummary>,

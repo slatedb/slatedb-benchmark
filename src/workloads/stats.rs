@@ -12,6 +12,8 @@ pub struct WorkerStats {
     pub errors: u64,
     pub read_payload_bytes: u64,
     pub write_payload_bytes: u64,
+    pub read_hits: u64,
+    pub read_misses: u64,
     pub writes: u64,
     pub batch_keys: u64,
     pub transaction_commits: u64,
@@ -28,6 +30,8 @@ pub struct WorkerStats {
 pub struct Payload {
     pub read_bytes: u64,
     pub write_bytes: u64,
+    pub read_hits: u64,
+    pub read_misses: u64,
 }
 
 impl Payload {
@@ -35,6 +39,35 @@ impl Payload {
         Self {
             read_bytes: bytes,
             write_bytes: 0,
+            read_hits: 0,
+            read_misses: 0,
+        }
+    }
+
+    pub const fn read_hit(bytes: u64) -> Self {
+        Self {
+            read_bytes: bytes,
+            write_bytes: 0,
+            read_hits: 1,
+            read_misses: 0,
+        }
+    }
+
+    pub const fn read_miss() -> Self {
+        Self {
+            read_bytes: 0,
+            write_bytes: 0,
+            read_hits: 0,
+            read_misses: 1,
+        }
+    }
+
+    pub const fn read_batch(bytes: u64, hits: u64, misses: u64) -> Self {
+        Self {
+            read_bytes: bytes,
+            write_bytes: 0,
+            read_hits: hits,
+            read_misses: misses,
         }
     }
 
@@ -42,6 +75,8 @@ impl Payload {
         Self {
             read_bytes: 0,
             write_bytes: bytes,
+            read_hits: 0,
+            read_misses: 0,
         }
     }
 
@@ -49,6 +84,8 @@ impl Payload {
         Self {
             read_bytes,
             write_bytes,
+            read_hits: 0,
+            read_misses: 0,
         }
     }
 
@@ -89,6 +126,8 @@ impl WorkerStats {
         self.successful += 1;
         self.read_payload_bytes = self.read_payload_bytes.saturating_add(payload.read_bytes);
         self.write_payload_bytes = self.write_payload_bytes.saturating_add(payload.write_bytes);
+        self.read_hits = self.read_hits.saturating_add(payload.read_hits);
+        self.read_misses = self.read_misses.saturating_add(payload.read_misses);
         if let Some(recorder) = &self.window_recorder {
             if include_in_headline {
                 recorder.record_success(
@@ -96,6 +135,8 @@ impl WorkerStats {
                     latency,
                     payload.read_bytes,
                     payload.write_bytes,
+                    payload.read_hits,
+                    payload.read_misses,
                 );
             } else {
                 recorder.record_background_success(
@@ -103,6 +144,8 @@ impl WorkerStats {
                     latency,
                     payload.read_bytes,
                     payload.write_bytes,
+                    payload.read_hits,
+                    payload.read_misses,
                 );
             }
         } else {
@@ -213,6 +256,8 @@ impl WorkerStats {
         self.write_payload_bytes = self
             .write_payload_bytes
             .saturating_add(other.write_payload_bytes);
+        self.read_hits = self.read_hits.saturating_add(other.read_hits);
+        self.read_misses = self.read_misses.saturating_add(other.read_misses);
         self.writes = self.writes.saturating_add(other.writes);
         self.batch_keys = self.batch_keys.saturating_add(other.batch_keys);
         self.transaction_commits = self
@@ -251,6 +296,10 @@ impl WorkerStats {
         ApplicationPerformance {
             total_operations: self.total,
             successful_operations: self.successful,
+            read_hits: (self.read_hits.saturating_add(self.read_misses) > 0)
+                .then_some(self.read_hits),
+            read_misses: (self.read_hits.saturating_add(self.read_misses) > 0)
+                .then_some(self.read_misses),
             payload_mib_per_second: Payload::read_write(
                 self.read_payload_bytes,
                 self.write_payload_bytes,
@@ -316,6 +365,24 @@ mod tests {
         let application = stats.application(Duration::from_secs(1));
 
         assert_eq!(application.payload_mib_per_second, 3.0);
+    }
+
+    #[test]
+    fn application_reports_point_read_hits_and_misses() {
+        let mut stats = WorkerStats::default();
+        stats.record_success("read", Duration::from_millis(1), Payload::read_hit(400));
+        stats.record_success("read", Duration::from_millis(1), Payload::read_miss());
+        stats.record_success(
+            "batch-read",
+            Duration::from_millis(1),
+            Payload::read_batch(1_200, 3, 7),
+        );
+
+        let application = stats.application(Duration::from_secs(1));
+
+        assert_eq!(application.read_hits, Some(4));
+        assert_eq!(application.read_misses, Some(8));
+        assert_eq!(stats.read_payload_bytes, 1_600);
     }
 
     #[test]

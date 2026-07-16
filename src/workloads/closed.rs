@@ -340,12 +340,14 @@ async fn read(
     let value = stats
         .measure_api("get", db.get(key_for_id(id, variant.key_bytes())))
         .await
-        .map_err(|error| OperationError::Other(error.into()))?
-        .context("benchmark read key not found")
-        .map_err(OperationError::Other)?;
+        .map_err(|error| OperationError::Other(error.into()))?;
+    let payload = match value {
+        Some(value) => Payload::read_hit(value.len() as u64),
+        None => Payload::read_miss(),
+    };
     Ok(OperationOutcome {
         name,
-        payload: Payload::read(value.len() as u64),
+        payload,
         batch_keys: 0,
         write_handle: None,
         transaction_commit: false,
@@ -401,19 +403,21 @@ async fn multi_read(
     }))
     .await;
     let mut bytes = 0_u64;
+    let mut hits = 0_u64;
+    let mut misses = 0_u64;
     for (value, latency) in values {
         stats.record_api_latency("get", latency);
-        bytes = bytes.saturating_add(
-            value
-                .map_err(|error| OperationError::Other(error.into()))?
-                .context("multi-random-read key not found")
-                .map_err(OperationError::Other)?
-                .len() as u64,
-        );
+        match value.map_err(|error| OperationError::Other(error.into()))? {
+            Some(value) => {
+                hits = hits.saturating_add(1);
+                bytes = bytes.saturating_add(value.len() as u64);
+            }
+            None => misses = misses.saturating_add(1),
+        }
     }
     Ok(OperationOutcome {
         name: "batch-read",
-        payload: Payload::read(bytes),
+        payload: Payload::read_batch(bytes, hits, misses),
         batch_keys: 10,
         write_handle: None,
         transaction_commit: false,

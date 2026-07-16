@@ -419,6 +419,16 @@ fn validate_application_windows(
         .iter()
         .map(|window| window.errors)
         .sum::<u64>();
+    let read_hits = timeseries
+        .application_windows
+        .iter()
+        .map(|window| window.read_hits)
+        .sum::<u64>();
+    let read_misses = timeseries
+        .application_windows
+        .iter()
+        .map(|window| window.read_misses)
+        .sum::<u64>();
     let return_windows = timeseries
         .application_windows
         .iter()
@@ -441,6 +451,16 @@ fn validate_application_windows(
             "application windows contain {errors} errors but result reports {}",
             result.application.errors
         );
+    }
+    match (result.application.read_hits, result.application.read_misses) {
+        (Some(expected_hits), Some(expected_misses))
+            if expected_hits == read_hits && expected_misses == read_misses => {}
+        (None, None) if read_hits == 0 && read_misses == 0 => {}
+        (expected_hits, expected_misses) => {
+            bail!(
+                "application windows contain {read_hits} read hits and {read_misses} read misses but result reports {expected_hits:?} hits and {expected_misses:?} misses"
+            );
+        }
     }
 
     for window in &timeseries.application_windows {
