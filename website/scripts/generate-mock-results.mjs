@@ -196,9 +196,16 @@ function machineTraffic(readBytes, writeBytes) {
   };
 }
 
-function windowLatency(summary, count, index, extra = 1) {
-  const wave = 0.9 + Math.sin(index / 4) * 0.08;
-  const stall = index === 34 || index === 35 ? 2.4 : 1;
+function isStallWindow(index, windowCount) {
+  const centers = windowCount <= 120
+    ? [35]
+    : [0.18, 0.52, 0.84].map((position) => Math.round(windowCount * position));
+  return centers.some((center) => Math.abs(index - center) <= 1);
+}
+
+function windowLatency(summary, count, index, windowCount, extra = 1) {
+  const wave = 1 + Math.sin(index / 19) * 0.045 + Math.sin(index / 317) * 0.035;
+  const stall = isStallWindow(index, windowCount) ? 2.4 : 1;
   const factor = wave * stall * extra;
   const scale = (value) => Math.max(1, Math.round(value * factor));
   return {
@@ -247,8 +254,7 @@ function mockCompactorMetrics(samples, throughput, payload, isWrite) {
   ];
 }
 
-function mockTimeseries({ throughput, payload, databaseSize, isWrite, awaitDurable, openLoop, latency, apiCalls }) {
-  const windowCount = 60;
+function mockTimeseries({ windowCount, throughput, payload, databaseSize, isWrite, awaitDurable, openLoop, latency, apiCalls }) {
   let cumulativeOperations = 0;
   let networkBytesSent = 0;
   let networkBytesReceived = 0;
@@ -256,22 +262,32 @@ function mockTimeseries({ throughput, payload, databaseSize, isWrite, awaitDurab
   const applicationWindows = [];
   const durabilityWindows = isWrite && !awaitDurable ? [] : null;
   for (let index = 0; index < windowCount; index += 1) {
-    const traffic = 0.94 + Math.sin(index / 5) * 0.045 - (index === 34 || index === 35 ? 0.18 : 0);
+    const traffic = 1
+      + Math.sin(index / 23) * 0.025
+      + Math.sin(index / 503) * 0.018
+      - (isStallWindow(index, windowCount) ? 0.18 : 0);
     const successful = Math.max(1, Math.round(throughput * traffic));
     const offered = openLoop ? Math.round(throughput / 0.96) : null;
     const dropped = openLoop ? Math.max(0, offered - successful) : null;
-    const returnLatency = windowLatency(latency.summary, successful, index);
+    const returnLatency = windowLatency(latency.summary, successful, index, windowCount);
     const apiLatency = Object.fromEntries(Object.entries(apiCalls).map(([api, multiplier]) => [
       api,
       windowLatency(
         latency.summary,
         Math.max(1, Math.round(successful * multiplier)),
         index,
+        windowCount,
         apiLatencyFactor(api),
       ),
     ]));
     if (isWrite && index === windowCount - 1) {
-      apiLatency.flush = windowLatency(latency.summary, 1, index, apiLatencyFactor('flush'));
+      apiLatency.flush = windowLatency(
+        latency.summary,
+        1,
+        index,
+        windowCount,
+        apiLatencyFactor('flush'),
+      );
     }
     const readPayloadBytes = Math.round(successful * payload.read);
     const writePayloadBytes = Math.round(successful * payload.write);
@@ -293,9 +309,16 @@ function mockTimeseries({ throughput, payload, databaseSize, isWrite, awaitDurab
       return_latency: returnLatency,
       return_latency_by_operation: { operation: returnLatency },
       api_latency: apiLatency,
-      response_latency: openLoop ? windowLatency(latency.summary, successful, index, 1.08) : null,
+      response_latency: openLoop
+        ? windowLatency(latency.summary, successful, index, windowCount, 1.08)
+        : null,
       scheduling_delay: openLoop
-        ? windowLatency({ p50_ns: 40_000, p95_ns: 90_000, p99_ns: 180_000, p999_ns: 400_000, max_ns: 700_000 }, successful, index)
+        ? windowLatency(
+          { p50_ns: 40_000, p95_ns: 90_000, p99_ns: 180_000, p999_ns: 400_000, max_ns: 700_000 },
+          successful,
+          index,
+          windowCount,
+        )
         : null,
       batch_latency: null,
     });
@@ -304,7 +327,7 @@ function mockTimeseries({ throughput, payload, databaseSize, isWrite, awaitDurab
         start_offset_ns: index * 1_000_000_000,
         duration_ns: 1_000_000_000,
         writes_made_durable: successful,
-        durability_lag: windowLatency(latency.summary, successful, index, 5.5),
+        durability_lag: windowLatency(latency.summary, successful, index, windowCount, 5.5),
       });
     }
     samples.push(sample(
@@ -321,6 +344,7 @@ function mockTimeseries({ throughput, payload, databaseSize, isWrite, awaitDurab
 
 await rm(outputRoot, { recursive: true, force: true });
 const resultPaths = [];
+let largestChart = null;
 
 for (const suite of published.suites) {
   for (const workload of suite.workloads) {
@@ -328,26 +352,49 @@ for (const suite of published.suites) {
       const variant = variantDefinition.name;
       const { clients, target, scale } = variantSettings(variantDefinition);
       const latency = latencyTemplates[scale];
-      const operations = latency.summary.count;
       const throughput = mockThroughput(suite.name, workload.name, clients, target);
       const isWrite = writeWorkloads.has(workload.name);
       const awaitDurable = Boolean(workload.await_durable);
       const measurementMs = workload.measurement_ms ?? suite.measurement_ms;
       const measurementNs = measurementMs * 1_000_000;
-      const elapsedNs = measurementNs || Math.max(1, Math.round(operations / throughput * 1_000_000_000));
+      const windowCount = Math.max(60, Math.ceil(measurementMs / 1_000));
+      const elapsedNs = windowCount * 1_000_000_000;
       const recordCount = workload.record_count ?? suite.record_count;
       const keyBytes = workload.key_bytes ?? suite.key_bytes;
       const valueBytes = workload.value_bytes ?? suite.value_bytes;
       const payload = payloadPerOperation(workload.name, keyBytes, valueBytes, throughput);
       const apiCalls = apiCallsForWorkload(workload.name);
-      const aggregateMachineTraffic = machineTraffic(
-        operations * payload.read,
-        operations * payload.write,
-      );
       const databaseSize = Math.max(16 * 1024 * 1024, Math.round(recordCount * (keyBytes + valueBytes) * 0.42));
       const openLoop = target !== null;
       const transaction = workload.name === 'transaction-contention';
-      const durabilityLag = isWrite && !awaitDurable ? latency.summary : null;
+      const windowed = mockTimeseries({
+        windowCount, throughput, payload, databaseSize, isWrite, awaitDurable, openLoop, latency, apiCalls,
+      });
+      const finalSample = windowed.samples.at(-1);
+      const operations = finalSample?.operations ?? 0;
+      const completedRate = operations / windowCount;
+      const offeredOperations = openLoop ? Math.round((target ?? 0) * windowCount) : null;
+      const droppedOperations = offeredOperations === null
+        ? null
+        : Math.max(0, offeredOperations - operations);
+      const aggregateLatency = latencySummary(latency.summary, operations);
+      const aggregateMachineTraffic = {
+        upload: finalSample?.network_bytes_sent ?? 0,
+        download: finalSample?.network_bytes_received ?? 0,
+      };
+      const durabilityLag = isWrite && !awaitDurable ? aggregateLatency : null;
+      const chartPoints = windowCount * (
+        6
+        + Object.keys(apiCalls).length * 3
+        + (durabilityLag ? 3 : 0)
+      );
+      if (!largestChart || chartPoints > largestChart.chartPoints) {
+        largestChart = {
+          path: `/${version}/${suite.name}/${workload.name}/${variant}/`,
+          windows: windowCount,
+          chartPoints,
+        };
+      }
 
       const result = {
         identity: {
@@ -417,15 +464,15 @@ for (const suite of published.suites) {
         application: {
           total_operations: operations,
           successful_operations: operations,
-          accepted_ops_per_second: throughput,
-          completed_ops_per_second: throughput,
+          accepted_ops_per_second: completedRate,
+          completed_ops_per_second: completedRate,
           offered_ops_per_second: openLoop ? target : null,
-          dropped_operations: openLoop ? 0 : null,
-          dropped_ops_per_second: openLoop ? 0 : null,
-          payload_mib_per_second: throughput * (payload.read + payload.write) / 1_048_576,
+          dropped_operations: droppedOperations,
+          dropped_ops_per_second: droppedOperations === null ? null : droppedOperations / windowCount,
+          payload_mib_per_second: completedRate * (payload.read + payload.write) / 1_048_576,
           errors: 0,
-          return_latency: latency.summary,
-          return_latency_by_operation: { operation: latency.summary },
+          return_latency: aggregateLatency,
+          return_latency_by_operation: { operation: aggregateLatency },
           api_latency: {
             ...Object.fromEntries(Object.entries(apiCalls).map(([api, multiplier]) => [
               api,
@@ -437,8 +484,8 @@ for (const suite of published.suites) {
             ])),
             ...(isWrite ? { flush: latencySummary(latency.summary, 1, apiLatencyFactor('flush')) } : {}),
           },
-          response_latency: openLoop ? latency.summary : null,
-          scheduling_delay: openLoop ? latency.summary : null,
+          response_latency: openLoop ? aggregateLatency : null,
+          scheduling_delay: openLoop ? aggregateLatency : null,
           batch_latency: null,
           key_throughput_per_second: workload.name === 'multi-random-read' ? throughput * 10 : null,
           transaction_commits: transaction ? operations : null,
@@ -451,7 +498,7 @@ for (const suite of published.suites) {
         durability: {
           lag: durabilityLag,
           final_flush_drain_ns: isWrite ? 8_000_000 : null,
-          durable_ops_per_second: isWrite ? throughput * 0.98 : null,
+          durable_ops_per_second: isWrite ? completedRate * 0.98 : null,
           last_measured_sequence: isWrite ? operations : null,
           final_durable_sequence: isWrite ? operations : null,
         },
@@ -511,15 +558,15 @@ for (const suite of published.suites) {
           bytes_written: isWrite ? operations * valueBytes : 0,
           object_store_operation_bytes_read: Math.round(operations * valueBytes * 0.58),
           object_store_operation_bytes_written: isWrite ? operations * valueBytes : 0,
-          compaction_throughput_bytes_per_second: isWrite ? throughput * valueBytes * 0.31 : null,
+          compaction_throughput_bytes_per_second: isWrite ? completedRate * valueBytes * 0.31 : null,
           write_amplification: isWrite ? 1.18 : null,
           backpressure_ns: 0,
           compaction_backlog_bytes: isWrite ? Math.round(databaseSize * 0.03) : 0,
           five_minute_windows: workload.name === 'sustained-ingest'
             ? Array.from({ length: 12 }, (_, index) => ({
               start_offset_ns: index * 300_000_000_000,
-              operations: Math.round(throughput * 300),
-              ops_per_second: throughput * (1 - index * 0.005),
+              operations: Math.round(completedRate * 300),
+              ops_per_second: completedRate * (1 - index * 0.005),
               compaction_backlog_bytes: Math.round(databaseSize * index / 120),
               write_amplification: 1.12 + index * 0.01,
             }))
@@ -537,21 +584,21 @@ for (const suite of published.suites) {
         encoding: 'hdrhistogram-v2-deflate-base64',
         significant_digits: 3,
         histograms: {
-          return: latency.histogram,
-          'return/operation': latency.histogram,
+          return: { ...latency.histogram, count: operations },
+          'return/operation': { ...latency.histogram, count: operations },
           ...Object.fromEntries(Object.entries(apiCalls).map(([api, multiplier]) => [
             `api/${api}`,
             { ...latency.histogram, count: Math.max(1, Math.round(operations * multiplier)) },
           ])),
           ...(isWrite ? { 'api/flush': { ...latency.histogram, count: 1 } } : {}),
           ...objectStoreHistograms,
-          ...(openLoop ? { response: latency.histogram, scheduling_delay: latency.histogram } : {}),
-          ...(durabilityLag ? { durability_lag: latency.histogram } : {}),
+          ...(openLoop ? {
+            response: { ...latency.histogram, count: operations },
+            scheduling_delay: { ...latency.histogram, count: operations },
+          } : {}),
+          ...(durabilityLag ? { durability_lag: { ...latency.histogram, count: operations } } : {}),
         },
       };
-      const windowed = mockTimeseries({
-        throughput, payload, databaseSize, isWrite, awaitDurable, openLoop, latency, apiCalls,
-      });
       const timeseries = {
         interval_ns: 1_000_000_000,
         ...windowed,
@@ -593,6 +640,11 @@ await Promise.all([
 ]);
 
 console.log(`Generated ${resultPaths.length} mock benchmark variants in ${outputRoot}`);
+if (largestChart) {
+  console.log(
+    `Largest chart page: ${largestChart.path} (${largestChart.windows} one-second windows, approximately ${largestChart.chartPoints.toLocaleString()} plotted points)`,
+  );
+}
 
 async function writeJson(file, value) {
   await mkdir(path.dirname(file), { recursive: true });
