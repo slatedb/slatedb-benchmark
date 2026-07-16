@@ -5,6 +5,7 @@ use rand_distr::Zipf;
 
 // Match YCSB's ScrambledZipfianGenerator and Utils.fnvhash64.
 const YCSB_ZIPFIAN_ITEM_COUNT: u64 = 10_000_000_000;
+const YCSB_ZIPFIAN_EXPONENT: f64 = 0.99;
 const YCSB_FNV_OFFSET_BASIS_64: u64 = 0xcbf2_9ce4_8422_2325;
 const YCSB_FNV_PRIME_64: u64 = 1_099_511_628_211;
 const VALUE_CORPUS_BYTES: usize = 1_048_576;
@@ -108,7 +109,7 @@ impl KeySelector {
 
     pub fn zipfian(record_count: u64) -> Self {
         Self {
-            zipf: Zipf::new(YCSB_ZIPFIAN_ITEM_COUNT as f64, 0.99).ok(),
+            zipf: Zipf::new(YCSB_ZIPFIAN_ITEM_COUNT as f64, YCSB_ZIPFIAN_EXPONENT).ok(),
             record_count,
         }
     }
@@ -127,6 +128,35 @@ impl KeySelector {
     }
 }
 
+pub struct YcsbLatestSelector {
+    item_count: u64,
+    zipf: Zipf<f64>,
+}
+
+impl YcsbLatestSelector {
+    pub fn new(item_count: u64) -> Self {
+        let item_count = item_count.max(1);
+        Self {
+            item_count,
+            zipf: Zipf::new(item_count as f64, YCSB_ZIPFIAN_EXPONENT)
+                .expect("positive YCSB latest item count"),
+        }
+    }
+
+    pub fn sample(&mut self, item_count: u64, rng: &mut impl Rng) -> u64 {
+        let item_count = item_count.max(1);
+        if item_count != self.item_count {
+            self.item_count = item_count;
+            self.zipf = Zipf::new(item_count as f64, YCSB_ZIPFIAN_EXPONENT)
+                .expect("positive YCSB latest item count");
+        }
+        let rank = (self.zipf.sample(rng) as u64)
+            .saturating_sub(1)
+            .min(item_count - 1);
+        item_count - 1 - rank
+    }
+}
+
 fn ycsb_scramble(mut value: u64) -> u64 {
     let mut hash = YCSB_FNV_OFFSET_BASIS_64;
     for _ in 0..8 {
@@ -141,6 +171,7 @@ fn ycsb_scramble(mut value: u64) -> u64 {
 mod tests {
     use super::{
         key_for_id, prefix_key, random_unique_key, ycsb_scramble, KeySelector, ValueGenerator,
+        YcsbLatestSelector,
     };
     use rand::SeedableRng;
     use std::collections::BTreeSet;
@@ -220,5 +251,18 @@ mod tests {
         let mut rng = rand::rngs::StdRng::seed_from_u64(7);
 
         assert!((0..10_000).all(|_| selector.sample(&mut rng) < 1_000));
+    }
+
+    #[test]
+    fn latest_selector_biases_reads_recently_across_the_full_keyspace() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(19);
+        let mut selector = YcsbLatestSelector::new(100_000);
+        let samples = (0..10_000)
+            .map(|_| selector.sample(100_000, &mut rng))
+            .collect::<Vec<_>>();
+
+        assert!(samples.iter().all(|sample| *sample < 100_000));
+        assert!(samples.iter().any(|sample| *sample < 90_000));
+        assert!(samples.iter().filter(|sample| **sample >= 99_000).count() > 5_000);
     }
 }

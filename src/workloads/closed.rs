@@ -1,6 +1,8 @@
 use super::durability::DurabilitySender;
 use super::stats::{Payload, WorkerStats};
-use super::util::{key_for_id, prefix_key, random_unique_key, KeySelector, ValueGenerator};
+use super::util::{
+    key_for_id, prefix_key, random_unique_key, KeySelector, ValueGenerator, YcsbLatestSelector,
+};
 use crate::config::{KeyDistribution, VariantConfig, WorkloadKind};
 use crate::system::{measure_backpressure, ApplicationWindowRegistry};
 use anyhow::{Context, Result};
@@ -72,6 +74,8 @@ async fn worker_loop(
         KeyDistribution::Uniform => KeySelector::uniform(variant.record_count()),
         KeyDistribution::Zipfian => KeySelector::zipfian(variant.record_count()),
     };
+    let mut latest_selector = (variant.workload.kind == WorkloadKind::YcsbD)
+        .then(|| YcsbLatestSelector::new(variant.record_count()));
     let write_options = WriteOptions {
         await_durable: variant.workload.await_durable,
         ..Default::default()
@@ -91,6 +95,7 @@ async fn worker_loop(
         let (completion, backpressure) = measure_backpressure(execute_operation(
             &operation_context,
             &selector,
+            &mut latest_selector,
             &state,
             &mut rng,
             &mut values,
@@ -164,6 +169,7 @@ struct OperationContext<'a> {
 async fn execute_operation(
     context: &OperationContext<'_>,
     selector: &KeySelector,
+    latest_selector: &mut Option<YcsbLatestSelector>,
     state: &ClosedLoopState,
     rng: &mut StdRng,
     values: &mut ValueGenerator,
@@ -195,8 +201,10 @@ async fn execute_operation(
         WorkloadKind::YcsbD => {
             if rng.random_bool(0.95) {
                 let latest = state.next_insert.load(Ordering::Acquire).max(1);
-                let window = latest.min(10_000);
-                let id = latest.saturating_sub(1 + rng.random_range(0..window));
+                let id = latest_selector
+                    .as_mut()
+                    .expect("YCSB D latest selector")
+                    .sample(latest, rng);
                 read(db, variant, id, "read", stats).await
             } else {
                 return ycsb_d_insert(context, state, rng, values, stats).await;
