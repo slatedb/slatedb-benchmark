@@ -29,8 +29,12 @@ impl LatencyHistogram {
     }
 
     pub fn record(&mut self, duration: Duration) {
+        self.record_n(duration, 1);
+    }
+
+    pub fn record_n(&mut self, duration: Duration, count: u64) {
         let micros = duration.as_micros().clamp(1, MAX_MICROSECONDS as u128) as u64;
-        let _ = self.inner.record(micros);
+        let _ = self.inner.record_n(micros, count);
     }
 
     pub fn add(&mut self, other: &Self) -> Result<()> {
@@ -88,6 +92,13 @@ pub struct HistogramSet {
 impl HistogramSet {
     pub fn record(&mut self, name: impl Into<String>, duration: Duration) {
         self.values.entry(name.into()).or_default().record(duration);
+    }
+
+    pub fn record_n(&mut self, name: impl Into<String>, duration: Duration, count: u64) {
+        self.values
+            .entry(name.into())
+            .or_default()
+            .record_n(duration, count);
     }
 
     pub fn merge(&mut self, other: &Self) -> Result<()> {

@@ -134,6 +134,9 @@ Run the tests below in order against the same database.
 
 1. `bulk-load`: With one client, issue 900 million uniformly random puts over
    the 900-million-key ID space, sampling with replacement to match `fillrandom`.
+   Submit the puts to SlateDB in 1,024-record batches to avoid making async API
+   call overhead the bottleneck during dataset preparation; `db_bench` submits
+   them individually. Throughput and payload accounting remain record-based.
    Disable the WAL and compactor, and do not wait for durability during individual
    writes. Set both L0 SST limits to `u32::MAX` so the uncompacted L0 can hold the
    complete load. Flush all memtables after loading, restore the suite settings,

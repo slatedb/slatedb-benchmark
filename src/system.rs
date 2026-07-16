@@ -264,6 +264,33 @@ impl ApplicationWindowRecorder {
         );
     }
 
+    pub fn record_success_n(
+        &self,
+        operation: &str,
+        latency: Duration,
+        read_payload_bytes: u64,
+        write_payload_bytes: u64,
+        read_hits: u64,
+        read_misses: u64,
+        count: u64,
+    ) {
+        self.update(|window| {
+            window.completed_operations = window.completed_operations.saturating_add(count);
+            window.successful_operations = window.successful_operations.saturating_add(count);
+            window.read_payload_bytes =
+                window.read_payload_bytes.saturating_add(read_payload_bytes);
+            window.write_payload_bytes = window
+                .write_payload_bytes
+                .saturating_add(write_payload_bytes);
+            window.read_hits = window.read_hits.saturating_add(read_hits);
+            window.read_misses = window.read_misses.saturating_add(read_misses);
+            window.histograms.record_n("return", latency, count);
+            window
+                .histograms
+                .record_n(format!("return/{operation}"), latency, count);
+        });
+    }
+
     pub fn record_background_success(
         &self,
         operation: &str,
@@ -313,6 +340,17 @@ impl ApplicationWindowRecorder {
 
     pub fn record_error(&self, operation: &str, latency: Duration) {
         self.record_error_internal(operation, latency, true);
+    }
+
+    pub fn record_error_n(&self, operation: &str, latency: Duration, count: u64) {
+        self.update(|window| {
+            window.completed_operations = window.completed_operations.saturating_add(count);
+            window.errors = window.errors.saturating_add(count);
+            window.histograms.record_n("return", latency, count);
+            window
+                .histograms
+                .record_n(format!("return/{operation}"), latency, count);
+        });
     }
 
     pub fn record_background_error(&self, operation: &str, latency: Duration) {
@@ -966,6 +1004,37 @@ mod tests {
             1
         );
         assert_eq!(histograms.get("api/get").expect("API histogram").len(), 1);
+    }
+
+    #[test]
+    fn records_weighted_batch_completions() {
+        let windows = ApplicationWindowRegistry::new();
+        let worker = windows.register_window_recorder();
+        worker.record_success_n(
+            "insert",
+            Duration::from_millis(2),
+            0,
+            420 * 1_024,
+            0,
+            0,
+            1_024,
+        );
+        worker.record_error_n("insert", Duration::from_millis(3), 26);
+
+        let (window, histograms) = windows
+            .drain_window(0, 1_000_000_000)
+            .expect("drain application window");
+
+        assert_eq!(window.completed_operations, 1_050);
+        assert_eq!(window.successful_operations, 1_024);
+        assert_eq!(window.errors, 26);
+        assert_eq!(window.write_payload_bytes, 420 * 1_024);
+        assert_eq!(window.return_latency.expect("return latency").count, 1_050);
+        assert_eq!(window.return_latency_by_operation["insert"].count, 1_050);
+        assert_eq!(
+            histograms.get("return").expect("return histogram").len(),
+            1_050
+        );
     }
 
     #[test]

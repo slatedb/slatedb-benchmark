@@ -108,6 +108,36 @@ impl WorkerStats {
         self.record_success_internal(operation, latency, payload, true);
     }
 
+    pub fn record_success_n(
+        &mut self,
+        operation: &str,
+        latency: Duration,
+        payload: Payload,
+        count: u64,
+    ) {
+        self.total = self.total.saturating_add(count);
+        self.successful = self.successful.saturating_add(count);
+        self.read_payload_bytes = self.read_payload_bytes.saturating_add(payload.read_bytes);
+        self.write_payload_bytes = self.write_payload_bytes.saturating_add(payload.write_bytes);
+        self.read_hits = self.read_hits.saturating_add(payload.read_hits);
+        self.read_misses = self.read_misses.saturating_add(payload.read_misses);
+        if let Some(recorder) = &self.window_recorder {
+            recorder.record_success_n(
+                operation,
+                latency,
+                payload.read_bytes,
+                payload.write_bytes,
+                payload.read_hits,
+                payload.read_misses,
+                count,
+            );
+        } else {
+            self.histograms.record_n("return", latency, count);
+            self.histograms
+                .record_n(format!("return/{operation}"), latency, count);
+        }
+    }
+
     pub fn record_background_success(
         &mut self,
         operation: &str,
@@ -176,6 +206,18 @@ impl WorkerStats {
 
     pub fn record_error(&mut self, operation: &str, latency: Duration) {
         self.record_error_internal(operation, latency, true);
+    }
+
+    pub fn record_error_n(&mut self, operation: &str, latency: Duration, count: u64) {
+        self.total = self.total.saturating_add(count);
+        self.errors = self.errors.saturating_add(count);
+        if let Some(recorder) = &self.window_recorder {
+            recorder.record_error_n(operation, latency, count);
+        } else {
+            self.histograms.record_n("return", latency, count);
+            self.histograms
+                .record_n(format!("return/{operation}"), latency, count);
+        }
     }
 
     pub fn record_background_error(&mut self, operation: &str, latency: Duration) {

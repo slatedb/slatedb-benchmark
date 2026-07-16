@@ -14,7 +14,7 @@ use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 use slatedb::config::{PutOptions, ScanOptions, WriteOptions};
-use slatedb::{Db, ErrorKind, IsolationLevel, IterationOrder, WriteHandle};
+use slatedb::{Db, ErrorKind, IsolationLevel, IterationOrder, WriteBatch, WriteHandle};
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -644,6 +644,10 @@ pub(super) async fn run_bulk_load(
     windows: Option<Arc<ApplicationWindowRegistry>>,
 ) -> Result<WorkerStats> {
     const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
+    // db_bench's fillrandom issues individual puts. SlateDB's async call overhead
+    // dominates this 900M-record setup, so batch independent puts while preserving
+    // fillrandom sampling and record-level accounting.
+    const BATCH_RECORDS: u64 = 1_024;
 
     let mut rng = StdRng::from_os_rng();
     let mut values = ValueGenerator::new(variant.value_compression_ratio());
@@ -667,26 +671,31 @@ pub(super) async fn run_bulk_load(
     heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     heartbeat.tick().await;
 
-    for sequence in 0..count {
-        let id = rng.random_range(0..count);
-        let key = key_for_variant(variant, id);
-        let value = values.generate(variant.value_bytes(), &mut rng);
-        let payload_bytes = point_payload_bytes(variant, key.len(), value.len());
+    let mut completed_records = 0_u64;
+    while completed_records < count {
+        let batch_records = count.saturating_sub(completed_records).min(BATCH_RECORDS);
+        let mut batch = WriteBatch::new();
+        let mut payload_bytes = 0_u64;
+        for _ in 0..batch_records {
+            let id = rng.random_range(0..count);
+            let key = key_for_variant(variant, id);
+            let value = values.generate(variant.value_bytes(), &mut rng);
+            payload_bytes =
+                payload_bytes.saturating_add(point_payload_bytes(variant, key.len(), value.len()));
+            batch.put_bytes_with_options(key, value, &put_options);
+        }
         let started = Instant::now();
-        let mut put = Box::pin(measure_backpressure(db.put_with_options(
-            key,
-            value.clone(),
-            &put_options,
-            &write_options,
-        )));
+        let mut write = Box::pin(measure_backpressure(
+            db.write_with_options(batch, &write_options),
+        ));
         let (result, backpressure) = loop {
             tokio::select! {
-                result = &mut put => break result,
+                result = &mut write => break result,
                 _ = heartbeat.tick() => {
                     let now = Instant::now();
                     let interval = now.saturating_duration_since(last_reported_at);
                     let elapsed = now.saturating_duration_since(load_started);
-                    let records = sequence;
+                    let records = completed_records;
                     let recent_records = records.saturating_sub(last_reported_records);
                     let recent_puts_per_second =
                         recent_records as f64 / interval.as_secs_f64().max(f64::EPSILON);
@@ -731,22 +740,30 @@ pub(super) async fn run_bulk_load(
                 }
             }
         };
-        stats.record_api_latency("put", started.elapsed());
+        let return_latency = started.elapsed();
+        stats.record_api_latency("write", return_latency);
+        stats.record_batch_latency(return_latency);
         stats.record_backpressure(backpressure);
         match result {
             Ok(handle) => {
                 let returned_at = Instant::now();
-                stats.record_success("insert", started.elapsed(), Payload::write(payload_bytes));
+                stats.record_success_n(
+                    "insert",
+                    return_latency,
+                    Payload::write(payload_bytes),
+                    batch_records,
+                );
                 stats.record_write(returned_at, handle.seqnum());
                 if let Some(tracker) = &durability {
                     tracker.accepted(handle.seqnum(), returned_at);
                 }
             }
             Err(error) => {
-                stats.record_error("insert", started.elapsed());
-                tracing::debug!(%error, "bulk-load write failed");
+                stats.record_error_n("insert", return_latency, batch_records);
+                tracing::debug!(%error, batch_records, "bulk-load batch write failed");
             }
         }
+        completed_records = completed_records.saturating_add(batch_records);
     }
     let elapsed = load_started.elapsed();
     let average_puts_per_second = count as f64 / elapsed.as_secs_f64().max(f64::EPSILON);
@@ -976,7 +993,7 @@ pub async fn populate_dataset(
 
 #[cfg(test)]
 mod tests {
-    use super::{capped_writer, point_payload_bytes, ClosedLoopState};
+    use super::{capped_writer, point_payload_bytes, run_bulk_load, ClosedLoopState};
     use crate::config::BenchmarkConfig;
     use anyhow::Result;
     use object_store::memory::InMemory;
@@ -1019,6 +1036,47 @@ mod tests {
         assert_eq!(state.acknowledged_insert(), 12);
         state.acknowledge_insert(third);
         assert_eq!(state.acknowledged_insert(), 13);
+    }
+
+    #[tokio::test]
+    async fn bulk_load_batches_writes_but_counts_records() -> Result<()> {
+        let benchmark = BenchmarkConfig::load_from(Path::new("config"))?;
+        let mut variant = benchmark
+            .select(Some("rocksdb"), Some("bulk-load"), None)?
+            .pop()
+            .expect("configured bulk-load variant");
+        variant.workload.record_count = Some(2_050);
+        let db = Arc::new(
+            Db::builder("bulk-load-batch-test", Arc::new(InMemory::new()))
+                .build()
+                .await?,
+        );
+
+        let stats = run_bulk_load(Arc::clone(&db), &variant, None, None).await?;
+
+        assert_eq!(stats.total, 2_050);
+        assert_eq!(stats.successful, 2_050);
+        assert_eq!(stats.errors, 0);
+        assert_eq!(stats.writes, 3);
+        assert_eq!(stats.write_payload_bytes, 2_050 * 420);
+        assert_eq!(
+            stats
+                .histograms
+                .get("return/insert")
+                .expect("insert return histogram")
+                .len(),
+            2_050
+        );
+        assert_eq!(
+            stats
+                .histograms
+                .get("api/write")
+                .expect("write API histogram")
+                .len(),
+            3
+        );
+        db.close().await?;
+        Ok(())
     }
 
     #[tokio::test]
