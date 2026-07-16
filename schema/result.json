@@ -92,10 +92,12 @@
     },
     "application": {
       "type": "object", "additionalProperties": false,
-      "required": ["total_operations", "successful_operations", "read_hits", "read_misses", "payload_mib_per_second", "errors", "return_latency", "return_latency_by_operation", "api_latency", "batch_latency", "key_throughput_per_second", "transaction_commits", "transaction_aborts", "transaction_conflicts", "transaction_commit_rate", "transaction_abort_rate", "transaction_conflict_rate"],
+      "required": ["total_operations", "successful_operations", "read_hits", "read_misses", "background_writer_target_mib_per_second", "background_writer_achieved_mib_per_second", "payload_mib_per_second", "errors", "return_latency", "return_latency_by_operation", "api_latency", "batch_latency", "key_throughput_per_second", "transaction_commits", "transaction_aborts", "transaction_conflicts", "transaction_commit_rate", "transaction_abort_rate", "transaction_conflict_rate"],
       "properties": {
         "total_operations": { "type": "integer", "minimum": 0 }, "successful_operations": { "type": "integer", "minimum": 0 },
         "read_hits": { "type": ["integer", "null"], "minimum": 0 }, "read_misses": { "type": ["integer", "null"], "minimum": 0 },
+        "background_writer_target_mib_per_second": { "$ref": "#/$defs/nullableNumber" },
+        "background_writer_achieved_mib_per_second": { "$ref": "#/$defs/nullableNumber" },
         "payload_mib_per_second": { "type": "number", "minimum": 0 }, "errors": { "type": "integer", "minimum": 0 },
         "return_latency": { "$ref": "#/$defs/latency" },
         "return_latency_by_operation": { "type": "object", "additionalProperties": { "$ref": "#/$defs/latency" } },

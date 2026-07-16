@@ -162,6 +162,11 @@ fn validate_contract_values(
     ] {
         validate_nonnegative_finite(value, name)?;
     }
+    validate_background_writer_throughput(
+        &result.identity.workload,
+        result.application.background_writer_target_mib_per_second,
+        result.application.background_writer_achieved_mib_per_second,
+    )?;
     if result.source_files.histograms != "histograms.json"
         || result.source_files.timeseries != "timeseries.json"
     {
@@ -181,6 +186,34 @@ fn validate_contract_values(
     }
     for sample in &timeseries.samples {
         validate_nonnegative_finite(sample.cpu_percent, "time-series CPU")?;
+    }
+    Ok(())
+}
+
+fn validate_background_writer_throughput(
+    workload: &str,
+    target: Option<f64>,
+    achieved: Option<f64>,
+) -> Result<()> {
+    let is_while_writing = matches!(
+        workload,
+        "read-while-writing" | "forward-range-while-writing" | "reverse-range-while-writing"
+    );
+    match (is_while_writing, target, achieved) {
+        (true, Some(target), Some(achieved)) => {
+            validate_nonnegative_finite(target, "background writer target throughput")?;
+            validate_nonnegative_finite(achieved, "background writer achieved throughput")?;
+            if target != 2.0 {
+                bail!("while-writing workload has {target} MiB/s writer target, expected 2 MiB/s");
+            }
+        }
+        (true, _, _) => {
+            bail!("while-writing workload does not report writer target and achieved throughput");
+        }
+        (false, None, None) => {}
+        (false, _, _) => {
+            bail!("non-while-writing workload reports background writer throughput");
+        }
     }
     Ok(())
 }
@@ -700,7 +733,9 @@ fn find_named(root: &Path, name: &str) -> Result<Vec<PathBuf>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{validate_return_histogram_count, validate_scale};
+    use super::{
+        validate_background_writer_throughput, validate_return_histogram_count, validate_scale,
+    };
     use crate::model::{ApplicationPerformance, LatencySummary};
 
     #[test]
@@ -714,6 +749,18 @@ mod tests {
             validate_return_histogram_count(&application, 8, 2)
                 .expect("valid background return count"),
             10
+        );
+    }
+
+    #[test]
+    fn while_writing_workloads_require_target_and_achieved_throughput() {
+        validate_background_writer_throughput("read-while-writing", Some(2.0), Some(1.98))
+            .expect("valid writer throughput");
+        assert!(
+            validate_background_writer_throughput("read-while-writing", Some(2.0), None).is_err()
+        );
+        assert!(
+            validate_background_writer_throughput("random-read", Some(2.0), Some(2.0)).is_err()
         );
     }
 

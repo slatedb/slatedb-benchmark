@@ -43,6 +43,8 @@ export type BenchmarkResult = {
     successful_operations: number;
     read_hits: number | null;
     read_misses: number | null;
+    background_writer_target_mib_per_second: number | null;
+    background_writer_achieved_mib_per_second: number | null;
     payload_mib_per_second: number;
     errors: number;
     return_latency: Latency;

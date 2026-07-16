@@ -14,6 +14,8 @@ pub struct WorkerStats {
     pub write_payload_bytes: u64,
     pub read_hits: u64,
     pub read_misses: u64,
+    pub background_writer_target_bytes_per_second: Option<u64>,
+    pub background_writer_logical_bytes: u64,
     pub writes: u64,
     pub batch_keys: u64,
     pub transaction_commits: u64,
@@ -113,6 +115,19 @@ impl WorkerStats {
         payload: Payload,
     ) {
         self.record_success_internal(operation, latency, payload, false);
+    }
+
+    pub fn record_background_writer_success(
+        &mut self,
+        operation: &str,
+        latency: Duration,
+        payload: Payload,
+        logical_bytes: u64,
+    ) {
+        self.record_background_success(operation, latency, payload);
+        self.background_writer_logical_bytes = self
+            .background_writer_logical_bytes
+            .saturating_add(logical_bytes);
     }
 
     fn record_success_internal(
@@ -258,6 +273,12 @@ impl WorkerStats {
             .saturating_add(other.write_payload_bytes);
         self.read_hits = self.read_hits.saturating_add(other.read_hits);
         self.read_misses = self.read_misses.saturating_add(other.read_misses);
+        self.background_writer_target_bytes_per_second = self
+            .background_writer_target_bytes_per_second
+            .or(other.background_writer_target_bytes_per_second);
+        self.background_writer_logical_bytes = self
+            .background_writer_logical_bytes
+            .saturating_add(other.background_writer_logical_bytes);
         self.writes = self.writes.saturating_add(other.writes);
         self.batch_keys = self.batch_keys.saturating_add(other.batch_keys);
         self.transaction_commits = self
@@ -300,6 +321,12 @@ impl WorkerStats {
                 .then_some(self.read_hits),
             read_misses: (self.read_hits.saturating_add(self.read_misses) > 0)
                 .then_some(self.read_misses),
+            background_writer_target_mib_per_second: self
+                .background_writer_target_bytes_per_second
+                .map(|bytes| bytes as f64 / (1024.0 * 1024.0)),
+            background_writer_achieved_mib_per_second: self
+                .background_writer_target_bytes_per_second
+                .map(|_| self.background_writer_logical_bytes as f64 / (1024.0 * 1024.0) / seconds),
             payload_mib_per_second: Payload::read_write(
                 self.read_payload_bytes,
                 self.write_payload_bytes,
@@ -400,6 +427,33 @@ mod tests {
         assert_eq!(
             application.return_latency_by_operation["writer-update"].count,
             1
+        );
+    }
+
+    #[test]
+    fn application_reports_background_writer_target_and_achieved_rate() {
+        let mut stats = WorkerStats::default();
+        stats.background_writer_target_bytes_per_second = Some(2 * 1024 * 1024);
+        stats.record_background_writer_success(
+            "writer-update",
+            Duration::from_millis(1),
+            Payload::write(400),
+            420,
+        );
+
+        let application = stats.application(Duration::from_secs(1));
+
+        assert_eq!(
+            application.background_writer_target_mib_per_second,
+            Some(2.0)
+        );
+        assert_eq!(
+            application.background_writer_achieved_mib_per_second,
+            Some(420.0 / (1024.0 * 1024.0))
+        );
+        assert_eq!(
+            application.payload_mib_per_second,
+            400.0 / (1024.0 * 1024.0)
         );
     }
 }

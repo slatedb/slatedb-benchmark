@@ -7,7 +7,9 @@ use super::util::{
 use crate::config::{KeyDistribution, VariantConfig, WorkloadKind};
 use crate::system::{measure_backpressure, ApplicationWindowRegistry};
 use anyhow::{Context, Result};
+use bytes::Bytes;
 use futures::future::join_all;
+use futures::stream::{FuturesUnordered, StreamExt};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
@@ -794,16 +796,15 @@ async fn capped_writer(
     durability: Option<DurabilitySender>,
     windows: Option<Arc<ApplicationWindowRegistry>>,
 ) -> Result<WorkerStats> {
-    let bytes_per_second = 2 * 1024 * 1024_u64;
-    let ops_per_second = (bytes_per_second / variant.value_bytes() as u64).max(1);
-    let period = Duration::from_secs_f64(1.0 / ops_per_second as f64);
+    const TARGET_BYTES_PER_SECOND: u64 = 2 * 1024 * 1024;
+    const MAX_IN_FLIGHT: usize = 1024;
+
+    let logical_bytes_per_write = variant.key_bytes().saturating_add(variant.value_bytes()) as u64;
+    let period =
+        Duration::from_secs_f64(logical_bytes_per_write as f64 / TARGET_BYTES_PER_SECOND as f64);
     let mut ticker = tokio::time::interval(period);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let selector = KeySelector::uniform(variant.record_count());
-    let options = WriteOptions {
-        await_durable: true,
-        ..Default::default()
-    };
     let mut rng = StdRng::from_os_rng();
     let mut values = ValueGenerator::new(variant.value_compression_ratio());
     let mut stats = WorkerStats::with_window_recorder(
@@ -811,41 +812,110 @@ async fn capped_writer(
             .as_ref()
             .map(|windows| windows.register_window_recorder()),
     );
-    while Instant::now() < deadline {
-        ticker.tick().await;
-        let started = Instant::now();
-        let value = values.generate(variant.value_bytes(), &mut rng);
-        let (result, backpressure) = measure_backpressure(stats.measure_api(
-            "put",
-            db.put_with_options(
-                key_for_variant(&variant, selector.sample(&mut rng)),
-                value.clone(),
-                &PutOptions::default(),
-                &options,
-            ),
-        ))
-        .await;
-        stats.record_backpressure(backpressure);
-        match result {
-            Ok(handle) => {
-                let returned_at = Instant::now();
-                stats.record_background_success(
-                    "writer-update",
-                    started.elapsed(),
-                    Payload::write(value.len() as u64),
-                );
-                stats.record_write(returned_at, handle.seqnum());
-                if let Some(tracker) = &durability {
-                    tracker.accepted(handle.seqnum(), returned_at);
+    stats.background_writer_target_bytes_per_second = Some(TARGET_BYTES_PER_SECOND);
+    let mut in_flight = FuturesUnordered::new();
+    let tokio_deadline = tokio::time::Instant::from_std(deadline);
+
+    loop {
+        if Instant::now() >= deadline {
+            break;
+        }
+        if in_flight.len() >= MAX_IN_FLIGHT {
+            let completion = in_flight
+                .next()
+                .await
+                .context("capped writer pipeline unexpectedly became empty")?;
+            record_capped_write(&mut stats, completion, durability.as_ref());
+            continue;
+        }
+
+        tokio::select! {
+            _ = ticker.tick() => {
+                let key = key_for_variant(&variant, selector.sample(&mut rng));
+                let value = values.generate(variant.value_bytes(), &mut rng);
+                in_flight.push(execute_capped_write(
+                    Arc::clone(&db),
+                    key,
+                    value,
+                    Instant::now(),
+                ));
+            }
+            completion = in_flight.next(), if !in_flight.is_empty() => {
+                if let Some(completion) = completion {
+                    record_capped_write(&mut stats, completion, durability.as_ref());
                 }
             }
-            Err(error) => {
-                stats.record_background_error("writer-update", started.elapsed());
-                tracing::debug!(%error, "capped writer failed");
-            }
+            _ = tokio::time::sleep_until(tokio_deadline) => break,
         }
     }
+
+    while let Some(completion) = in_flight.next().await {
+        record_capped_write(&mut stats, completion, durability.as_ref());
+    }
     Ok(stats)
+}
+
+struct CappedWriteCompletion {
+    result: std::result::Result<WriteHandle, slatedb::Error>,
+    return_latency: Duration,
+    api_latency: Duration,
+    backpressure: Duration,
+    value_bytes: u64,
+    logical_bytes: u64,
+}
+
+async fn execute_capped_write(
+    db: Arc<Db>,
+    key: Bytes,
+    value: Bytes,
+    started: Instant,
+) -> CappedWriteCompletion {
+    let value_bytes = value.len() as u64;
+    let logical_bytes = key.len().saturating_add(value.len()) as u64;
+    let options = WriteOptions {
+        await_durable: true,
+        ..Default::default()
+    };
+    let api_started = Instant::now();
+    let (result, backpressure) =
+        measure_backpressure(db.put_with_options(key, value, &PutOptions::default(), &options))
+            .await;
+    CappedWriteCompletion {
+        result,
+        return_latency: started.elapsed(),
+        api_latency: api_started.elapsed(),
+        backpressure,
+        value_bytes,
+        logical_bytes,
+    }
+}
+
+fn record_capped_write(
+    stats: &mut WorkerStats,
+    completion: CappedWriteCompletion,
+    durability: Option<&DurabilitySender>,
+) {
+    stats.record_api_latency("put", completion.api_latency);
+    stats.record_backpressure(completion.backpressure);
+    match completion.result {
+        Ok(handle) => {
+            let returned_at = Instant::now();
+            stats.record_background_writer_success(
+                "writer-update",
+                completion.return_latency,
+                Payload::write(completion.value_bytes),
+                completion.logical_bytes,
+            );
+            stats.record_write(returned_at, handle.seqnum());
+            if let Some(tracker) = durability {
+                tracker.accepted(handle.seqnum(), returned_at);
+            }
+        }
+        Err(error) => {
+            stats.record_background_error("writer-update", completion.return_latency);
+            tracing::debug!(%error, "capped writer failed");
+        }
+    }
 }
 
 async fn merge_tasks(mut tasks: JoinSet<Result<WorkerStats>>) -> Result<WorkerStats> {
@@ -892,7 +962,15 @@ pub async fn populate_dataset(
 
 #[cfg(test)]
 mod tests {
-    use super::ClosedLoopState;
+    use super::{capped_writer, ClosedLoopState};
+    use crate::config::BenchmarkConfig;
+    use anyhow::Result;
+    use object_store::memory::InMemory;
+    use slatedb::config::Settings;
+    use slatedb::Db;
+    use std::path::Path;
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn insert_frontier_advances_after_out_of_order_completions() {
@@ -908,5 +986,61 @@ mod tests {
         assert_eq!(state.acknowledged_insert(), 12);
         state.acknowledge_insert(third);
         assert_eq!(state.acknowledged_insert(), 13);
+    }
+
+    #[tokio::test]
+    async fn capped_writer_pipelines_durable_writes() -> Result<()> {
+        let benchmark = BenchmarkConfig::load_from(Path::new("config"))?;
+        let variant = benchmark
+            .select(Some("rocksdb"), Some("read-while-writing"), None)?
+            .pop()
+            .expect("configured while-writing variant");
+        let settings = Settings {
+            flush_interval: Some(Duration::from_millis(100)),
+            compactor_options: None,
+            ..Default::default()
+        };
+        let db = Arc::new(
+            Db::builder("capped-writer-test", Arc::new(InMemory::new()))
+                .with_settings(settings)
+                .build()
+                .await?,
+        );
+
+        let started = Instant::now();
+        let stats = capped_writer(
+            Arc::clone(&db),
+            variant,
+            started + Duration::from_millis(350),
+            None,
+            None,
+        )
+        .await?;
+        let elapsed = started.elapsed();
+
+        assert!(
+            stats.successful > 100,
+            "expected pipelined writes, got {}",
+            stats.successful
+        );
+        assert_eq!(stats.errors, 0);
+        assert_eq!(
+            stats.background_writer_target_bytes_per_second,
+            Some(2 * 1024 * 1024)
+        );
+        assert_eq!(
+            stats.background_writer_logical_bytes,
+            stats.successful * 420
+        );
+        let achieved = stats
+            .application(elapsed)
+            .background_writer_achieved_mib_per_second
+            .expect("achieved writer throughput");
+        assert!(
+            (1.0..=2.05).contains(&achieved),
+            "expected writer close to its 2 MiB/s cap, got {achieved} MiB/s"
+        );
+        db.close().await?;
+        Ok(())
     }
 }

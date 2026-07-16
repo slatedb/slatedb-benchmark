@@ -111,6 +111,8 @@ pub struct ApplicationPerformance {
     pub successful_operations: u64,
     pub read_hits: Option<u64>,
     pub read_misses: Option<u64>,
+    pub background_writer_target_mib_per_second: Option<f64>,
+    pub background_writer_achieved_mib_per_second: Option<f64>,
     pub payload_mib_per_second: f64,
     pub errors: u64,
     pub return_latency: LatencySummary,
