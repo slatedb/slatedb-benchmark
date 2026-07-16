@@ -755,7 +755,7 @@ mod tests {
     #[test]
     fn release_catalog_contains_every_documented_variant() {
         let benchmark = BenchmarkConfig::load_from(Path::new("config")).expect("config");
-        assert_eq!(benchmark.catalog(None).expect("catalog").len(), 24);
+        assert_eq!(benchmark.catalog(None).expect("catalog").len(), 19);
     }
 
     #[test]
@@ -812,7 +812,7 @@ mod tests {
             suites,
             BTreeMap::from([
                 ("rocksdb".to_string(), 9),
-                ("slatedb".to_string(), 9),
+                ("slatedb".to_string(), 4),
                 ("ycsb".to_string(), 6),
             ])
         );
@@ -873,6 +873,11 @@ mod tests {
         assert_eq!(slatedb.key_bytes, 16);
         assert_eq!(slatedb.value_bytes, 1024);
         assert_eq!(slatedb.value_compression_ratio, 1.0);
+        assert!(slatedb.workloads.iter().all(|workload| {
+            workload.variants.len() == 1
+                && workload.variants[0].name == "clients-64"
+                && workload.variants[0].clients == 64
+        }));
     }
 
     #[test]

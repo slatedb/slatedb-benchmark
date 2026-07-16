@@ -140,15 +140,16 @@ apply to SlateDB's object-store path, so this suite omits that variant.
 
 ## SlateDB-specific suite
 
-Use the YCSB suite settings unless a test specifies otherwise.
+Use the YCSB suite settings unless a test specifies otherwise. All workloads
+run with 64 clients.
 
 1. `cold-read`: Run uniform random reads after restarting SlateDB and clearing
    its caches. Skip the warmup.
 2. `sustained-ingest`: Insert unique random keys with 64 clients for 60 minutes.
    Report 5-minute windows, compaction backlog, and write amplification.
 3. `transaction-contention`: Run 10-operation transactions containing 50%
-   reads and 50% updates against a 10,000-key hot set. Run with 16 and 64
-   clients and report commit, abort, and conflict rates.
+   reads and 50% updates against a 10,000-key hot set. Report commit, abort,
+   and conflict rates.
 4. `prefix-scan`: Store 10 records under each of 10 million 8-byte prefixes,
    with an 8-byte suffix completing each key. Select prefixes uniformly and
    scan all 10 records with SlateDB's prefix-scan API.
