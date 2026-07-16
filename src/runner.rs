@@ -18,19 +18,21 @@ use crate::workloads::{
     WorkloadOutcome,
 };
 use anyhow::{bail, Context, Result};
+use bytes::Bytes;
 use chrono::Utc;
 use object_store::path::Path;
 use object_store::ObjectStore;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::{Digest, Sha256};
-use slatedb::admin::{AdminBuilder, CloneSourceSpec};
+use slatedb::admin::{Admin, AdminBuilder, CloneSourceSpec};
+use slatedb::compactor::{Compaction, CompactionSpec, CompactionStatus, SourceId};
 use slatedb::config::{CheckpointOptions, Settings};
 use slatedb::db_cache::{
     foyer::{FoyerCache, FoyerCacheOptions},
     DbCache, SplitCache,
 };
 use slatedb::{Db, SstBlockSize, VersionedManifest};
-use slatedb_common::metrics::{MetricValue, Metrics, MetricsRecorder};
+use slatedb_common::metrics::{Metrics, MetricsRecorder};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path as FsPath, PathBuf};
@@ -411,7 +413,7 @@ async fn prepare_golden_database(
         prefix_layout,
     )
     .await?;
-    wait_for_compaction(&db, &recorder, &variant.suite).await?;
+    compact_database_fully(path.clone(), Arc::clone(&store), &variant.suite).await?;
     db.close().await.context("closing golden database")?;
 
     let admin = AdminBuilder::new(path.clone(), Arc::clone(&store)).build();
@@ -507,7 +509,7 @@ async fn execute_bulk_load_and_compact(
     });
     let compaction_db = match open_database_with_object_store_cache(
         database_path.clone(),
-        store,
+        Arc::clone(&store),
         &bulk_variant.suite,
         compaction_settings,
         object_store_cache.as_ref().map(|cache| cache.path()),
@@ -523,8 +525,12 @@ async fn execute_bulk_load_and_compact(
             return Err(error);
         }
     };
-    let compaction_result =
-        wait_for_compaction(&compaction_db, &recorder, &bulk_variant.suite).await;
+    let compaction_result = compact_database_fully(
+        database_path.clone(),
+        Arc::clone(&store),
+        &bulk_variant.suite,
+    )
+    .await;
     let measurement_result = match measurement {
         Some(measurement) => measurement.finish().await.map(Some),
         None => Ok(None),
@@ -785,39 +791,216 @@ fn object_store_cache_directory(suite: &SuiteConfig) -> Result<Option<tempfile::
         .transpose()
 }
 
-async fn wait_for_compaction(
-    db: &Db,
-    recorder: &BenchmarkMetricsRecorder,
+async fn compact_database_fully(
+    database_path: Path,
+    store: Arc<dyn ObjectStore>,
     suite: &SuiteConfig,
 ) -> Result<()> {
+    let admin = AdminBuilder::new(database_path, store).build();
     let timeout = Duration::from_millis(suite.compaction_timeout_ms);
     let quiet = Duration::from_millis(suite.compaction_quiet_ms);
     let started = Instant::now();
-    let mut stable_since = Instant::now();
-    let mut manifest_id = db.status().current_manifest.id();
+
     loop {
-        if started.elapsed() > timeout {
-            bail!("timed out waiting for compaction to become idle");
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-        let current = db.status().current_manifest.id();
-        if current != manifest_id {
-            manifest_id = current;
+        wait_for_compactor_quiet(&admin, started, timeout, quiet).await?;
+        let state = admin
+            .read_compactor_state_view()
+            .await
+            .context("reading compactor state before full compaction")?;
+        let Some(spec) = next_full_compaction_spec(state.manifest())? else {
+            validate_fully_compacted_manifest(state.manifest())?;
+            return Ok(());
+        };
+
+        let compaction = admin
+            .submit_compaction(spec)
+            .await
+            .context("submitting full-database compaction")?;
+        wait_for_submitted_compaction(&admin, &compaction, started, timeout).await?;
+    }
+}
+
+async fn wait_for_compactor_quiet(
+    admin: &Admin,
+    started: Instant,
+    timeout: Duration,
+    quiet: Duration,
+) -> Result<()> {
+    let mut stable_since = Instant::now();
+    let mut last_state = None;
+    loop {
+        ensure_compaction_within_timeout(started, timeout)?;
+        let state = admin
+            .read_compactor_state_view()
+            .await
+            .context("reading compactor state while waiting for quiescence")?;
+        let state_version = (
+            state.manifest().id(),
+            state.compactions().map(|compactions| compactions.id()),
+        );
+        if last_state != Some(state_version) {
+            last_state = Some(state_version);
             stable_since = Instant::now();
         }
-        let running = recorder
-            .snapshot()
-            .by_name(slatedb::compactor::stats::RUNNING_COMPACTIONS)
-            .iter()
-            .filter_map(|metric| match metric.value {
-                MetricValue::Gauge(value) | MetricValue::UpDownCounter(value) => Some(value),
-                _ => None,
-            })
-            .sum::<i64>();
-        if running == 0 && stable_since.elapsed() >= quiet {
+
+        let mut active = false;
+        if let Some(compactions) = state.compactions() {
+            for compaction in compactions.recent_compactions() {
+                match compaction.status() {
+                    CompactionStatus::Submitted
+                    | CompactionStatus::Scheduled
+                    | CompactionStatus::Running
+                    | CompactionStatus::Compacted => active = true,
+                    CompactionStatus::Failed => {
+                        bail!(
+                            "compaction {} failed before full-database compaction",
+                            compaction.id()
+                        );
+                    }
+                    CompactionStatus::Completed => {}
+                }
+            }
+        }
+
+        if !active && stable_since.elapsed() >= quiet {
             return Ok(());
         }
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
+}
+
+async fn wait_for_submitted_compaction(
+    admin: &Admin,
+    submitted: &Compaction,
+    started: Instant,
+    timeout: Duration,
+) -> Result<()> {
+    let compaction_id = submitted.id();
+    loop {
+        ensure_compaction_within_timeout(started, timeout)?;
+        let compaction = admin
+            .read_compaction(compaction_id, None)
+            .await
+            .with_context(|| format!("reading submitted compaction {compaction_id}"))?
+            .with_context(|| format!("submitted compaction {compaction_id} disappeared"))?;
+        match compaction.status() {
+            CompactionStatus::Completed => return Ok(()),
+            CompactionStatus::Failed => bail!("full-database compaction {compaction_id} failed"),
+            CompactionStatus::Submitted
+            | CompactionStatus::Scheduled
+            | CompactionStatus::Running
+            | CompactionStatus::Compacted => {}
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+fn ensure_compaction_within_timeout(started: Instant, timeout: Duration) -> Result<()> {
+    if started.elapsed() > timeout {
+        bail!("timed out performing full-database compaction");
+    }
+    Ok(())
+}
+
+fn next_full_compaction_spec(manifest: &VersionedManifest) -> Result<Option<CompactionSpec>> {
+    let fresh_destination = manifest
+        .compacted()
+        .iter()
+        .map(|run| run.id)
+        .chain(
+            manifest
+                .segments()
+                .iter()
+                .flat_map(|segment| segment.compacted().iter().map(|run| run.id)),
+        )
+        .max()
+        .map_or(Ok(0), |id| {
+            id.checked_add(1)
+                .context("sorted-run id space exhausted during full compaction")
+        })?;
+
+    let root_sources = manifest
+        .l0()
+        .iter()
+        .map(|view| SourceId::SstView(view.id))
+        .chain(
+            manifest
+                .compacted()
+                .iter()
+                .map(|run| SourceId::SortedRun(run.id)),
+        )
+        .collect();
+    if let Some(spec) = full_tree_compaction_spec(
+        Bytes::new(),
+        root_sources,
+        manifest.compacted().iter().map(|run| run.id).collect(),
+        manifest.l0().len(),
+        fresh_destination,
+    ) {
+        return Ok(Some(spec));
+    }
+
+    for segment in manifest.segments() {
+        let sources = segment
+            .l0()
+            .iter()
+            .map(|view| SourceId::SstView(view.id))
+            .chain(
+                segment
+                    .compacted()
+                    .iter()
+                    .map(|run| SourceId::SortedRun(run.id)),
+            )
+            .collect();
+        if let Some(spec) = full_tree_compaction_spec(
+            segment.prefix().clone(),
+            sources,
+            segment.compacted().iter().map(|run| run.id).collect(),
+            segment.l0().len(),
+            fresh_destination,
+        ) {
+            return Ok(Some(spec));
+        }
+    }
+    Ok(None)
+}
+
+fn full_tree_compaction_spec(
+    segment: Bytes,
+    sources: Vec<SourceId>,
+    sorted_run_ids: Vec<u32>,
+    l0_count: usize,
+    fresh_destination: u32,
+) -> Option<CompactionSpec> {
+    if l0_count == 0 && sorted_run_ids.len() <= 1 {
+        return None;
+    }
+    let destination = sorted_run_ids
+        .into_iter()
+        .min()
+        .unwrap_or(fresh_destination);
+    Some(CompactionSpec::for_segment(segment, sources, destination))
+}
+
+fn validate_fully_compacted_manifest(manifest: &VersionedManifest) -> Result<()> {
+    if !manifest.l0().is_empty() || manifest.compacted().len() > 1 {
+        bail!(
+            "full compaction left root tree with {} L0 SSTs and {} sorted runs",
+            manifest.l0().len(),
+            manifest.compacted().len()
+        );
+    }
+    for segment in manifest.segments() {
+        if !segment.l0().is_empty() || segment.compacted().len() > 1 {
+            bail!(
+                "full compaction left segment {:?} with {} L0 SSTs and {} sorted runs",
+                segment.prefix(),
+                segment.l0().len(),
+                segment.compacted().len()
+            );
+        }
+    }
+    Ok(())
 }
 
 fn lsm_digest(db: &Db) -> Result<String> {
@@ -883,8 +1066,9 @@ fn average_database_bytes(
 #[cfg(test)]
 mod tests {
     use super::{
-        average_database_bytes, bulk_load_settings, close_database_after, enabled_features,
-        execute_rocks_variant, lsm_digest, object_store_cache_directory, open_database,
+        average_database_bytes, bulk_load_settings, close_database_after, compact_database_fully,
+        enabled_features, execute_rocks_variant, lsm_digest, object_store_cache_directory,
+        open_database,
     };
     use crate::cli::RunArgs;
     use crate::config::{
@@ -899,6 +1083,7 @@ mod tests {
     use object_store::memory::InMemory;
     use object_store::path::Path;
     use object_store::ObjectStore;
+    use slatedb::admin::AdminBuilder;
     use slatedb::config::{PutOptions, Settings, WriteOptions};
     use slatedb::Db;
     use std::path::PathBuf;
@@ -1050,6 +1235,68 @@ mod tests {
 
         assert_ne!(empty_digest, sixty_four_record_digest);
         assert_ne!(sixty_four_record_digest, hundred_sixty_record_digest);
+        db.close().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn full_compaction_drains_l0_into_one_sorted_run() -> Result<()> {
+        let benchmark = BenchmarkConfig::load_from(std::path::Path::new("config"))?;
+        let mut suite = benchmark
+            .suites
+            .iter()
+            .find(|suite| suite.name == "rocksdb")
+            .expect("rocksdb suite")
+            .clone();
+        suite.compaction_quiet_ms = 20;
+        suite.compaction_timeout_ms = 10_000;
+
+        let mut settings = Settings {
+            flush_interval: None,
+            wal_enabled: false,
+            manifest_poll_interval: std::time::Duration::from_millis(10),
+            ..Default::default()
+        };
+        let compactor = settings
+            .compactor_options
+            .as_mut()
+            .expect("embedded compactor");
+        compactor.poll_interval = std::time::Duration::from_millis(10);
+        compactor.commit_compacted_interval = std::time::Duration::from_millis(10);
+
+        let path = Path::from("full-compaction-test");
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let db = open_database(
+            path.clone(),
+            Arc::clone(&store),
+            &suite,
+            &settings,
+            Arc::new(BenchmarkMetricsRecorder::new()),
+        )
+        .await?;
+        let write_options = WriteOptions {
+            await_durable: false,
+            ..Default::default()
+        };
+        for index in 0..3 {
+            db.put_with_options(
+                format!("key-{index}"),
+                b"value",
+                &PutOptions::default(),
+                &write_options,
+            )
+            .await?;
+            db.flush().await?;
+        }
+
+        compact_database_fully(path.clone(), Arc::clone(&store), &suite).await?;
+        let manifest = AdminBuilder::new(path, store)
+            .build()
+            .read_manifest(None)
+            .await?
+            .expect("latest manifest");
+        assert!(manifest.l0().is_empty());
+        assert_eq!(manifest.compacted().len(), 1);
         db.close().await?;
         Ok(())
     }
