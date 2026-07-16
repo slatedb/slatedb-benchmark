@@ -432,8 +432,10 @@ mod tests {
 
     #[test]
     fn application_reports_background_writer_target_and_achieved_rate() {
-        let mut stats = WorkerStats::default();
-        stats.background_writer_target_bytes_per_second = Some(2 * 1024 * 1024);
+        let mut stats = WorkerStats {
+            background_writer_target_bytes_per_second: Some(2 * 1024 * 1024),
+            ..Default::default()
+        };
         stats.record_background_writer_success(
             "writer-update",
             Duration::from_millis(1),

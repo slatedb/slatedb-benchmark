@@ -227,6 +227,15 @@ pub struct ApplicationWindowRecorder {
     inner: Arc<Mutex<ApplicationWindowShard>>,
 }
 
+struct SuccessfulOperation<'a> {
+    operation: &'a str,
+    latency: Duration,
+    read_payload_bytes: u64,
+    write_payload_bytes: u64,
+    read_hits: u64,
+    read_misses: u64,
+}
+
 impl ApplicationWindowRecorder {
     fn update(&self, record: impl FnOnce(&mut ApplicationWindowDelta)) {
         let mut shard = self.inner.lock().expect("application window lock poisoned");
@@ -243,12 +252,14 @@ impl ApplicationWindowRecorder {
         read_misses: u64,
     ) {
         self.record_success_internal(
-            operation,
-            latency,
-            read_payload_bytes,
-            write_payload_bytes,
-            read_hits,
-            read_misses,
+            SuccessfulOperation {
+                operation,
+                latency,
+                read_payload_bytes,
+                write_payload_bytes,
+                read_hits,
+                read_misses,
+            },
             true,
         );
     }
@@ -263,42 +274,40 @@ impl ApplicationWindowRecorder {
         read_misses: u64,
     ) {
         self.record_success_internal(
-            operation,
-            latency,
-            read_payload_bytes,
-            write_payload_bytes,
-            read_hits,
-            read_misses,
+            SuccessfulOperation {
+                operation,
+                latency,
+                read_payload_bytes,
+                write_payload_bytes,
+                read_hits,
+                read_misses,
+            },
             false,
         );
     }
 
     fn record_success_internal(
         &self,
-        operation: &str,
-        latency: Duration,
-        read_payload_bytes: u64,
-        write_payload_bytes: u64,
-        read_hits: u64,
-        read_misses: u64,
+        operation: SuccessfulOperation<'_>,
         include_in_headline: bool,
     ) {
         self.update(|window| {
             window.completed_operations = window.completed_operations.saturating_add(1);
             window.successful_operations = window.successful_operations.saturating_add(1);
-            window.read_payload_bytes =
-                window.read_payload_bytes.saturating_add(read_payload_bytes);
+            window.read_payload_bytes = window
+                .read_payload_bytes
+                .saturating_add(operation.read_payload_bytes);
             window.write_payload_bytes = window
                 .write_payload_bytes
-                .saturating_add(write_payload_bytes);
-            window.read_hits = window.read_hits.saturating_add(read_hits);
-            window.read_misses = window.read_misses.saturating_add(read_misses);
+                .saturating_add(operation.write_payload_bytes);
+            window.read_hits = window.read_hits.saturating_add(operation.read_hits);
+            window.read_misses = window.read_misses.saturating_add(operation.read_misses);
             if include_in_headline {
-                window.histograms.record("return", latency);
+                window.histograms.record("return", operation.latency);
             }
             window
                 .histograms
-                .record(format!("return/{operation}"), latency);
+                .record(format!("return/{}", operation.operation), operation.latency);
         });
     }
 
