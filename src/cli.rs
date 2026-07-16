@@ -1,3 +1,4 @@
+use crate::config::BenchmarkScale;
 use clap::{Args, Parser, Subcommand};
 use std::path::PathBuf;
 
@@ -39,6 +40,9 @@ pub struct RunArgs {
     pub output: PathBuf,
     #[arg(long, default_value = "config")]
     pub config_dir: PathBuf,
+    /// Fraction or percentage of configured data, time, caches, and probe work to execute.
+    #[arg(long, default_value = "1")]
+    pub scale: BenchmarkScale,
 }
 
 #[derive(Debug, Args)]
@@ -73,6 +77,8 @@ pub struct WorkerArgs {
     pub output: PathBuf,
     #[arg(long, default_value = "config")]
     pub config_dir: PathBuf,
+    #[arg(long, default_value = "1")]
+    pub scale: BenchmarkScale,
 }
 
 #[cfg(test)]
@@ -100,5 +106,43 @@ mod tests {
         assert_eq!(args.suite, "rocksdb");
         assert_eq!(args.session, "release-123");
         assert!(args.workload.is_none());
+        assert!(args.scale.is_full());
+    }
+
+    #[test]
+    fn scale_accepts_factors_and_percentages() {
+        for value in ["0.01", "1%"] {
+            let cli = Cli::try_parse_from([
+                "slatedb-benchmark",
+                "run",
+                "--suite",
+                "ycsb",
+                "--session",
+                "scaled",
+                "--output",
+                ".runs/scaled",
+                "--scale",
+                value,
+            ])
+            .expect("parse scale");
+            let Command::Run(args) = cli.command else {
+                panic!("expected run command");
+            };
+            assert_eq!(args.scale.factor(), 0.01);
+        }
+
+        assert!(Cli::try_parse_from([
+            "slatedb-benchmark",
+            "run",
+            "--suite",
+            "ycsb",
+            "--session",
+            "scaled",
+            "--output",
+            ".runs/scaled",
+            "--scale",
+            "0",
+        ])
+        .is_err());
     }
 }

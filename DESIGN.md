@@ -77,11 +77,19 @@ capacity to `Settings` and supplies its local root at execution time.
 Human-readable durations in TOML are resolved to milliseconds internally and
 nanoseconds in result records.
 
-The `smoke.suite.toml` file defines an ordinary suite with `release = false`.
-Its few purpose-built workloads cover the important runner paths with small
-datasets. Release discovery excludes non-release suites unless one is named
-explicitly, so Docker runs it with `--suite smoke` and the release workflow
-continues to name `rocksdb`, `ycsb`, and `slatedb`.
+`run --scale` applies a runtime overlay after the release configuration is
+loaded. It accepts a factor such as `0.01` or a percentage such as `1%`.
+Scaling reduces record counts, warmup and measurement time, cache capacities,
+and object-store probe work with lower bounds that keep each workload valid.
+It does not change clients, key or value sizes, operation mixes, durability,
+compression, SST block size, workload order, or compaction quiet periods and
+timeouts. Effective values and the requested scale are recorded in results.
+Any run below full scale uses `mode = smoke`, skips release-machine enforcement,
+and is rejected by the publication script.
+
+Docker smoke runs all three release suites at `0.01%` scale by default. This
+exercises the real release catalog, including the RocksDB-derived sequential
+bulk-load and checkpoint path, without maintaining a parallel smoke suite.
 
 ## Execution
 
@@ -192,7 +200,7 @@ Each published variant runs in a fresh worker process with newly constructed
 block and metadata caches, matching `db_bench` process isolation. Its local
 object-store cache uses a fresh temporary directory that survives warmup and
 measurement but is not shared with another variant or included in result
-artifacts. In-memory smoke runs reopen the database with new caches in the
+artifacts. In-memory test runs reopen the database with new caches in the
 parent process because their object store cannot cross a process boundary.
 Tests that require an empty or custom dataset create their own golden database.
 A cold read starts with empty local caches; the runner cannot clear caches
@@ -316,8 +324,17 @@ $ ./target/release/slatedb-benchmark run \
 ```
 
 The read-only `catalog` command prints the discovered release identities as
-JSON without running a benchmark. Passing `--suite smoke` includes that
-explicit non-release suite instead.
+JSON without running a benchmark.
+
+A scaled run uses the same suite and workload selectors:
+
+```console
+$ ./target/release/slatedb-benchmark run \
+    --suite ycsb \
+    --scale 1% \
+    --session july-0.14.1-ycsb-scaled \
+    --output .runs/ycsb-scaled
+```
 
 The runner probes the object store only when it creates a session. It writes
 progress to stderr and one JSON status line to stdout. The output tree is shown
@@ -493,6 +510,12 @@ the x-axis and milliseconds on latency-chart y-axes. Result charts use a
 browser charting library instead of Mermaid. The website needs client
 JavaScript only for selectors, chart selection, and chart rendering.
 
+For local UI development, `npm run dev:scaled` generates fixtures by running
+all three release suites through the same runner at `0.01%` scale, then serves
+the website from those results. Fixture generation is independent of CI smoke
+runs: the two paths share release configuration and scale semantics, but do not
+upload, download, or exchange artifacts.
+
 ## Validation and publication
 
 The runner reads each completed workload bundle back through strict Serde
@@ -517,5 +540,7 @@ rebases, and retries instead of pushing from a stale checkout. A separate Pages
 workflow installs dependencies without lifecycle scripts, builds the website,
 and deploys after each suite results push, so a successful suite becomes visible
 without waiting for the rest of the release. Failed and interrupted benchmark
-jobs keep their local output as CI artifacts. The published schema omits trial
-and repetition fields.
+jobs keep their local output as CI artifacts. The publisher also refuses any
+run whose manifest is not `mode = published` at `scale = 1`, so scaled smoke or
+fixture data cannot enter the release result tree. The published schema omits
+trial and repetition fields.

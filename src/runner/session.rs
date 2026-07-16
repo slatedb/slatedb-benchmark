@@ -4,7 +4,9 @@ use super::{
     write_variant_result, DatabaseCheckpoint, ResultContext,
 };
 use crate::cli::RunArgs;
-use crate::config::{BenchmarkConfig, SuiteConfig, SuiteExecution, VariantConfig, WorkloadKind};
+use crate::config::{
+    BenchmarkConfig, BenchmarkScale, SuiteConfig, SuiteExecution, VariantConfig, WorkloadKind,
+};
 use crate::database_size::live_database_size_bytes;
 use crate::model::{EncodedHistogram, Environment, InitialState, ObjectStoreBaseline, RunManifest};
 use crate::object_store_probe::{delete_prefix, probe, ObjectStoreContext};
@@ -37,6 +39,8 @@ struct SessionState {
     slate_commit: String,
     runner_commit: String,
     lockfile_sha256: String,
+    #[serde(default)]
+    scale: BenchmarkScale,
     configuration_sha256: String,
     environment: Environment,
     object_store_baseline: ObjectStoreBaseline,
@@ -78,14 +82,21 @@ pub(super) async fn execute(
         .context("session suite contains no variants")?
         .suite;
     ensure_output_directory(&args.output, session, suite_name)?;
-    crate::system::verify_environment(environment, !suite.release)?;
+    crate::system::verify_environment(environment, !suite.release || !benchmark.scale.is_full())?;
 
     let session_root = object_store.root.clone().join("sessions").join(session);
     let state_path = session_root.clone().join(STATE_FILE);
     let configuration_sha256 = configuration_digest(suite, &all_variants[0])?;
     let mut state = match load_state(Arc::clone(&object_store.raw), &state_path).await? {
         Some(state) => {
-            validate_state(&state, session, suite, &configuration_sha256, environment)?;
+            validate_state(
+                &state,
+                session,
+                suite,
+                benchmark.scale,
+                &configuration_sha256,
+                environment,
+            )?;
             state
         }
         None => {
@@ -104,6 +115,7 @@ pub(super) async fn execute(
                 slate_commit: env!("BENCHMARK_SLATE_COMMIT").to_string(),
                 runner_commit: env!("BENCHMARK_RUNNER_COMMIT").to_string(),
                 lockfile_sha256: env!("BENCHMARK_LOCK_HASH").to_string(),
+                scale: benchmark.scale,
                 configuration_sha256,
                 environment: environment.clone(),
                 object_store_baseline,
@@ -215,7 +227,7 @@ pub(super) async fn execute(
             }
         };
 
-        validate_result_bundle(&args.output, &results)?;
+        validate_result_bundle(&args.output, &results, benchmark.scale.factor())?;
         state.completed.push(CompletedWorkload {
             name: workload_name.to_string(),
             results: results.clone(),
@@ -461,7 +473,8 @@ fn write_run_manifest(
         status: "ok".to_string(),
         started_at: state.started_at.clone(),
         finished_at: Utc::now().to_rfc3339(),
-        mode: suite.mode().to_string(),
+        mode: suite.mode(benchmark.scale).to_string(),
+        scale: benchmark.scale.factor(),
         slate_version: state.slate_version.clone(),
         slate_commit: state.slate_commit.clone(),
         runner_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -559,6 +572,7 @@ fn configuration_digest(suite: &SuiteConfig, variant: &VariantConfig) -> Result<
     let mut digest = Sha256::new();
     digest.update(serde_json::to_vec(suite)?);
     digest.update(serde_json::to_vec(&variant.slate_settings)?);
+    digest.update(variant.scale.factor().to_bits().to_le_bytes());
     Ok(format!("{:x}", digest.finalize()))
 }
 
@@ -566,6 +580,7 @@ fn validate_state(
     state: &SessionState,
     session: &str,
     suite: &SuiteConfig,
+    scale: BenchmarkScale,
     configuration_sha256: &str,
     environment: &Environment,
 ) -> Result<()> {
@@ -576,6 +591,10 @@ fn validate_state(
     ensure!(
         state.suite == suite.name,
         "session belongs to a different suite"
+    );
+    ensure!(
+        state.scale == scale,
+        "session was created at a different scale"
     );
     ensure!(
         state.slate_version == env!("BENCHMARK_SLATE_VERSION")
@@ -730,13 +749,9 @@ mod tests {
         append_path, checkpoint_database, compatible_environment, hydrate_results, load_state,
         persist_result, save_state, CompletedWorkload, SessionState, RESULT_FILES,
     };
-    use crate::cli::RunArgs;
-    use crate::config::BenchmarkConfig;
-    use crate::instrumented_store::InstrumentedStore;
+    use crate::config::BenchmarkScale;
     use crate::model::{Environment, ObjectStoreBaseline};
-    use crate::object_store_probe::ObjectStoreContext;
     use crate::runner::clone_database;
-    use crate::validation::validate_output;
     use bytes::Bytes;
     use object_store::memory::InMemory;
     use object_store::path::Path;
@@ -756,6 +771,7 @@ mod tests {
             slate_commit: "test".to_string(),
             runner_commit: "test".to_string(),
             lockfile_sha256: "test".to_string(),
+            scale: BenchmarkScale::FULL,
             configuration_sha256: "test".to_string(),
             environment: Environment::default(),
             object_store_baseline: ObjectStoreBaseline::default(),
@@ -813,93 +829,6 @@ mod tests {
                 name
             );
         }
-    }
-
-    #[tokio::test]
-    async fn suite_session_restores_completed_workloads_into_a_new_output() {
-        let raw: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-        let instrumented = Arc::new(InstrumentedStore::new(Arc::clone(&raw)));
-        let object_store = ObjectStoreContext {
-            raw: Arc::clone(&raw),
-            instrumented,
-            root: Path::from("suite-resume"),
-            provider: "memory".to_string(),
-            endpoint: "memory".to_string(),
-            region: "test".to_string(),
-        };
-        let benchmark = BenchmarkConfig::load_from(std::path::Path::new("config"))
-            .expect("load benchmark config");
-        let selected = benchmark
-            .select(Some("smoke"), None, None)
-            .expect("select smoke suite");
-        let environment = Environment {
-            runner_type: "test".to_string(),
-            hostname: "test-host".to_string(),
-            cpu_model: "test-cpu".to_string(),
-            cpu_cores: 1,
-            ram_bytes: 1,
-            local_disk: "memory".to_string(),
-            os: "test".to_string(),
-            kernel: "test".to_string(),
-            object_store: "memory".to_string(),
-            endpoint: "memory".to_string(),
-            region: "test".to_string(),
-        };
-        let first_output = tempdir().expect("first output");
-        let args = RunArgs {
-            suite: "smoke".to_string(),
-            session: "suite-session".to_string(),
-            workload: None,
-            output: first_output.path().to_path_buf(),
-            config_dir: PathBuf::from("config"),
-        };
-
-        super::execute(
-            &args,
-            &benchmark,
-            selected.clone(),
-            &object_store,
-            &environment,
-        )
-        .await
-        .expect("execute complete suite session");
-        validate_output(first_output.path()).expect("validate first output");
-
-        let state_path = Path::from("suite-resume/sessions/suite-session/resume.json");
-        let state = load_state(Arc::clone(&raw), &state_path)
-            .await
-            .expect("load completed state")
-            .expect("completed state exists");
-        let suite = selected.first().expect("selected variant").suite.clone();
-        assert_eq!(state.completed.len(), suite.workloads.len());
-        assert_eq!(
-            state
-                .completed
-                .iter()
-                .map(|workload| workload.name.as_str())
-                .collect::<Vec<_>>(),
-            suite
-                .workloads
-                .iter()
-                .map(|workload| workload.name.as_str())
-                .collect::<Vec<_>>()
-        );
-
-        let second_output = tempdir().expect("second output");
-        let resumed_args = RunArgs {
-            output: second_output.path().to_path_buf(),
-            ..args
-        };
-        super::execute(
-            &resumed_args,
-            &benchmark,
-            selected,
-            &object_store,
-            &environment,
-        )
-        .await
-        .expect("resume completed suite session");
-        validate_output(second_output.path()).expect("validate resumed output");
     }
 
     #[tokio::test]

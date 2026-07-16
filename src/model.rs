@@ -10,6 +10,8 @@ pub struct RunManifest {
     pub started_at: String,
     pub finished_at: String,
     pub mode: String,
+    #[serde(default = "default_scale")]
+    pub scale: f64,
     pub slate_version: String,
     pub slate_commit: String,
     pub runner_version: String,
@@ -80,6 +82,8 @@ pub struct ObjectStoreBaseline {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BenchmarkConfiguration {
+    #[serde(default = "default_scale")]
+    pub scale: f64,
     pub clients: usize,
     pub warmup_ns: u64,
     pub measurement_ns: u64,
@@ -94,6 +98,10 @@ pub struct BenchmarkConfiguration {
     pub slate_settings: Value,
     pub build_profile: String,
     pub enabled_features: Vec<String>,
+}
+
+fn default_scale() -> f64 {
+    1.0
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

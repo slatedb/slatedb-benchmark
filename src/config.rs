@@ -4,9 +4,88 @@ use slatedb::config::Settings;
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
+
+const MIN_RECORDS: u64 = 128;
+const MIN_PREFIX_RECORDS: u64 = 160;
+const MIN_TRANSACTION_RECORDS: u64 = 64;
+const MIN_WARMUP_MS: u64 = 1_000;
+const MIN_MEASUREMENT_MS: u64 = 5_000;
+const MIN_BLOCK_CACHE_BYTES: u64 = 8 * 1024 * 1024;
+const MIN_METADATA_CACHE_BYTES: u64 = 2 * 1024 * 1024;
+const MIN_OBJECT_STORE_CACHE_BYTES: u64 = 16 * 1024 * 1024;
+const MIN_PROBE_OPERATIONS: u64 = 8;
+const MIN_PROBE_OBJECT_BYTES: usize = 1024 * 1024;
+const MIN_PROBE_CONCURRENCY: usize = 2;
+const MIN_PROBE_WARMUP_MS: u64 = 20;
+const MIN_PROBE_MEASUREMENT_MS: u64 = 80;
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct BenchmarkScale(f64);
+
+impl BenchmarkScale {
+    pub const FULL: Self = Self(1.0);
+
+    pub fn factor(self) -> f64 {
+        self.0
+    }
+
+    pub fn is_full(self) -> bool {
+        self.0.to_bits() == Self::FULL.0.to_bits()
+    }
+
+    fn validate(factor: f64) -> std::result::Result<Self, String> {
+        if factor.is_finite() && factor > 0.0 && factor <= 1.0 {
+            Ok(Self(factor))
+        } else {
+            Err("scale must be greater than 0 and no more than 1 (100%)".to_string())
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for BenchmarkScale {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Self::validate(f64::deserialize(deserializer)?).map_err(D::Error::custom)
+    }
+}
+
+impl Default for BenchmarkScale {
+    fn default() -> Self {
+        Self::FULL
+    }
+}
+
+impl std::fmt::Display for BenchmarkScale {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+impl FromStr for BenchmarkScale {
+    type Err = String;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        let factor = if let Some(percent) = value.strip_suffix('%') {
+            percent
+                .parse::<f64>()
+                .map_err(|error| format!("invalid scale {value:?}: {error}"))?
+                / 100.0
+        } else {
+            value
+                .parse::<f64>()
+                .map_err(|error| format!("invalid scale {value:?}: {error}"))?
+        };
+        Self::validate(factor)
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct BenchmarkConfig {
+    pub scale: BenchmarkScale,
     pub suites: Vec<SuiteConfig>,
     #[serde(skip)]
     config_dir: PathBuf,
@@ -79,8 +158,8 @@ pub struct SuiteConfig {
 }
 
 impl SuiteConfig {
-    pub fn mode(&self) -> &'static str {
-        if self.release {
+    pub fn mode(&self, scale: BenchmarkScale) -> &'static str {
+        if self.release && scale.is_full() {
             "published"
         } else {
             "smoke"
@@ -205,6 +284,7 @@ pub struct CatalogEntry {
 
 #[derive(Debug, Clone)]
 pub struct VariantConfig {
+    pub scale: BenchmarkScale,
     pub suite: SuiteConfig,
     pub workload: WorkloadConfig,
     pub variant: String,
@@ -214,6 +294,10 @@ pub struct VariantConfig {
 
 impl BenchmarkConfig {
     pub fn load_from(config_dir: &Path) -> Result<Self> {
+        Self::load_scaled(config_dir, BenchmarkScale::FULL)
+    }
+
+    pub fn load_scaled(config_dir: &Path, scale: BenchmarkScale) -> Result<Self> {
         let mut suite_paths = Vec::new();
         for entry in fs::read_dir(config_dir)
             .with_context(|| format!("reading configuration directory {}", config_dir.display()))?
@@ -240,12 +324,68 @@ impl BenchmarkConfig {
             .iter()
             .map(|suite_path| load_suite(suite_path))
             .collect::<Result<Vec<_>>>()?;
-        let benchmark = Self {
+        let mut benchmark = Self {
+            scale,
             suites,
             config_dir: config_dir.to_path_buf(),
         };
         benchmark.validate()?;
+        if !scale.is_full() {
+            benchmark.apply_scale();
+            benchmark.validate()?;
+        }
         Ok(benchmark)
+    }
+
+    fn apply_scale(&mut self) {
+        for suite in &mut self.suites {
+            let original_record_count = suite.record_count;
+            suite.record_count = scaled_count(original_record_count, MIN_RECORDS, self.scale);
+            suite.block_cache_bytes = suite
+                .block_cache_bytes
+                .map(|value| scaled_u64(value, MIN_BLOCK_CACHE_BYTES, self.scale));
+            suite.metadata_cache_bytes = suite
+                .metadata_cache_bytes
+                .map(|value| scaled_u64(value, MIN_METADATA_CACHE_BYTES, self.scale));
+            suite.object_store_cache_bytes = suite
+                .object_store_cache_bytes
+                .map(|value| scaled_u64(value, MIN_OBJECT_STORE_CACHE_BYTES, self.scale));
+            suite.warmup_ms = scaled_u64(suite.warmup_ms, MIN_WARMUP_MS, self.scale);
+            suite.measurement_ms = scaled_u64(suite.measurement_ms, MIN_MEASUREMENT_MS, self.scale);
+
+            let probe = &mut suite.object_store_probe;
+            probe.latency_operations =
+                scaled_u64(probe.latency_operations, MIN_PROBE_OPERATIONS, self.scale);
+            probe.throughput_object_bytes = scaled_usize(
+                probe.throughput_object_bytes,
+                MIN_PROBE_OBJECT_BYTES,
+                self.scale,
+            );
+            probe.throughput_concurrency = scaled_usize(
+                probe.throughput_concurrency,
+                MIN_PROBE_CONCURRENCY,
+                self.scale,
+            );
+            probe.throughput_warmup_ms =
+                scaled_u64(probe.throughput_warmup_ms, MIN_PROBE_WARMUP_MS, self.scale);
+            probe.throughput_measurement_ms = scaled_u64(
+                probe.throughput_measurement_ms,
+                MIN_PROBE_MEASUREMENT_MS,
+                self.scale,
+            );
+
+            for workload in &mut suite.workloads {
+                let record_count = workload.record_count.unwrap_or(original_record_count);
+                workload.record_count =
+                    Some(workload.kind.scaled_record_count(record_count, self.scale));
+                workload.warmup_ms = workload
+                    .warmup_ms
+                    .map(|value| scaled_u64(value, MIN_WARMUP_MS, self.scale));
+                workload.measurement_ms = workload
+                    .measurement_ms
+                    .map(|value| scaled_u64(value, MIN_MEASUREMENT_MS, self.scale));
+            }
+        }
     }
 
     fn validate(&self) -> Result<()> {
@@ -392,6 +532,7 @@ impl BenchmarkConfig {
                         continue;
                     }
                     selected.push(VariantConfig {
+                        scale: self.scale,
                         suite: suite.clone(),
                         workload: workload.clone(),
                         variant: variant.name.clone(),
@@ -424,6 +565,10 @@ impl BenchmarkConfig {
 }
 
 impl VariantConfig {
+    pub fn mode(&self) -> &'static str {
+        self.suite.mode(self.scale)
+    }
+
     pub fn record_count(&self) -> u64 {
         self.workload
             .record_count
@@ -451,6 +596,51 @@ impl VariantConfig {
             .measurement_ms
             .unwrap_or(self.suite.measurement_ms)
     }
+}
+
+impl WorkloadKind {
+    fn scaled_record_count(self, record_count: u64, scale: BenchmarkScale) -> u64 {
+        if record_count == 0 {
+            return 0;
+        }
+        let minimum = match self {
+            Self::PrefixScan => MIN_PREFIX_RECORDS,
+            Self::TransactionContention => MIN_TRANSACTION_RECORDS,
+            _ => MIN_RECORDS,
+        };
+        let scaled = scaled_count(record_count, minimum, scale);
+        if self == Self::PrefixScan {
+            scaled
+                .saturating_add(9)
+                .saturating_div(10)
+                .saturating_mul(10)
+                .min(record_count)
+        } else {
+            scaled
+        }
+    }
+}
+
+fn scaled_count(value: u64, minimum: u64, scale: BenchmarkScale) -> u64 {
+    scaled_u64(value, minimum, scale)
+}
+
+fn scaled_u64(value: u64, minimum: u64, scale: BenchmarkScale) -> u64 {
+    if value == 0 {
+        return 0;
+    }
+    ((value as f64 * scale.factor()).round() as u64)
+        .max(minimum.min(value))
+        .min(value)
+}
+
+fn scaled_usize(value: usize, minimum: usize, scale: BenchmarkScale) -> usize {
+    if value == 0 {
+        return 0;
+    }
+    ((value as f64 * scale.factor()).round() as usize)
+        .max(minimum.min(value))
+        .min(value)
 }
 
 fn load_suite(suite_path: &Path) -> Result<SuiteConfig> {
@@ -556,7 +746,7 @@ fn validate_identity_component(value: &str, kind: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{BenchmarkConfig, KeyDistribution, WorkloadKind};
+    use super::{BenchmarkConfig, BenchmarkScale, KeyDistribution, WorkloadKind};
     use slatedb::config::CompressionCodec;
     use std::collections::BTreeMap;
     use std::path::Path;
@@ -610,16 +800,6 @@ mod tests {
     }
 
     #[test]
-    fn smoke_is_a_small_non_release_suite() {
-        let benchmark = BenchmarkConfig::load_from(Path::new("config")).expect("config");
-        let release = benchmark.catalog(None).expect("release catalog");
-        let smoke = benchmark.catalog(Some("smoke")).expect("smoke catalog");
-        assert!(smoke.len() < release.len());
-        assert!(smoke.iter().all(|entry| entry.suite == "smoke"));
-        assert!(release.iter().all(|entry| entry.suite != "smoke"));
-    }
-
-    #[test]
     fn catalog_has_the_documented_suite_workload_variant_counts() {
         let benchmark = BenchmarkConfig::load_from(Path::new("config")).expect("config");
         let mut suites = BTreeMap::new();
@@ -637,6 +817,76 @@ mod tests {
             ])
         );
         assert_eq!(workloads.len(), 19);
+    }
+
+    #[test]
+    fn scale_reduces_cost_without_changing_workload_semantics() {
+        let scale = "0.01%".parse::<BenchmarkScale>().expect("scale");
+        let benchmark =
+            BenchmarkConfig::load_scaled(Path::new("config"), scale).expect("scaled config");
+        let rocksdb = benchmark
+            .suites
+            .iter()
+            .find(|suite| suite.name == "rocksdb")
+            .expect("rocksdb suite");
+        assert_eq!(benchmark.scale, scale);
+        assert_eq!(rocksdb.mode(scale), "smoke");
+        assert_eq!(rocksdb.record_count, 90_000);
+        assert_eq!(rocksdb.warmup_ms, 0);
+        assert_eq!(rocksdb.measurement_ms, 5_000);
+        assert_eq!(rocksdb.block_cache_bytes, Some(8 * 1024 * 1024));
+        assert_eq!(rocksdb.metadata_cache_bytes, Some(2 * 1024 * 1024));
+        assert_eq!(rocksdb.object_store_cache_bytes, Some(16 * 1024 * 1024));
+        assert_eq!(rocksdb.object_store_probe.latency_operations, 8);
+        assert_eq!(
+            rocksdb.object_store_probe.throughput_object_bytes,
+            1024 * 1024
+        );
+        assert_eq!(rocksdb.object_store_probe.throughput_concurrency, 2);
+        assert_eq!(rocksdb.object_store_probe.throughput_warmup_ms, 20);
+        assert_eq!(rocksdb.object_store_probe.throughput_measurement_ms, 80);
+        assert_eq!(rocksdb.workloads[0].record_count, Some(90_000));
+        assert_eq!(rocksdb.workloads[0].measurement_ms, Some(0));
+        assert!(rocksdb
+            .workloads
+            .iter()
+            .flat_map(|workload| &workload.variants)
+            .any(|variant| variant.clients == 64));
+
+        let slatedb = benchmark
+            .suites
+            .iter()
+            .find(|suite| suite.name == "slatedb")
+            .expect("slatedb suite");
+        let prefix = slatedb
+            .workloads
+            .iter()
+            .find(|workload| workload.kind == WorkloadKind::PrefixScan)
+            .expect("prefix scan");
+        let transaction = slatedb
+            .workloads
+            .iter()
+            .find(|workload| workload.kind == WorkloadKind::TransactionContention)
+            .expect("transaction contention");
+        assert_eq!(prefix.record_count, Some(10_000));
+        assert_eq!(transaction.record_count, Some(64));
+        assert_eq!(slatedb.key_bytes, 16);
+        assert_eq!(slatedb.value_bytes, 1024);
+        assert_eq!(slatedb.value_compression_ratio, 1.0);
+    }
+
+    #[test]
+    fn full_scale_remains_publishable() {
+        let benchmark = BenchmarkConfig::load_from(Path::new("config")).expect("config");
+        let suite = benchmark
+            .suites
+            .iter()
+            .find(|suite| suite.name == "rocksdb")
+            .expect("rocksdb suite");
+        assert!(benchmark.scale.is_full());
+        assert_eq!(suite.mode(benchmark.scale), "published");
+        assert_eq!(suite.record_count, 900_000_000);
+        assert!(suite.workloads[0].record_count.is_none());
     }
 
     #[test]

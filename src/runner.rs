@@ -166,7 +166,7 @@ pub async fn execute(args: RunArgs) -> Result<()> {
 }
 
 async fn execute_inner(args: &RunArgs) -> Result<()> {
-    let benchmark = BenchmarkConfig::load_from(&args.config_dir)?;
+    let benchmark = BenchmarkConfig::load_scaled(&args.config_dir, args.scale)?;
     let selected = benchmark.select(Some(&args.suite), args.workload.as_deref(), None)?;
 
     let object_store = ObjectStoreContext::load()?;
@@ -267,7 +267,7 @@ async fn execute_isolated_variant(
 }
 
 pub async fn execute_worker(args: WorkerArgs) -> Result<()> {
-    let benchmark = BenchmarkConfig::load_from(&args.config_dir)?;
+    let benchmark = BenchmarkConfig::load_scaled(&args.config_dir, args.scale)?;
     let mut selected =
         benchmark.select(Some(&args.suite), Some(&args.workload), Some(&args.variant))?;
     let variant = selected
@@ -333,7 +333,9 @@ async fn execute_variant_in_fresh_process(
         .arg("--output")
         .arg(&output)
         .arg("--config-dir")
-        .arg(&args.config_dir);
+        .arg(&args.config_dir)
+        .arg("--scale")
+        .arg(args.scale.to_string());
     if let Some(cache) = &object_store_cache {
         command.arg("--object-store-cache-root").arg(cache.path());
     }
@@ -646,12 +648,13 @@ fn write_variant_result(
             suite: variant.suite.name.clone(),
             workload: variant.workload.name.clone(),
             variant: variant.variant.clone(),
-            mode: variant.suite.mode().to_string(),
+            mode: variant.mode().to_string(),
         },
         elapsed_ns: outcome.elapsed_ns,
         environment: context.environment.clone(),
         object_store_baseline: context.baseline.clone(),
         configuration: BenchmarkConfiguration {
+            scale: variant.scale.factor(),
             clients: variant.clients,
             warmup_ns: variant.warmup_ms().saturating_mul(1_000_000),
             measurement_ns: variant.measurement_ms().saturating_mul(1_000_000),
@@ -989,8 +992,8 @@ mod tests {
         let suite = benchmark
             .suites
             .iter()
-            .find(|suite| suite.name == "smoke")
-            .expect("smoke suite");
+            .find(|suite| suite.name == "slatedb")
+            .expect("slatedb suite");
         let path = {
             let cache = object_store_cache_directory(suite)?.expect("object-store cache");
             let path = cache.path().to_path_buf();
@@ -1124,6 +1127,7 @@ mod tests {
             ..Default::default()
         };
         let variant = |workload| VariantConfig {
+            scale: crate::config::BenchmarkScale::FULL,
             suite: suite.clone(),
             workload,
             variant: "clients-1".to_string(),
@@ -1136,6 +1140,7 @@ mod tests {
             workload: None,
             output: PathBuf::new(),
             config_dir: PathBuf::from("config"),
+            scale: crate::config::BenchmarkScale::FULL,
         };
         let path = Path::from("rocks-reopen-test");
         let instrumented = Arc::new(InstrumentedStore::new(Arc::new(InMemory::new())));

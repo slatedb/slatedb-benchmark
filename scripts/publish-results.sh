@@ -23,7 +23,21 @@ fi
 
 source_directory="$run_directory/results/$version/$suite"
 destination_directory="$publish_checkout/results/$version/$suite"
+run_manifest="$run_directory/run.json"
 
+if [[ ! -f "$run_manifest" ]]; then
+  echo "run manifest not found at $run_manifest" >&2
+  exit 1
+fi
+python3 - "$run_manifest" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as file:
+    run = json.load(file)
+if run.get("mode") != "published" or run.get("scale", 1) != 1:
+    raise SystemExit("refusing to publish scaled or non-published benchmark results")
+PY
 if [[ ! -d "$source_directory" ]]; then
   echo "validated suite results not found at $source_directory" >&2
   exit 1

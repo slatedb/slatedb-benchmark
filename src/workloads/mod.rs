@@ -194,7 +194,7 @@ async fn finish_durability(
 
     if stats.writes == 0 {
         if let Some(tracker) = tracker {
-            // Join the background subscriber even when a short smoke window
+            // Join the background subscriber even when a short scaled window
             // happens not to select a write operation.
             windows = Some(tracker.finish().await?.windows);
         }

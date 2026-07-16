@@ -464,8 +464,8 @@ pub fn inspect_environment(provider: &str, endpoint: &str, region: &str) -> Envi
     }
 }
 
-pub fn verify_environment(environment: &Environment, smoke: bool) -> anyhow::Result<()> {
-    if smoke {
+pub fn verify_environment(environment: &Environment, relaxed: bool) -> anyhow::Result<()> {
+    if relaxed {
         return Ok(());
     }
     anyhow::ensure!(

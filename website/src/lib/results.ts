@@ -23,6 +23,7 @@ export type BenchmarkResult = {
     get_latency: Latency;
   };
   configuration: Record<string, unknown> & {
+    scale?: number;
     clients: number;
     warmup_ns: number;
     measurement_ns: number;

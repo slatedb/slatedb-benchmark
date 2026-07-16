@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Builds and runs the Docker smoke suite.
+# Builds and runs every release suite at smoke scale.
 # Usage: ./scripts/smoke.sh
-# Requires Docker Compose. Replaces .runs/docker-smoke and removes the Compose
-# volumes on exit. The final repeated workload verifies checkpoint restoration.
+# Requires Docker Compose. Successful runs discard their local output; failed
+# runs leave it in .runs for diagnosis. Compose services are always removed.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -13,23 +13,36 @@ cleanup() {
 }
 trap cleanup EXIT
 
-rm -rf .runs/docker-smoke
+scale=${BENCHMARK_SCALE:-0.0001}
+output_root=.runs/docker-smoke
+restored_root=.runs/docker-smoke-restored
+
+rm -rf "$output_root" "$restored_root"
 docker compose build runner
-workloads=(prefix-scan read-write transaction-contention)
-for workload in "${workloads[@]}"; do
+suites=(rocksdb slatedb ycsb)
+for suite in "${suites[@]}"; do
   docker compose run --rm --entrypoint slatedb-benchmark runner \
     run \
-    --suite smoke \
-    --workload "$workload" \
-    --session docker-smoke \
-    --output /output/docker-smoke
+    --suite "$suite" \
+    --scale "$scale" \
+    --session "docker-smoke-$suite" \
+    --output "/output/docker-smoke/$suite"
+  docker compose run --rm --entrypoint slatedb-benchmark runner \
+    validate \
+    --output "/output/docker-smoke/$suite"
 done
 
-# A job retry starts its steps from the beginning. Verify the first completed
-# workload can be restored after the entire suite has finished.
+# Hydrate a completed sequential session into a new local output directory and
+# verify that its first workload is recognized as already committed.
 docker compose run --rm --entrypoint slatedb-benchmark runner \
   run \
-  --suite smoke \
-  --workload "${workloads[0]}" \
-  --session docker-smoke \
-  --output /output/docker-smoke
+  --suite rocksdb \
+  --workload bulk-load \
+  --scale "$scale" \
+  --session docker-smoke-rocksdb \
+  --output /output/docker-smoke-restored/rocksdb
+docker compose run --rm --entrypoint slatedb-benchmark runner \
+  validate \
+  --output /output/docker-smoke-restored/rocksdb
+
+rm -rf "$output_root" "$restored_root"

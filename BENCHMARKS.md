@@ -11,8 +11,14 @@ settings.
 The `config/` directory contains two files per suite:
 `<suite>.suite.toml` defines the suite, its ordered `[[workloads]]`, and
 their nested variants; `<suite>.settings.toml` contains the suite-wide
-SlateDB settings. The `smoke` suite is a small, non-release integration suite;
-it is not a reduced rewrite of the release catalog.
+SlateDB settings. Smoke and local website fixture generation run these same
+release suites with the runner's `--scale` overlay; there is no separate reduced
+catalog.
+
+Scale reduces data volume, phase durations, cache capacities, and object-store
+probe work while preserving workload semantics such as client counts, record
+shape, operation mix, durability, and ordering. Scaled outputs are marked as
+smoke results and cannot be published as release benchmarks.
 
 Each measured variant starts with an empty local object-store cache. Warmup may
 populate it; PUT caching and startup preloading remain disabled.
@@ -28,7 +34,7 @@ apply.
 - Object-store baseline: direct upload and download MiB/s and p50, p95, p99,
   p99.9, and maximum request latency from the runner to the benchmark bucket,
   measured outside SlateDB
-- Configuration: client count, duration, record count, key and value sizes,
+- Configuration: scale, client count, duration, record count, key and value sizes,
   target value compression ratio, cache sizes, SlateDB settings, build profile,
   and enabled features
 - Application performance: total operations, accepted and completed ops/s, payload MiB/s,

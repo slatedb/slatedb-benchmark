@@ -32,6 +32,7 @@ pub(crate) fn validate_run(run: &RunManifest) -> Result<()> {
         bail!("run status must be ok");
     }
     validate_mode(&run.mode)?;
+    validate_scale(run.scale, &run.mode)?;
     validate_timestamp(&run.started_at, "run start")?;
     validate_timestamp(&run.finished_at, "run finish")?;
     if run.object_store_baselines.is_empty() {
@@ -60,10 +61,14 @@ pub fn validate_output(output: &Path) -> Result<()> {
             result_paths.len()
         );
     }
-    validate_result_bundle(output, &run.results)
+    validate_result_bundle(output, &run.results, run.scale)
 }
 
-pub(crate) fn validate_result_bundle(output: &Path, results: &[String]) -> Result<()> {
+pub(crate) fn validate_result_bundle(
+    output: &Path,
+    results: &[String],
+    expected_scale: f64,
+) -> Result<()> {
     for relative in results {
         let result_path = output.join(relative);
         if !result_path.is_file() {
@@ -74,6 +79,12 @@ pub(crate) fn validate_result_bundle(output: &Path, results: &[String]) -> Resul
         }
         let directory = result_path.parent().context("result has no parent")?;
         let result: ResultRecord = read_json(&result_path)?;
+        if result.configuration.scale.to_bits() != expected_scale.to_bits() {
+            bail!(
+                "result scale {} does not match run scale {expected_scale}",
+                result.configuration.scale
+            );
+        }
         let expected_path = PathBuf::from("results")
             .join(&result.identity.slate_version)
             .join(&result.identity.suite)
@@ -106,6 +117,7 @@ fn validate_contract_values(
     timeseries: &TimeseriesFile,
 ) -> Result<()> {
     validate_mode(&result.identity.mode)?;
+    validate_scale(result.configuration.scale, &result.identity.mode)?;
     validate_timestamp(&result.identity.timestamp, "result timestamp")?;
     validate_timestamp(
         &result.object_store_baseline.measured_at,
@@ -176,6 +188,16 @@ fn validate_contract_values(
 fn validate_mode(mode: &str) -> Result<()> {
     if !matches!(mode, "published" | "smoke") {
         bail!("unsupported benchmark mode {mode}");
+    }
+    Ok(())
+}
+
+fn validate_scale(scale: f64, mode: &str) -> Result<()> {
+    if !(scale.is_finite() && scale > 0.0 && scale <= 1.0) {
+        bail!("benchmark scale must be greater than 0 and no more than 1");
+    }
+    if mode == "published" && scale.to_bits() != 1.0f64.to_bits() {
+        bail!("scaled benchmark results cannot use published mode");
     }
     Ok(())
 }
@@ -658,7 +680,7 @@ fn find_named(root: &Path, name: &str) -> Result<Vec<PathBuf>> {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_return_histogram_count;
+    use super::{validate_return_histogram_count, validate_scale};
     use crate::model::{ApplicationPerformance, LatencySummary};
 
     #[test]
@@ -689,5 +711,13 @@ mod tests {
         .expect_err("unknown artifact field should fail");
 
         assert!(error.to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn only_full_scale_results_can_be_published() {
+        validate_scale(1.0, "published").expect("full scale is publishable");
+        validate_scale(0.01, "smoke").expect("scaled smoke output is valid");
+        assert!(validate_scale(0.01, "published").is_err());
+        assert!(validate_scale(0.0, "smoke").is_err());
     }
 }
