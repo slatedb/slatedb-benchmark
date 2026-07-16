@@ -285,7 +285,7 @@ selectors require their parent selectors. For example:
 $ ./target/release/slatedb-benchmark run \
     --suite ycsb \
     --workload ycsb-a \
-    --variant clients-16 \
+    --variant clients-64 \
     --output .runs/ycsb-a
 {"status":"ok","run":".runs/ycsb-a/run.json"}
 ```
@@ -337,7 +337,7 @@ not exist before the command starts; resumable output follows the rules above.
 .runs/ycsb-a/
   run.json
   object-store.json
-  results/<version>/ycsb/ycsb-a/clients-16/
+  results/<version>/ycsb/ycsb-a/clients-64/
     result.json
     histograms.json
     timeseries.json
