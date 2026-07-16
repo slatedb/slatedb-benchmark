@@ -33,6 +33,15 @@ fn key_for_variant(variant: &VariantConfig, id: u64) -> bytes::Bytes {
     key_for_suite(&variant.suite.name, id, variant.key_bytes())
 }
 
+fn point_payload_bytes(variant: &VariantConfig, key_bytes: usize, value_bytes: usize) -> u64 {
+    let key_bytes = if variant.suite.name == "rocksdb" {
+        key_bytes
+    } else {
+        0
+    };
+    key_bytes.saturating_add(value_bytes) as u64
+}
+
 #[derive(Clone)]
 pub struct ClosedLoopState {
     next_insert: Arc<AtomicU64>,
@@ -383,12 +392,14 @@ async fn read(
     name: &'static str,
     stats: &mut WorkerStats,
 ) -> std::result::Result<OperationOutcome, OperationError> {
+    let key = key_for_variant(variant, id);
+    let key_bytes = key.len();
     let value = stats
-        .measure_api("get", db.get(key_for_variant(variant, id)))
+        .measure_api("get", db.get(key))
         .await
         .map_err(|error| OperationError::Other(error.into()))?;
     let payload = match value {
-        Some(value) => Payload::read_hit(value.len() as u64),
+        Some(value) => Payload::read_hit(point_payload_bytes(variant, key_bytes, value.len())),
         None => Payload::read_miss(),
     };
     Ok(OperationOutcome {
@@ -410,12 +421,14 @@ async fn update(
 ) -> std::result::Result<OperationOutcome, OperationError> {
     let db = context.db;
     let variant = context.variant;
+    let key = key_for_variant(variant, id);
     let value = values.generate(variant.value_bytes(), rng);
+    let payload_bytes = point_payload_bytes(variant, key.len(), value.len());
     let handle = stats
         .measure_api(
             "put",
             db.put_with_options(
-                key_for_variant(variant, id),
+                key,
                 value.clone(),
                 &PutOptions::default(),
                 context.write_options,
@@ -425,7 +438,7 @@ async fn update(
         .map_err(|error| OperationError::Other(error.into()))?;
     Ok(OperationOutcome {
         name,
-        payload: Payload::write(value.len() as u64),
+        payload: Payload::write(payload_bytes),
         batch_keys: 0,
         write_handle: Some(handle),
         transaction_commit: false,
@@ -443,20 +456,21 @@ async fn multi_read(
         .map(|_| key_for_variant(variant, selector.sample(rng)))
         .collect::<Vec<_>>();
     let values = join_all(keys.into_iter().map(|key| async {
+        let key_bytes = key.len();
         let started = Instant::now();
         let result = db.get(key).await;
-        (result, started.elapsed())
+        (result, started.elapsed(), key_bytes)
     }))
     .await;
     let mut bytes = 0_u64;
     let mut hits = 0_u64;
     let mut misses = 0_u64;
-    for (value, latency) in values {
+    for (value, latency, key_bytes) in values {
         stats.record_api_latency("get", latency);
         match value.map_err(|error| OperationError::Other(error.into()))? {
             Some(value) => {
                 hits = hits.saturating_add(1);
-                bytes = bytes.saturating_add(value.len() as u64);
+                bytes = bytes.saturating_add(point_payload_bytes(variant, key_bytes, value.len()));
             }
             None => misses = misses.saturating_add(1),
         }
@@ -657,6 +671,7 @@ pub(super) async fn run_bulk_load(
         let id = rng.random_range(0..count);
         let key = key_for_variant(variant, id);
         let value = values.generate(variant.value_bytes(), &mut rng);
+        let payload_bytes = point_payload_bytes(variant, key.len(), value.len());
         let started = Instant::now();
         let mut put = Box::pin(measure_backpressure(db.put_with_options(
             key,
@@ -721,11 +736,7 @@ pub(super) async fn run_bulk_load(
         match result {
             Ok(handle) => {
                 let returned_at = Instant::now();
-                stats.record_success(
-                    "insert",
-                    started.elapsed(),
-                    Payload::write(value.len() as u64),
-                );
+                stats.record_success("insert", started.elapsed(), Payload::write(payload_bytes));
                 stats.record_write(returned_at, handle.seqnum());
                 if let Some(tracker) = &durability {
                     tracker.accepted(handle.seqnum(), returned_at);
@@ -965,7 +976,7 @@ pub async fn populate_dataset(
 
 #[cfg(test)]
 mod tests {
-    use super::{capped_writer, ClosedLoopState};
+    use super::{capped_writer, point_payload_bytes, ClosedLoopState};
     use crate::config::BenchmarkConfig;
     use anyhow::Result;
     use object_store::memory::InMemory;
@@ -974,6 +985,25 @@ mod tests {
     use std::path::Path;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn rocksdb_point_payload_includes_keys_without_changing_ycsb_payload() -> Result<()> {
+        let benchmark = BenchmarkConfig::load_from(Path::new("config"))?;
+        let rocksdb = benchmark
+            .select(Some("rocksdb"), Some("random-read"), None)?
+            .into_iter()
+            .next()
+            .expect("RocksDB random-read variant");
+        let ycsb = benchmark
+            .select(Some("ycsb"), Some("ycsb-c"), None)?
+            .into_iter()
+            .next()
+            .expect("YCSB C variant");
+
+        assert_eq!(point_payload_bytes(&rocksdb, 20, 400), 420);
+        assert_eq!(point_payload_bytes(&ycsb, 16, 1024), 1024);
+        Ok(())
+    }
 
     #[test]
     fn insert_frontier_advances_after_out_of_order_completions() {

@@ -119,6 +119,8 @@ where SlateDB has an equivalent setting.
 - Writes: use `await_durable=true` where `benchmark.sh` uses `sync=1`
 - Duration: 90 minutes per test, except `bulk-load`
 - Warmup: none
+- Payload throughput: count key and value bytes for successful point operations,
+  matching `db_bench`; misses contribute no payload bytes
 
 RocksDB's `max_background_jobs=16` is a shared budget for flush and compaction
 threads. SlateDB has no shared background-job pool, so the suite applies 16 to
