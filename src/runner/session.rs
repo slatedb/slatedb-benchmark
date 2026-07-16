@@ -8,7 +8,7 @@ use crate::config::{BenchmarkConfig, SuiteConfig, SuiteExecution, VariantConfig,
 use crate::database_size::live_database_size_bytes;
 use crate::model::{EncodedHistogram, Environment, InitialState, ObjectStoreBaseline, RunManifest};
 use crate::object_store_probe::{delete_prefix, probe, ObjectStoreContext};
-use crate::validation::{validate_output, validate_run};
+use crate::validation::{validate_result_bundle, validate_run};
 use anyhow::{bail, ensure, Context, Result};
 use chrono::Utc;
 use object_store::path::Path;
@@ -28,6 +28,7 @@ const OUTPUT_MARKER: &str = ".benchmark-session";
 const RESULT_FILES: [&str; 3] = ["result.json", "histograms.json", "timeseries.json"];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SessionState {
     session: String,
     suite: String,
@@ -46,6 +47,7 @@ struct SessionState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CompletedWorkload {
     name: String,
     results: Vec<String>,
@@ -213,6 +215,7 @@ pub(super) async fn execute(
             }
         };
 
+        validate_result_bundle(&args.output, &results)?;
         state.completed.push(CompletedWorkload {
             name: workload_name.to_string(),
             results: results.clone(),
@@ -221,7 +224,6 @@ pub(super) async fn execute(
             state.sequential_databases.push(checkpoint);
         }
         write_run_manifest(args, benchmark, suite_name, &state)?;
-        validate_output(&args.output)?;
         for result in &results {
             persist_result(
                 Arc::clone(&object_store.raw),
@@ -476,7 +478,7 @@ fn write_run_manifest(
             .flat_map(|completed| completed.results.iter().cloned())
             .collect(),
     };
-    validate_run(&run, &args.schema_dir)?;
+    validate_run(&run)?;
     write_json(&args.output.join("run.json"), &run)
 }
 
@@ -850,7 +852,6 @@ mod tests {
             workload: None,
             output: first_output.path().to_path_buf(),
             config_dir: PathBuf::from("config"),
-            schema_dir: PathBuf::from("schema"),
         };
 
         super::execute(

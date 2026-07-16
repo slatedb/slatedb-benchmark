@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds and runs the Docker smoke suite, then validates its results.
+# Builds and runs the Docker smoke suite.
 # Usage: ./scripts/smoke.sh
 # Requires Docker Compose. Replaces .runs/docker-smoke and removes the Compose
 # volumes on exit. The final repeated workload verifies checkpoint restoration.
@@ -33,5 +33,3 @@ docker compose run --rm --entrypoint slatedb-benchmark runner \
   --workload "${workloads[0]}" \
   --session docker-smoke \
   --output /output/docker-smoke
-docker compose run --rm --entrypoint slatedb-benchmark runner \
-  validate --output /output/docker-smoke

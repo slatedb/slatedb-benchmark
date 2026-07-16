@@ -1,5 +1,5 @@
 use anyhow::{bail, Context, Result};
-use serde::{Deserialize, Serialize};
+use serde::{de::Error as _, Deserialize, Deserializer, Serialize};
 use slatedb::config::Settings;
 use std::collections::BTreeSet;
 use std::fs;
@@ -12,13 +12,22 @@ pub struct BenchmarkConfig {
     config_dir: PathBuf,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProbeConfig {
     pub latency_operations: u64,
     pub latency_object_bytes: usize,
     pub throughput_object_bytes: usize,
     pub throughput_concurrency: usize,
+    #[serde(
+        rename(deserialize = "throughput_warmup"),
+        deserialize_with = "deserialize_duration_ms"
+    )]
     pub throughput_warmup_ms: u64,
+    #[serde(
+        rename(deserialize = "throughput_measurement"),
+        deserialize_with = "deserialize_duration_ms"
+    )]
     pub throughput_measurement_ms: u64,
 }
 
@@ -29,13 +38,23 @@ pub enum SuiteExecution {
     Sequential,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SuiteConfig {
+    #[serde(skip_deserializing)]
     pub name: String,
     pub release: bool,
     pub execution: SuiteExecution,
     pub object_store_probe: ProbeConfig,
+    #[serde(
+        rename(deserialize = "compaction_quiet"),
+        deserialize_with = "deserialize_duration_ms"
+    )]
     pub compaction_quiet_ms: u64,
+    #[serde(
+        rename(deserialize = "compaction_timeout"),
+        deserialize_with = "deserialize_duration_ms"
+    )]
     pub compaction_timeout_ms: u64,
     pub record_count: u64,
     pub key_bytes: usize,
@@ -44,8 +63,17 @@ pub struct SuiteConfig {
     pub block_cache_bytes: Option<u64>,
     pub metadata_cache_bytes: Option<u64>,
     pub object_store_cache_bytes: Option<u64>,
+    #[serde(
+        rename(deserialize = "warmup"),
+        deserialize_with = "deserialize_duration_ms"
+    )]
     pub warmup_ms: u64,
+    #[serde(
+        rename(deserialize = "measurement"),
+        deserialize_with = "deserialize_duration_ms"
+    )]
     pub measurement_ms: u64,
+    #[serde(default)]
     pub sst_block_bytes: Option<usize>,
     pub workloads: Vec<WorkloadConfig>,
 }
@@ -60,16 +88,31 @@ impl SuiteConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct WorkloadConfig {
     pub name: String,
     pub kind: WorkloadKind,
     pub variants: Vec<VariantDefinition>,
+    #[serde(default)]
     pub await_durable: bool,
+    #[serde(default)]
     pub record_count: Option<u64>,
+    #[serde(default)]
     pub key_bytes: Option<usize>,
+    #[serde(default)]
     pub value_bytes: Option<usize>,
+    #[serde(
+        default,
+        rename(deserialize = "warmup"),
+        deserialize_with = "deserialize_optional_duration_ms"
+    )]
     pub warmup_ms: Option<u64>,
+    #[serde(
+        default,
+        rename(deserialize = "measurement"),
+        deserialize_with = "deserialize_optional_duration_ms"
+    )]
     pub measurement_ms: Option<u64>,
 }
 
@@ -104,57 +147,53 @@ pub enum WorkloadKind {
     PrefixScan,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SuiteFile {
-    release: bool,
-    execution: SuiteExecution,
-    object_store_probe: ProbeFile,
-    compaction_quiet: String,
-    compaction_timeout: String,
-    record_count: u64,
-    key_bytes: usize,
-    value_bytes: usize,
-    value_compression_ratio: f64,
-    block_cache_bytes: Option<u64>,
-    metadata_cache_bytes: Option<u64>,
-    object_store_cache_bytes: Option<u64>,
-    warmup: String,
-    measurement: String,
-    #[serde(default)]
-    sst_block_bytes: Option<usize>,
-    workloads: Vec<WorkloadFile>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum KeyDistribution {
+    Uniform,
+    Zipfian,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ProbeFile {
-    latency_operations: u64,
-    latency_object_bytes: usize,
-    throughput_object_bytes: usize,
-    throughput_concurrency: usize,
-    throughput_warmup: String,
-    throughput_measurement: String,
-}
+impl WorkloadKind {
+    pub(crate) const fn may_write(self) -> bool {
+        !matches!(
+            self,
+            Self::YcsbC
+                | Self::RandomRead
+                | Self::MultiRandomRead
+                | Self::ForwardRange
+                | Self::ReverseRange
+                | Self::ColdRead
+                | Self::PrefixScan
+        )
+    }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct WorkloadFile {
-    name: String,
-    kind: WorkloadKind,
-    variants: Vec<VariantDefinition>,
-    #[serde(default)]
-    await_durable: bool,
-    #[serde(default)]
-    record_count: Option<u64>,
-    #[serde(default)]
-    key_bytes: Option<usize>,
-    #[serde(default)]
-    value_bytes: Option<usize>,
-    #[serde(default)]
-    warmup: Option<String>,
-    #[serde(default)]
-    measurement: Option<String>,
+    pub(crate) const fn default_operation_name(self) -> &'static str {
+        match self {
+            Self::TransactionContention => "transaction",
+            Self::PrefixScan => "prefix-scan",
+            Self::MultiRandomRead => "batch-read",
+            Self::ForwardRange | Self::ReverseRange | Self::YcsbE => "scan",
+            Self::SustainedIngest | Self::BulkLoad | Self::YcsbD => "insert",
+            Self::Overwrite => "update",
+            _ => "operation",
+        }
+    }
+
+    pub(crate) const fn key_distribution(self) -> KeyDistribution {
+        match self {
+            Self::YcsbA | Self::YcsbB | Self::YcsbC | Self::YcsbF => KeyDistribution::Zipfian,
+            _ => KeyDistribution::Uniform,
+        }
+    }
+
+    pub(crate) const fn while_writing_read_kind(self) -> Option<Self> {
+        match self {
+            Self::ReadWhileWriting => Some(Self::RandomRead),
+            Self::ForwardRangeWhileWriting => Some(Self::ForwardRange),
+            Self::ReverseRangeWhileWriting => Some(Self::ReverseRange),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -424,80 +463,9 @@ fn load_suite(suite_path: &Path) -> Result<SuiteConfig> {
         .filter(|name| !name.is_empty())
         .with_context(|| format!("invalid suite file name {}", suite_path.display()))?
         .to_string();
-    let file: SuiteFile = read_toml(suite_path)?;
-    let workloads = file
-        .workloads
-        .into_iter()
-        .map(|workload| {
-            let field_prefix = format!("workloads.{}", workload.name);
-            Ok(WorkloadConfig {
-                name: workload.name,
-                kind: workload.kind,
-                variants: workload.variants,
-                await_durable: workload.await_durable,
-                record_count: workload.record_count,
-                key_bytes: workload.key_bytes,
-                value_bytes: workload.value_bytes,
-                warmup_ms: workload
-                    .warmup
-                    .as_deref()
-                    .map(|value| {
-                        parse_duration_ms(value, suite_path, &format!("{field_prefix}.warmup"))
-                    })
-                    .transpose()?,
-                measurement_ms: workload
-                    .measurement
-                    .as_deref()
-                    .map(|value| {
-                        parse_duration_ms(value, suite_path, &format!("{field_prefix}.measurement"))
-                    })
-                    .transpose()?,
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
-
-    Ok(SuiteConfig {
-        name,
-        release: file.release,
-        execution: file.execution,
-        object_store_probe: ProbeConfig {
-            latency_operations: file.object_store_probe.latency_operations,
-            latency_object_bytes: file.object_store_probe.latency_object_bytes,
-            throughput_object_bytes: file.object_store_probe.throughput_object_bytes,
-            throughput_concurrency: file.object_store_probe.throughput_concurrency,
-            throughput_warmup_ms: parse_duration_ms(
-                &file.object_store_probe.throughput_warmup,
-                suite_path,
-                "object_store_probe.throughput_warmup",
-            )?,
-            throughput_measurement_ms: parse_duration_ms(
-                &file.object_store_probe.throughput_measurement,
-                suite_path,
-                "object_store_probe.throughput_measurement",
-            )?,
-        },
-        compaction_quiet_ms: parse_duration_ms(
-            &file.compaction_quiet,
-            suite_path,
-            "compaction_quiet",
-        )?,
-        compaction_timeout_ms: parse_duration_ms(
-            &file.compaction_timeout,
-            suite_path,
-            "compaction_timeout",
-        )?,
-        record_count: file.record_count,
-        key_bytes: file.key_bytes,
-        value_bytes: file.value_bytes,
-        value_compression_ratio: file.value_compression_ratio,
-        block_cache_bytes: file.block_cache_bytes,
-        metadata_cache_bytes: file.metadata_cache_bytes,
-        object_store_cache_bytes: file.object_store_cache_bytes,
-        warmup_ms: parse_duration_ms(&file.warmup, suite_path, "warmup")?,
-        measurement_ms: parse_duration_ms(&file.measurement, suite_path, "measurement")?,
-        sst_block_bytes: file.sst_block_bytes,
-        workloads,
-    })
+    let mut suite: SuiteConfig = read_toml(suite_path)?;
+    suite.name = name;
+    Ok(suite)
 }
 
 fn read_toml<T>(path: &Path) -> Result<T>
@@ -510,11 +478,29 @@ where
         .with_context(|| format!("parsing configuration file {}", path.display()))
 }
 
-fn parse_duration_ms(value: &str, path: &Path, field: &str) -> Result<u64> {
+fn deserialize_duration_ms<'de, D>(deserializer: D) -> std::result::Result<u64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    parse_duration_ms(&value).map_err(D::Error::custom)
+}
+
+fn deserialize_optional_duration_ms<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<u64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer)?
+        .map(|value| parse_duration_ms(&value).map_err(D::Error::custom))
+        .transpose()
+}
+
+fn parse_duration_ms(value: &str) -> std::result::Result<u64, String> {
     let duration = humantime::parse_duration(value)
-        .with_context(|| format!("parsing {field} in {}", path.display()))?;
-    u64::try_from(duration.as_millis())
-        .with_context(|| format!("{field} in {} is too large", path.display()))
+        .map_err(|error| format!("invalid duration {value:?}: {error}"))?;
+    u64::try_from(duration.as_millis()).map_err(|_| format!("duration {value:?} is too large"))
 }
 
 fn validate_probe(suite: &SuiteConfig) -> Result<()> {
@@ -570,7 +556,7 @@ fn validate_identity_component(value: &str, kind: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::BenchmarkConfig;
+    use super::{BenchmarkConfig, KeyDistribution, WorkloadKind};
     use slatedb::config::CompressionCodec;
     use std::collections::BTreeMap;
     use std::path::Path;
@@ -580,6 +566,47 @@ mod tests {
     fn release_catalog_contains_every_documented_variant() {
         let benchmark = BenchmarkConfig::load_from(Path::new("config")).expect("config");
         assert_eq!(benchmark.catalog(None).expect("catalog").len(), 24);
+    }
+
+    #[test]
+    fn suite_duration_strings_deserialize_into_runtime_fields() {
+        let benchmark = BenchmarkConfig::load_from(Path::new("config")).expect("config");
+        let suite = benchmark
+            .suites
+            .iter()
+            .find(|suite| suite.name == "rocksdb")
+            .expect("rocksdb suite");
+
+        assert_eq!(suite.measurement_ms, 90 * 60 * 1_000);
+        assert_eq!(suite.compaction_timeout_ms, 2 * 60 * 60 * 1_000);
+        assert_eq!(suite.object_store_probe.throughput_warmup_ms, 5_000);
+        assert_eq!(suite.workloads[0].measurement_ms, Some(0));
+
+        let resolved = serde_json::to_value(suite).expect("resolved configuration");
+        assert!(resolved.get("measurement_ms").is_some());
+        assert!(resolved.get("measurement").is_none());
+    }
+
+    #[test]
+    fn workload_kind_owns_execution_classifications() {
+        assert!(WorkloadKind::YcsbA.may_write());
+        assert!(!WorkloadKind::YcsbC.may_write());
+        assert_eq!(
+            WorkloadKind::YcsbA.key_distribution(),
+            KeyDistribution::Zipfian
+        );
+        assert_eq!(
+            WorkloadKind::SustainedIngest.key_distribution(),
+            KeyDistribution::Uniform
+        );
+        assert_eq!(
+            WorkloadKind::PrefixScan.default_operation_name(),
+            "prefix-scan"
+        );
+        assert_eq!(
+            WorkloadKind::ReadWhileWriting.while_writing_read_kind(),
+            Some(WorkloadKind::RandomRead)
+        );
     }
 
     #[test]

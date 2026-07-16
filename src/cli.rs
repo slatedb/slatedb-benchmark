@@ -39,8 +39,6 @@ pub struct RunArgs {
     pub output: PathBuf,
     #[arg(long, default_value = "config")]
     pub config_dir: PathBuf,
-    #[arg(long, default_value = "schema")]
-    pub schema_dir: PathBuf,
 }
 
 #[derive(Debug, Args)]

@@ -106,9 +106,9 @@ build runner artifact --+-> slatedb benchmark -> artifact -> slatedb publisher
 Every benchmark job has its own Tigris bucket in the `fra` region. One runner
 invocation executes the workloads in declaration order and uploads the
 validated suite output as a workflow artifact. The runner preserves a commit
-boundary after each workload: it validates the accumulated suite output and
-commits the workload's result bundle and any database checkpoint before moving
-to the next workload:
+boundary after each workload: it writes and validates that workload's complete
+result bundle, then commits the result bundle and any database checkpoint
+before moving to the next workload:
 
 ```text
 restore session -> measure workload -> validate -> commit session
@@ -495,11 +495,13 @@ JavaScript only for selectors, chart selection, and chart rendering.
 
 ## Validation and publication
 
-The runner validates every result against the checked-in JSON schema. It also
-checks that histogram counts match operation counts, the durable frontier
+The runner reads each completed workload bundle back through strict Serde
+models and validates it once before committing the session. Semantic checks
+ensure that histogram counts match operation counts, the durable frontier
 covers all measured writes, resource samples span the measurement window, and
 the workload used the expected initial manifest. Secrets, credentials, and
-signed URLs are rejected from result files.
+signed URLs are rejected from result files. The checked-in JSON schemas remain
+the published data contract rather than a second runtime validation engine.
 
 Every release suite has one run step and a dependent publisher job. A benchmark
 failure does not invalidate the per-workload object-store commits: rerunning it

@@ -46,8 +46,6 @@ jobs:
             --suite "${{ inputs.suite }}" \
             --session "github-${{ github.run_id }}-${{ inputs.suite }}" \
             --output ".runs/${{ inputs.suite }}"
-      - name: Validate ${{ inputs.suite }} suite
-        run: bin/slatedb-benchmark validate --output ".runs/${{ inputs.suite }}"
       - name: Preserve suite artifacts
         if: always()
         uses: actions/upload-artifact@v4

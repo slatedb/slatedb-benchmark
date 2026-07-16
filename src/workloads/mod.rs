@@ -23,12 +23,12 @@ use tokio::sync::watch;
 pub use closed::populate_dataset;
 
 pub async fn prepare_bulk_load(db: Arc<Db>, variant: &VariantConfig) -> Result<()> {
-    let state = closed::ClosedLoopState::new(variant.record_count());
-    closed::run_closed_phase(db, variant, Duration::ZERO, None, None, &state).await?;
+    closed::run_bulk_load(db, variant, None, None).await?;
     Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct WorkloadOutcome {
     pub application: ApplicationPerformance,
     pub durability: DurabilityPerformance,
@@ -41,6 +41,7 @@ pub struct WorkloadOutcome {
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct StorageCounters {
     wal_flush_bytes: u64,
     l0_flush_bytes: u64,
@@ -90,7 +91,7 @@ pub async fn execute_variant(
         );
         closed::run_closed_phase(Arc::clone(&db), variant, warmup, None, None, &closed_state)
             .await?;
-        if may_write(variant.workload.kind) {
+        if variant.workload.kind.may_write() {
             db.flush().await.context("draining warmup writes")?;
         }
     }
@@ -109,19 +110,28 @@ pub async fn execute_variant(
         stop_rx,
     ));
 
-    let tracks_lag = may_write(variant.workload.kind) && !variant.workload.await_durable;
+    let tracks_lag = variant.workload.kind.may_write() && !variant.workload.await_durable;
     let tracker = tracks_lag.then(|| DurabilityTracker::start(Arc::clone(&db), measured_started));
     let durability_sender = tracker.as_ref().map(DurabilityTracker::sender);
-    let configured_duration = Duration::from_millis(variant.measurement_ms());
-    let mut stats = closed::run_closed_phase(
-        Arc::clone(&db),
-        variant,
-        configured_duration,
-        durability_sender,
-        Some(Arc::clone(&windows)),
-        &closed_state,
-    )
-    .await?;
+    let mut stats = if variant.workload.kind == WorkloadKind::BulkLoad {
+        closed::run_bulk_load(
+            Arc::clone(&db),
+            variant,
+            durability_sender,
+            Some(Arc::clone(&windows)),
+        )
+        .await?
+    } else {
+        closed::run_closed_phase(
+            Arc::clone(&db),
+            variant,
+            Duration::from_millis(variant.measurement_ms()),
+            durability_sender,
+            Some(Arc::clone(&windows)),
+            &closed_state,
+        )
+        .await?
+    };
     let generation_stopped = Instant::now();
     let measurement_elapsed = generation_stopped.saturating_duration_since(measured_started);
     let final_api_recorder = windows.register_window_recorder();
@@ -465,17 +475,4 @@ fn gauge_value(metrics: &Metrics, name: &str) -> Option<i64> {
             _ => None,
         })
         .max()
-}
-
-fn may_write(kind: WorkloadKind) -> bool {
-    !matches!(
-        kind,
-        WorkloadKind::YcsbC
-            | WorkloadKind::RandomRead
-            | WorkloadKind::MultiRandomRead
-            | WorkloadKind::ForwardRange
-            | WorkloadKind::ReverseRange
-            | WorkloadKind::ColdRead
-            | WorkloadKind::PrefixScan
-    )
 }

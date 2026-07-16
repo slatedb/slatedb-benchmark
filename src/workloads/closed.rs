@@ -4,9 +4,9 @@ use super::util::{
     choose_coprime_multiplier, key_for_id, prefix_key, random_unique_key, KeySelector,
     ValueGenerator,
 };
-use crate::config::{VariantConfig, WorkloadKind};
+use crate::config::{KeyDistribution, VariantConfig, WorkloadKind};
 use crate::system::{measure_backpressure, ApplicationWindowRegistry};
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use futures::future::join_all;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
@@ -42,15 +42,7 @@ pub async fn run_closed_phase(
     windows: Option<Arc<ApplicationWindowRegistry>>,
     state: &ClosedLoopState,
 ) -> Result<WorkerStats> {
-    if variant.workload.kind == WorkloadKind::BulkLoad {
-        return run_bulk_load(db, variant, durability, windows).await;
-    }
-    if matches!(
-        variant.workload.kind,
-        WorkloadKind::ReadWhileWriting
-            | WorkloadKind::ForwardRangeWhileWriting
-            | WorkloadKind::ReverseRangeWhileWriting
-    ) {
+    if variant.workload.kind.while_writing_read_kind().is_some() {
         return run_with_capped_writer(db, variant, duration, durability, windows, state).await;
     }
 
@@ -79,13 +71,9 @@ async fn worker_loop(
     state: ClosedLoopState,
 ) -> Result<WorkerStats> {
     let mut rng = StdRng::from_os_rng();
-    let selector = if matches!(
-        variant.workload.kind,
-        WorkloadKind::YcsbA | WorkloadKind::YcsbB | WorkloadKind::YcsbC | WorkloadKind::YcsbF
-    ) {
-        KeySelector::zipfian(variant.record_count())
-    } else {
-        KeySelector::uniform(variant.record_count())
+    let selector = match variant.workload.kind.key_distribution() {
+        KeyDistribution::Uniform => KeySelector::uniform(variant.record_count()),
+        KeyDistribution::Zipfian => KeySelector::zipfian(variant.record_count()),
     };
     let write_options = WriteOptions {
         await_durable: variant.workload.await_durable,
@@ -135,7 +123,10 @@ async fn worker_loop(
                 stats.record_transaction_conflict(completion.latency);
             }
             Err(OperationError::Other(error)) => {
-                stats.record_error(operation_name(variant.workload.kind), completion.latency);
+                stats.record_error(
+                    variant.workload.kind.default_operation_name(),
+                    completion.latency,
+                );
                 tracing::debug!(%error, "benchmark operation failed");
             }
         }
@@ -585,7 +576,7 @@ async fn transaction(
     }
 }
 
-async fn run_bulk_load(
+pub(super) async fn run_bulk_load(
     db: Arc<Db>,
     variant: &VariantConfig,
     durability: Option<DurabilitySender>,
@@ -739,12 +730,11 @@ async fn run_with_capped_writer(
 ) -> Result<WorkerStats> {
     let clients = variant.clients;
     let deadline = Instant::now() + duration;
-    let read_kind = match variant.workload.kind {
-        WorkloadKind::ReadWhileWriting => WorkloadKind::RandomRead,
-        WorkloadKind::ForwardRangeWhileWriting => WorkloadKind::ForwardRange,
-        WorkloadKind::ReverseRangeWhileWriting => WorkloadKind::ReverseRange,
-        _ => bail!("invalid while-writing workload"),
-    };
+    let read_kind = variant
+        .workload
+        .kind
+        .while_writing_read_kind()
+        .context("invalid while-writing workload")?;
     let mut tasks = JoinSet::new();
     for _ in 0..clients {
         let db = Arc::clone(&db);
@@ -832,18 +822,6 @@ async fn merge_tasks(mut tasks: JoinSet<Result<WorkerStats>>) -> Result<WorkerSt
         merged.merge(&result.context("joining benchmark client")??)?;
     }
     Ok(merged)
-}
-
-fn operation_name(kind: WorkloadKind) -> &'static str {
-    match kind {
-        WorkloadKind::TransactionContention => "transaction",
-        WorkloadKind::PrefixScan => "prefix-scan",
-        WorkloadKind::MultiRandomRead => "batch-read",
-        WorkloadKind::ForwardRange | WorkloadKind::ReverseRange | WorkloadKind::YcsbE => "scan",
-        WorkloadKind::SustainedIngest | WorkloadKind::BulkLoad | WorkloadKind::YcsbD => "insert",
-        WorkloadKind::Overwrite => "update",
-        _ => "operation",
-    }
 }
 
 pub async fn populate_dataset(

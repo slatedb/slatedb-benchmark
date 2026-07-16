@@ -91,6 +91,7 @@ pub struct StoreMetrics {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StoreSnapshot {
     pub operations: BTreeMap<String, u64>,
     pub requests: BTreeMap<String, u64>,

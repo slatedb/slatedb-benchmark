@@ -7,6 +7,7 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use hdrhistogram::serialization::Deserializer;
 use hdrhistogram::Histogram;
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -17,20 +18,8 @@ pub(crate) fn validate_result(
     result: &ResultRecord,
     histograms: &HistogramsFile,
     timeseries: &TimeseriesFile,
-    schema_dir: &Path,
 ) -> Result<()> {
-    validate_schema(
-        &serde_json::to_value(result)?,
-        &schema_dir.join("result.json"),
-    )?;
-    validate_schema(
-        &serde_json::to_value(histograms)?,
-        &schema_dir.join("histograms.json"),
-    )?;
-    validate_schema(
-        &serde_json::to_value(timeseries)?,
-        &schema_dir.join("timeseries.json"),
-    )?;
+    validate_contract_values(result, histograms, timeseries)?;
     validate_invariants(result, histograms, timeseries)?;
     reject_secrets(&serde_json::to_value(result)?, "result")?;
     reject_secrets(&serde_json::to_value(histograms)?, "histograms")?;
@@ -38,19 +27,27 @@ pub(crate) fn validate_result(
     Ok(())
 }
 
-pub(crate) fn validate_run(run: &RunManifest, schema_dir: &Path) -> Result<()> {
+pub(crate) fn validate_run(run: &RunManifest) -> Result<()> {
+    if run.status != "ok" {
+        bail!("run status must be ok");
+    }
+    validate_mode(&run.mode)?;
+    validate_timestamp(&run.started_at, "run start")?;
+    validate_timestamp(&run.finished_at, "run finish")?;
+    if run.object_store_baselines.is_empty() {
+        bail!("run contains no object-store baselines");
+    }
+    if run.results.is_empty() {
+        bail!("run contains no results");
+    }
     let value = serde_json::to_value(run)?;
-    validate_schema(&value, &schema_dir.join("run.json"))?;
     reject_secrets(&value, "run")
 }
 
 pub fn validate_output(output: &Path) -> Result<()> {
-    let schema_dir = Path::new("schema");
     let run_path = output.join("run.json");
-    let run: RunManifest = serde_json::from_slice(
-        &fs::read(&run_path).with_context(|| format!("reading {}", run_path.display()))?,
-    )?;
-    validate_run(&run, schema_dir)?;
+    let run: RunManifest = read_json(&run_path)?;
+    validate_run(&run)?;
     let manifest_paths = run.results.iter().collect::<BTreeSet<_>>();
     if manifest_paths.len() != run.results.len() {
         bail!("run manifest contains duplicate result paths");
@@ -63,7 +60,11 @@ pub fn validate_output(output: &Path) -> Result<()> {
             result_paths.len()
         );
     }
-    for relative in &run.results {
+    validate_result_bundle(output, &run.results)
+}
+
+pub(crate) fn validate_result_bundle(output: &Path, results: &[String]) -> Result<()> {
+    for relative in results {
         let result_path = output.join(relative);
         if !result_path.is_file() {
             bail!(
@@ -72,13 +73,122 @@ pub fn validate_output(output: &Path) -> Result<()> {
             );
         }
         let directory = result_path.parent().context("result has no parent")?;
-        let result: ResultRecord = serde_json::from_slice(&fs::read(&result_path)?)?;
-        let histograms: HistogramsFile =
-            serde_json::from_slice(&fs::read(directory.join("histograms.json"))?)?;
-        let timeseries: TimeseriesFile =
-            serde_json::from_slice(&fs::read(directory.join("timeseries.json"))?)?;
-        validate_result(&result, &histograms, &timeseries, schema_dir)
+        let result: ResultRecord = read_json(&result_path)?;
+        let expected_path = PathBuf::from("results")
+            .join(&result.identity.slate_version)
+            .join(&result.identity.suite)
+            .join(&result.identity.workload)
+            .join(&result.identity.variant)
+            .join("result.json");
+        if Path::new(relative) != expected_path {
+            bail!(
+                "result identity resolves to {} but manifest lists {}",
+                expected_path.display(),
+                relative
+            );
+        }
+        let histograms: HistogramsFile = read_json(&directory.join("histograms.json"))?;
+        let timeseries: TimeseriesFile = read_json(&directory.join("timeseries.json"))?;
+        validate_result(&result, &histograms, &timeseries)
             .with_context(|| format!("validating {}", result_path.display()))?;
+    }
+    Ok(())
+}
+
+fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T> {
+    serde_json::from_slice(&fs::read(path).with_context(|| format!("reading {}", path.display()))?)
+        .with_context(|| format!("parsing {}", path.display()))
+}
+
+fn validate_contract_values(
+    result: &ResultRecord,
+    histograms: &HistogramsFile,
+    timeseries: &TimeseriesFile,
+) -> Result<()> {
+    validate_mode(&result.identity.mode)?;
+    validate_timestamp(&result.identity.timestamp, "result timestamp")?;
+    validate_timestamp(
+        &result.object_store_baseline.measured_at,
+        "object-store baseline timestamp",
+    )?;
+    if result.identity.suite.is_empty()
+        || result.identity.workload.is_empty()
+        || result.identity.variant.is_empty()
+    {
+        bail!("result identity contains an empty suite, workload, or variant");
+    }
+    if result.environment.cpu_cores == 0 || result.environment.ram_bytes == 0 {
+        bail!("result environment has no CPU cores or memory");
+    }
+    if result.configuration.clients == 0
+        || result.configuration.key_bytes == 0
+        || result.configuration.value_bytes == 0
+    {
+        bail!("result configuration has zero clients, key bytes, or value bytes");
+    }
+    if !(result.configuration.value_compression_ratio.is_finite()
+        && 0.0 < result.configuration.value_compression_ratio
+        && result.configuration.value_compression_ratio <= 1.0)
+    {
+        bail!("result configuration has an invalid value compression ratio");
+    }
+    for (name, value) in [
+        (
+            "object-store upload throughput",
+            result.object_store_baseline.upload_mib_per_second,
+        ),
+        (
+            "object-store download throughput",
+            result.object_store_baseline.download_mib_per_second,
+        ),
+        (
+            "application payload throughput",
+            result.application.payload_mib_per_second,
+        ),
+        ("average CPU", result.resources.average_cpu_percent),
+        ("peak CPU", result.resources.peak_cpu_percent),
+    ] {
+        validate_nonnegative_finite(value, name)?;
+    }
+    if result.source_files.histograms != "histograms.json"
+        || result.source_files.timeseries != "timeseries.json"
+    {
+        bail!("result source file names do not match the workload bundle");
+    }
+    if histograms.encoding != "hdrhistogram-v2-deflate-base64" || histograms.significant_digits != 3
+    {
+        bail!("histogram encoding metadata is unsupported");
+    }
+    for (name, histogram) in &histograms.histograms {
+        if histogram.unit != "microseconds" {
+            bail!("histogram {name} has unsupported unit {}", histogram.unit);
+        }
+    }
+    if timeseries.interval_ns != 1_000_000_000 {
+        bail!("time-series interval must be one second");
+    }
+    for sample in &timeseries.samples {
+        validate_nonnegative_finite(sample.cpu_percent, "time-series CPU")?;
+    }
+    Ok(())
+}
+
+fn validate_mode(mode: &str) -> Result<()> {
+    if !matches!(mode, "published" | "smoke") {
+        bail!("unsupported benchmark mode {mode}");
+    }
+    Ok(())
+}
+
+fn validate_timestamp(timestamp: &str, name: &str) -> Result<()> {
+    chrono::DateTime::parse_from_rfc3339(timestamp)
+        .with_context(|| format!("{name} is not an RFC 3339 timestamp"))?;
+    Ok(())
+}
+
+fn validate_nonnegative_finite(value: f64, name: &str) -> Result<()> {
+    if !value.is_finite() || value < 0.0 {
+        bail!("{name} must be a finite nonnegative number");
     }
     Ok(())
 }
@@ -499,23 +609,6 @@ fn validate_histogram_summary(
     Ok(())
 }
 
-fn validate_schema(instance: &Value, schema_path: &Path) -> Result<()> {
-    let schema: Value = serde_json::from_slice(
-        &fs::read(schema_path)
-            .with_context(|| format!("reading schema {}", schema_path.display()))?,
-    )?;
-    let validator = jsonschema::validator_for(&schema)
-        .with_context(|| format!("compiling schema {}", schema_path.display()))?;
-    let errors = validator
-        .iter_errors(instance)
-        .map(|error| error.to_string())
-        .collect::<Vec<_>>();
-    if !errors.is_empty() {
-        bail!("schema validation failed: {}", errors.join("; "));
-    }
-    Ok(())
-}
-
 fn reject_secrets(value: &Value, path: &str) -> Result<()> {
     match value {
         Value::Object(values) => {
@@ -566,7 +659,7 @@ fn find_named(root: &Path, name: &str) -> Result<Vec<PathBuf>> {
 #[cfg(test)]
 mod tests {
     use super::validate_return_histogram_count;
-    use crate::model::ApplicationPerformance;
+    use crate::model::{ApplicationPerformance, LatencySummary};
 
     #[test]
     fn background_operations_are_excluded_from_headline_return_count() {
@@ -580,5 +673,21 @@ mod tests {
                 .expect("valid background return count"),
             10
         );
+    }
+
+    #[test]
+    fn artifact_models_reject_unknown_fields() {
+        let error = serde_json::from_value::<LatencySummary>(serde_json::json!({
+            "count": 1,
+            "p50_ns": 1,
+            "p95_ns": 1,
+            "p99_ns": 1,
+            "p999_ns": 1,
+            "max_ns": 1,
+            "unexpected": true
+        }))
+        .expect_err("unknown artifact field should fail");
+
+        assert!(error.to_string().contains("unknown field"));
     }
 }

@@ -4,6 +4,7 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RunManifest {
     pub status: String,
     pub started_at: String,
@@ -20,6 +21,7 @@ pub struct RunManifest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ResultRecord {
     pub identity: Identity,
     pub elapsed_ns: u64,
@@ -35,6 +37,7 @@ pub struct ResultRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Identity {
     pub slate_version: String,
     pub slate_commit: String,
@@ -49,6 +52,7 @@ pub struct Identity {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Environment {
     pub runner_type: String,
     pub hostname: String,
@@ -64,6 +68,7 @@ pub struct Environment {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ObjectStoreBaseline {
     pub measured_at: String,
     pub put_latency: LatencySummary,
@@ -73,6 +78,7 @@ pub struct ObjectStoreBaseline {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BenchmarkConfiguration {
     pub clients: usize,
     pub warmup_ns: u64,
@@ -91,6 +97,7 @@ pub struct BenchmarkConfiguration {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ApplicationPerformance {
     pub total_operations: u64,
     pub successful_operations: u64,
@@ -110,6 +117,7 @@ pub struct ApplicationPerformance {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DurabilityPerformance {
     pub lag: Option<LatencySummary>,
     pub final_flush_drain_ns: Option<u64>,
@@ -119,6 +127,7 @@ pub struct DurabilityPerformance {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ResourceUse {
     pub average_cpu_percent: f64,
     pub peak_cpu_percent: f64,
@@ -132,13 +141,12 @@ pub struct ResourceUse {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StoragePerformance {
     /// Estimated compressed bytes of unique SSTs in the final live LSM.
     pub database_size_bytes: u64,
     /// Time-weighted average of the live LSM size during measurement.
     pub average_database_size_bytes: u64,
-    // Older persisted session artifacts stored these counters as flat fields.
-    #[serde(default)]
     pub object_store: StoreSnapshot,
     pub compaction_throughput_bytes_per_second: Option<f64>,
     pub write_amplification: Option<f64>,
@@ -148,6 +156,7 @@ pub struct StoragePerformance {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct IngestWindow {
     pub start_offset_ns: u64,
     pub operations: u64,
@@ -157,6 +166,7 @@ pub struct IngestWindow {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct InitialState {
     pub checkpoint_id: Option<String>,
     pub manifest_id: Option<u64>,
@@ -164,12 +174,14 @@ pub struct InitialState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SourceFiles {
     pub histograms: String,
     pub timeseries: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LatencySummary {
     pub count: u64,
     pub p50_ns: u64,
@@ -180,6 +192,7 @@ pub struct LatencySummary {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HistogramsFile {
     pub encoding: String,
     pub significant_digits: u8,
@@ -187,6 +200,7 @@ pub struct HistogramsFile {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EncodedHistogram {
     pub unit: String,
     pub count: u64,
@@ -196,6 +210,7 @@ pub struct EncodedHistogram {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TimeseriesFile {
     pub interval_ns: u64,
     pub samples: Vec<TimeseriesSample>,
@@ -205,6 +220,7 @@ pub struct TimeseriesFile {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ApplicationWindow {
     pub start_offset_ns: u64,
     pub duration_ns: u64,
@@ -220,6 +236,7 @@ pub struct ApplicationWindow {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DurabilityWindow {
     pub start_offset_ns: u64,
     pub duration_ns: u64,
@@ -228,6 +245,7 @@ pub struct DurabilityWindow {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TimeseriesSample {
     pub offset_ns: u64,
     pub cpu_percent: f64,
@@ -240,14 +258,13 @@ pub struct TimeseriesSample {
     pub disk_write_operations: u64,
     /// Estimated compressed bytes of unique SSTs in the live LSM.
     pub database_size_bytes: u64,
-    // Accept older persisted time series while resumed sessions are upgraded.
-    #[serde(default)]
     pub object_store: StoreSnapshot,
     #[serde(skip)]
     pub slatedb_metrics: Vec<MetricSnapshot>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MetricSeries {
     pub name: String,
     pub description: String,
@@ -274,6 +291,7 @@ pub enum MetricSeriesValue {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MetricHistogramValue {
     pub count: u64,
     pub sum: f64,
@@ -283,6 +301,7 @@ pub struct MetricHistogramValue {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MetricSnapshot {
     pub name: String,
     pub description: String,

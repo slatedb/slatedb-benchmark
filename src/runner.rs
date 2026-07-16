@@ -13,7 +13,6 @@ use crate::system::{
     inspect_environment, sample_until_stopped, ApplicationWindowRegistry, BenchmarkMetricsRecorder,
     DatabaseSizeSource, SampledTimeseries,
 };
-use crate::validation::validate_result;
 use crate::workloads::{
     execute_variant, extend_with_compaction_phase, populate_dataset, prepare_bulk_load,
     WorkloadOutcome,
@@ -40,6 +39,7 @@ use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct DatabaseCheckpoint {
     #[serde(
         serialize_with = "serialize_object_store_path",
@@ -686,12 +686,6 @@ fn write_variant_result(
             timeseries: "timeseries.json".to_string(),
         },
     };
-    validate_result(
-        &result,
-        &histograms,
-        &outcome.timeseries,
-        &context.args.schema_dir,
-    )?;
     write_json(&directory.join("result.json"), &result)?;
     write_json(&directory.join("histograms.json"), &histograms)?;
     write_compact_json(&directory.join("timeseries.json"), &outcome.timeseries)?;
@@ -1142,7 +1136,6 @@ mod tests {
             workload: None,
             output: PathBuf::new(),
             config_dir: PathBuf::from("config"),
-            schema_dir: PathBuf::from("schema"),
         };
         let path = Path::from("rocks-reopen-test");
         let instrumented = Arc::new(InstrumentedStore::new(Arc::new(InMemory::new())));
