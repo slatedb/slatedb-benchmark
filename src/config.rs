@@ -578,7 +578,7 @@ mod tests {
     #[test]
     fn release_catalog_contains_every_documented_variant() {
         let benchmark = BenchmarkConfig::load_from(Path::new("config")).expect("config");
-        assert_eq!(benchmark.catalog(None).expect("catalog").len(), 30);
+        assert_eq!(benchmark.catalog(None).expect("catalog").len(), 24);
     }
 
     #[test]
@@ -605,7 +605,7 @@ mod tests {
             BTreeMap::from([
                 ("rocksdb".to_string(), 9),
                 ("slatedb".to_string(), 9),
-                ("ycsb".to_string(), 12),
+                ("ycsb".to_string(), 6),
             ])
         );
         assert_eq!(workloads.len(), 19);

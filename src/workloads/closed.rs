@@ -940,7 +940,7 @@ mod tests {
     async fn ycsb_d_insert_latency_excludes_insert_lock_wait() -> Result<()> {
         let benchmark = BenchmarkConfig::load_from(std::path::Path::new("config"))?;
         let variant = benchmark
-            .select(Some("ycsb"), Some("ycsb-d"), Some("clients-1"))?
+            .select(Some("ycsb"), Some("ycsb-d"), Some("clients-64"))?
             .pop()
             .context("missing YCSB-D test variant")?;
         let db = Db::open("ycsb-d-insert-latency-test", Arc::new(InMemory::new())).await?;

@@ -59,7 +59,7 @@ apply.
 - Cache: 4 GiB block cache, 512 MiB metadata/index cache, and 16 GiB local
   object-store cache
 - Writes: `await_durable=false` with `flush_interval=100ms`
-- Concurrency: 1 and 64 clients
+- Concurrency: 64 clients
 - Run: 60-second warmup followed by 5 minutes of measurement
 
 Reset each test to the same preloaded dataset. YCSB A, B, C, and F use YCSB's
