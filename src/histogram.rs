@@ -39,6 +39,10 @@ impl LatencyHistogram {
             .context("merging HDR histograms")
     }
 
+    pub fn reset(&mut self) {
+        self.inner.reset();
+    }
+
     pub fn len(&self) -> u64 {
         self.inner.len()
     }
@@ -88,12 +92,21 @@ impl HistogramSet {
 
     pub fn merge(&mut self, other: &Self) -> Result<()> {
         for (name, histogram) in &other.values {
+            if histogram.is_empty() {
+                continue;
+            }
             self.values
                 .entry(name.clone())
                 .or_default()
                 .add(histogram)?;
         }
         Ok(())
+    }
+
+    pub fn reset(&mut self) {
+        for histogram in self.values.values_mut() {
+            histogram.reset();
+        }
     }
 
     pub fn insert(&mut self, name: impl Into<String>, histogram: LatencyHistogram) {

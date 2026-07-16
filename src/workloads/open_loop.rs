@@ -2,7 +2,7 @@ use super::durability::DurabilitySender;
 use super::stats::{Payload, WorkerStats};
 use super::util::{key_for_id, random_value, KeySelector};
 use crate::config::{VariantConfig, WorkloadKind};
-use crate::system::{measure_backpressure, ApplicationCounters};
+use crate::system::{measure_backpressure, ApplicationCounters, ApplicationWindowRecorder};
 use anyhow::{bail, Context, Result};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -12,6 +12,8 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::task::JoinSet;
+
+const WINDOW_RECORDER_SHARDS: usize = 16;
 
 #[derive(Debug, Clone, Copy)]
 struct Arrival {
@@ -37,18 +39,32 @@ pub async fn run_open_phase(
     let scheduler_window = counters
         .as_ref()
         .map(|counters| counters.register_window_recorder());
+    let recorder_registry = counters
+        .clone()
+        .unwrap_or_else(|| Arc::new(ApplicationCounters::new(true)));
+    let window_recorders = window_recorders(&recorder_registry);
     let mut tasks = JoinSet::new();
     let variant = Arc::new(variant.clone());
     let mut seed_rng = StdRng::from_os_rng();
-    for _ in 0..worker_count {
+    for worker_id in 0..worker_count {
         let db = Arc::clone(&db);
         let receiver = receiver.clone();
         let variant = Arc::clone(&variant);
         let durability = durability.clone();
         let counters = counters.clone();
+        let window_recorder = window_recorders[worker_id % window_recorders.len()].clone();
         let rng_seed = seed_rng.random();
         tasks.spawn(async move {
-            open_worker(db, receiver, variant, durability, counters, rng_seed).await
+            open_worker(
+                db,
+                receiver,
+                variant,
+                durability,
+                counters,
+                window_recorder,
+                rng_seed,
+            )
+            .await
         });
     }
     drop(receiver);
@@ -103,6 +119,7 @@ async fn open_worker(
     variant: Arc<VariantConfig>,
     durability: Option<DurabilitySender>,
     counters: Option<Arc<ApplicationCounters>>,
+    window_recorder: ApplicationWindowRecorder,
     rng_seed: u64,
 ) -> Result<WorkerStats> {
     let mut arrival = match receiver.recv().await {
@@ -115,11 +132,7 @@ async fn open_worker(
         await_durable: false,
         ..Default::default()
     };
-    let mut stats = WorkerStats::with_window_recorder(
-        counters
-            .as_ref()
-            .map(|counters| counters.register_window_recorder()),
-    );
+    let mut stats = WorkerStats::with_window_recorder(Some(window_recorder));
     loop {
         let errors_before = stats.errors;
         let invoked = Instant::now();
@@ -128,50 +141,93 @@ async fn open_worker(
             variant.workload.kind == WorkloadKind::OpenLoopReadUpdate && rng.random_bool(0.5);
         let id = selector.sample(&mut rng);
         let key = key_for_id(id, variant.key_bytes());
-        if update {
+        let (operation, api, successful, payload, api_latency, return_latency) = if update {
             let value = random_value(variant.value_bytes(), &mut rng);
-            let (result, backpressure) = measure_backpressure(stats.measure_api(
-                "put",
-                db.put_with_options(key, value.clone(), &PutOptions::default(), &write_options),
+            let api_started = Instant::now();
+            let (result, backpressure) = measure_backpressure(db.put_with_options(
+                key,
+                value.clone(),
+                &PutOptions::default(),
+                &write_options,
             ))
             .await;
+            let api_latency = api_started.elapsed();
             stats.record_backpressure(backpressure);
             match result {
                 Ok(handle) => {
                     let returned_at = Instant::now();
-                    stats.record_success(
-                        "update",
-                        invoked.elapsed(),
-                        Payload::write(value.len() as u64),
-                    );
+                    let return_latency = invoked.elapsed();
                     stats.record_write(returned_at, handle.seqnum());
                     if let Some(tracker) = &durability {
                         tracker.accepted(handle.seqnum(), returned_at);
                     }
+                    (
+                        "update",
+                        "put",
+                        true,
+                        Payload::write(value.len() as u64),
+                        api_latency,
+                        return_latency,
+                    )
                 }
                 Err(error) => {
-                    stats.record_error("update", invoked.elapsed());
+                    let return_latency = invoked.elapsed();
                     tracing::debug!(%error, "open-loop update failed");
+                    (
+                        "update",
+                        "put",
+                        false,
+                        Payload::default(),
+                        api_latency,
+                        return_latency,
+                    )
                 }
             }
         } else {
-            match stats.measure_api("get", db.get(key)).await {
-                Ok(Some(value)) => stats.record_success(
+            let api_started = Instant::now();
+            let result = db.get(key).await;
+            let api_latency = api_started.elapsed();
+            match result {
+                Ok(Some(value)) => (
                     "read",
-                    invoked.elapsed(),
+                    "get",
+                    true,
                     Payload::read(value.len() as u64),
+                    api_latency,
+                    invoked.elapsed(),
                 ),
-                Ok(None) => stats.record_error("read", invoked.elapsed()),
+                Ok(None) => (
+                    "read",
+                    "get",
+                    false,
+                    Payload::default(),
+                    api_latency,
+                    invoked.elapsed(),
+                ),
                 Err(error) => {
-                    stats.record_error("read", invoked.elapsed());
+                    let return_latency = invoked.elapsed();
                     tracing::debug!(%error, "open-loop read failed");
+                    (
+                        "read",
+                        "get",
+                        false,
+                        Payload::default(),
+                        api_latency,
+                        return_latency,
+                    )
                 }
             }
-        }
+        };
         let completed = Instant::now();
-        stats.record_open_loop_timing(
+        stats.record_open_loop_completion(
+            operation,
+            api,
+            successful,
+            return_latency,
+            api_latency,
             completed.saturating_duration_since(arrival.scheduled),
             scheduling_delay,
+            payload,
         );
         if let Some(counters) = &counters {
             counters.operations.fetch_add(1, Ordering::Relaxed);
@@ -191,10 +247,17 @@ fn worker_count(target_rate: u64) -> Result<usize> {
     usize::try_from(target_rate).context("open-loop target rate exceeds platform capacity")
 }
 
+fn window_recorders(counters: &ApplicationCounters) -> Vec<ApplicationWindowRecorder> {
+    (0..WINDOW_RECORDER_SHARDS)
+        .map(|_| counters.register_window_recorder())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::worker_count;
+    use super::{window_recorders, worker_count, WINDOW_RECORDER_SHARDS};
     use crate::config::BenchmarkConfig;
+    use crate::system::ApplicationCounters;
     use std::path::Path;
 
     #[test]
@@ -211,5 +274,11 @@ mod tests {
             worker_count(variant.target_rate.expect("target rate")).expect("worker count"),
             10_000
         );
+    }
+
+    #[test]
+    fn window_recorders_are_bounded_independently_of_target_rate() {
+        let counters = ApplicationCounters::new(true);
+        assert_eq!(window_recorders(&counters).len(), WINDOW_RECORDER_SHARDS);
     }
 }

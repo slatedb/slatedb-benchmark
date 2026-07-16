@@ -209,14 +209,36 @@ impl ApplicationWindowDelta {
             .saturating_add(other.dropped_operations);
         self.histograms.merge(&other.histograms)
     }
+
+    fn reset(&mut self) {
+        self.completed_operations = 0;
+        self.successful_operations = 0;
+        self.errors = 0;
+        self.read_payload_bytes = 0;
+        self.write_payload_bytes = 0;
+        self.offered_operations = 0;
+        self.dropped_operations = 0;
+        self.histograms.reset();
+    }
+}
+
+#[derive(Debug, Default)]
+struct ApplicationWindowShard {
+    active: ApplicationWindowDelta,
+    spare: Option<ApplicationWindowDelta>,
 }
 
 #[derive(Debug, Clone)]
 pub struct ApplicationWindowRecorder {
-    inner: Arc<Mutex<ApplicationWindowDelta>>,
+    inner: Arc<Mutex<ApplicationWindowShard>>,
 }
 
 impl ApplicationWindowRecorder {
+    fn update(&self, record: impl FnOnce(&mut ApplicationWindowDelta)) {
+        let mut shard = self.inner.lock().expect("application window lock poisoned");
+        record(&mut shard.active);
+    }
+
     pub fn record_success(
         &self,
         operation: &str,
@@ -257,19 +279,21 @@ impl ApplicationWindowRecorder {
         write_payload_bytes: u64,
         include_in_headline: bool,
     ) {
-        let mut window = self.inner.lock().expect("application window lock poisoned");
-        window.completed_operations = window.completed_operations.saturating_add(1);
-        window.successful_operations = window.successful_operations.saturating_add(1);
-        window.read_payload_bytes = window.read_payload_bytes.saturating_add(read_payload_bytes);
-        window.write_payload_bytes = window
-            .write_payload_bytes
-            .saturating_add(write_payload_bytes);
-        if include_in_headline {
-            window.histograms.record("return", latency);
-        }
-        window
-            .histograms
-            .record(format!("return/{operation}"), latency);
+        self.update(|window| {
+            window.completed_operations = window.completed_operations.saturating_add(1);
+            window.successful_operations = window.successful_operations.saturating_add(1);
+            window.read_payload_bytes =
+                window.read_payload_bytes.saturating_add(read_payload_bytes);
+            window.write_payload_bytes = window
+                .write_payload_bytes
+                .saturating_add(write_payload_bytes);
+            if include_in_headline {
+                window.histograms.record("return", latency);
+            }
+            window
+                .histograms
+                .record(format!("return/{operation}"), latency);
+        });
     }
 
     pub fn record_error(&self, operation: &str, latency: Duration) {
@@ -281,54 +305,78 @@ impl ApplicationWindowRecorder {
     }
 
     fn record_error_internal(&self, operation: &str, latency: Duration, include_in_headline: bool) {
-        let mut window = self.inner.lock().expect("application window lock poisoned");
-        window.completed_operations = window.completed_operations.saturating_add(1);
-        window.errors = window.errors.saturating_add(1);
-        if include_in_headline {
-            window.histograms.record("return", latency);
-        }
-        window
-            .histograms
-            .record(format!("return/{operation}"), latency);
+        self.update(|window| {
+            window.completed_operations = window.completed_operations.saturating_add(1);
+            window.errors = window.errors.saturating_add(1);
+            if include_in_headline {
+                window.histograms.record("return", latency);
+            }
+            window
+                .histograms
+                .record(format!("return/{operation}"), latency);
+        });
     }
 
     pub fn record_completion(&self, operation: &str, latency: Duration) {
-        let mut window = self.inner.lock().expect("application window lock poisoned");
-        window.completed_operations = window.completed_operations.saturating_add(1);
-        window.histograms.record("return", latency);
-        window
-            .histograms
-            .record(format!("return/{operation}"), latency);
+        self.update(|window| {
+            window.completed_operations = window.completed_operations.saturating_add(1);
+            window.histograms.record("return", latency);
+            window
+                .histograms
+                .record(format!("return/{operation}"), latency);
+        });
     }
 
-    pub fn record_open_loop_timing(&self, response: Duration, scheduling_delay: Duration) {
-        let mut window = self.inner.lock().expect("application window lock poisoned");
-        window.histograms.record("response", response);
-        window
-            .histograms
-            .record("scheduling_delay", scheduling_delay);
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_open_loop_completion(
+        &self,
+        operation: &str,
+        api: &str,
+        successful: bool,
+        return_latency: Duration,
+        api_latency: Duration,
+        response_latency: Duration,
+        scheduling_delay: Duration,
+        read_payload_bytes: u64,
+        write_payload_bytes: u64,
+    ) {
+        self.update(|window| {
+            window.completed_operations = window.completed_operations.saturating_add(1);
+            if successful {
+                window.successful_operations = window.successful_operations.saturating_add(1);
+                window.read_payload_bytes =
+                    window.read_payload_bytes.saturating_add(read_payload_bytes);
+                window.write_payload_bytes = window
+                    .write_payload_bytes
+                    .saturating_add(write_payload_bytes);
+            } else {
+                window.errors = window.errors.saturating_add(1);
+            }
+            window.histograms.record("return", return_latency);
+            window
+                .histograms
+                .record(format!("return/{operation}"), return_latency);
+            window.histograms.record(format!("api/{api}"), api_latency);
+            window.histograms.record("response", response_latency);
+            window
+                .histograms
+                .record("scheduling_delay", scheduling_delay);
+        });
     }
 
     pub fn record_batch_latency(&self, latency: Duration) {
-        self.inner
-            .lock()
-            .expect("application window lock poisoned")
-            .histograms
-            .record("batch", latency);
+        self.update(|window| window.histograms.record("batch", latency));
     }
 
     pub fn record_api_latency(&self, api: &str, latency: Duration) {
-        self.inner
-            .lock()
-            .expect("application window lock poisoned")
-            .histograms
-            .record(format!("api/{api}"), latency);
+        self.update(|window| window.histograms.record(format!("api/{api}"), latency));
     }
 
     pub fn record_offered(&self, offered: u64, dropped: u64) {
-        let mut window = self.inner.lock().expect("application window lock poisoned");
-        window.offered_operations = window.offered_operations.saturating_add(offered);
-        window.dropped_operations = window.dropped_operations.saturating_add(dropped);
+        self.update(|window| {
+            window.offered_operations = window.offered_operations.saturating_add(offered);
+            window.dropped_operations = window.dropped_operations.saturating_add(dropped);
+        });
     }
 }
 
@@ -337,7 +385,7 @@ pub struct ApplicationCounters {
     pub operations: AtomicU64,
     pub errors: AtomicU64,
     open_loop: bool,
-    window_shards: Mutex<Vec<Arc<Mutex<ApplicationWindowDelta>>>>,
+    window_shards: Mutex<Vec<Arc<Mutex<ApplicationWindowShard>>>>,
 }
 
 impl Default for ApplicationCounters {
@@ -362,7 +410,7 @@ impl ApplicationCounters {
     }
 
     pub fn register_window_recorder(&self) -> ApplicationWindowRecorder {
-        let inner = Arc::new(Mutex::new(ApplicationWindowDelta::default()));
+        let inner = Arc::new(Mutex::new(ApplicationWindowShard::default()));
         self.window_shards
             .lock()
             .expect("application shard registry lock poisoned")
@@ -382,9 +430,23 @@ impl ApplicationCounters {
             .clone();
         let mut merged = ApplicationWindowDelta::default();
         for shard in shards {
-            let delta =
-                std::mem::take(&mut *shard.lock().expect("application window lock poisoned"));
-            merged.merge(&delta)?;
+            let mut delta = {
+                let mut shard = shard.lock().expect("application window lock poisoned");
+                let replacement = shard.spare.take().unwrap_or_default();
+                std::mem::replace(&mut shard.active, replacement)
+            };
+            let merge = merged.merge(&delta);
+            delta.reset();
+            let previous = shard
+                .lock()
+                .expect("application window lock poisoned")
+                .spare
+                .replace(delta);
+            debug_assert!(
+                previous.is_none(),
+                "application window drained concurrently"
+            );
+            merge?;
         }
         let summary = |name: &str| {
             merged
@@ -961,8 +1023,6 @@ mod tests {
         worker.record_success("read-modify-write", Duration::from_millis(2), 1024, 256);
         worker.record_background_success("writer-update", Duration::from_secs(1), 0, 128);
         worker.record_error("read", Duration::from_millis(4));
-        worker.record_open_loop_timing(Duration::from_millis(5), Duration::from_millis(1));
-        worker.record_open_loop_timing(Duration::from_millis(7), Duration::from_millis(1));
         worker.record_api_latency("get", Duration::from_millis(3));
         worker.record_offered(3, 1);
 
@@ -980,7 +1040,7 @@ mod tests {
         assert_eq!(window.dropped_operations, Some(1));
         assert_eq!(window.return_latency.expect("return latency").count, 2);
         assert_eq!(window.return_latency_by_operation["writer-update"].count, 1);
-        assert_eq!(window.response_latency.expect("response latency").count, 2);
+        assert!(window.response_latency.is_none());
         assert_eq!(window.api_latency["get"].count, 1);
         assert_eq!(histograms.get("return").expect("return histogram").len(), 2);
         assert_eq!(
@@ -991,6 +1051,74 @@ mod tests {
             1
         );
         assert_eq!(histograms.get("api/get").expect("API histogram").len(), 1);
+    }
+
+    #[test]
+    fn records_open_loop_completion_and_resets_reusable_window_buffers() {
+        let counters = ApplicationCounters::new(true);
+        let worker = counters.register_window_recorder();
+        worker.record_open_loop_completion(
+            "read",
+            "get",
+            true,
+            Duration::from_millis(2),
+            Duration::from_millis(1),
+            Duration::from_millis(3),
+            Duration::from_micros(50),
+            1024,
+            0,
+        );
+
+        let (first, first_histograms) = counters
+            .drain_window(0, 1_000_000_000)
+            .expect("drain first application window");
+        assert_eq!(first.completed_operations, 1);
+        assert_eq!(first.successful_operations, 1);
+        assert_eq!(first.errors, 0);
+        assert_eq!(first.read_payload_bytes, 1024);
+        assert_eq!(first.return_latency.expect("return latency").count, 1);
+        assert_eq!(first.api_latency["get"].count, 1);
+        assert_eq!(first.response_latency.expect("response latency").count, 1);
+        assert_eq!(
+            first
+                .scheduling_delay
+                .expect("scheduling delay latency")
+                .count,
+            1
+        );
+        assert_eq!(
+            first_histograms
+                .get("return/read")
+                .expect("read return histogram")
+                .len(),
+            1
+        );
+
+        worker.record_open_loop_completion(
+            "read",
+            "get",
+            false,
+            Duration::from_millis(4),
+            Duration::from_millis(3),
+            Duration::from_millis(5),
+            Duration::from_micros(75),
+            0,
+            0,
+        );
+        let (second, _) = counters
+            .drain_window(1_000_000_000, 1_000_000_000)
+            .expect("drain second application window");
+        assert_eq!(second.completed_operations, 1);
+        assert_eq!(second.successful_operations, 0);
+        assert_eq!(second.errors, 1);
+        assert_eq!(second.read_payload_bytes, 0);
+
+        let (empty, empty_histograms) = counters
+            .drain_window(2_000_000_000, 1_000_000_000)
+            .expect("drain empty application window");
+        assert_eq!(empty.completed_operations, 0);
+        assert!(empty.return_latency.is_none());
+        assert!(empty_histograms.get("return").is_none());
     }
 
     #[tokio::test]

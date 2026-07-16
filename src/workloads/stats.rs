@@ -159,11 +159,45 @@ impl WorkerStats {
         }
     }
 
-    pub fn record_open_loop_timing(&mut self, response: Duration, scheduling_delay: Duration) {
-        if let Some(recorder) = &self.window_recorder {
-            recorder.record_open_loop_timing(response, scheduling_delay);
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_open_loop_completion(
+        &mut self,
+        operation: &str,
+        api: &str,
+        successful: bool,
+        return_latency: Duration,
+        api_latency: Duration,
+        response_latency: Duration,
+        scheduling_delay: Duration,
+        payload: Payload,
+    ) {
+        self.total += 1;
+        if successful {
+            self.successful += 1;
+            self.read_payload_bytes = self.read_payload_bytes.saturating_add(payload.read_bytes);
+            self.write_payload_bytes = self.write_payload_bytes.saturating_add(payload.write_bytes);
         } else {
-            self.histograms.record("response", response);
+            self.errors += 1;
+        }
+
+        if let Some(recorder) = &self.window_recorder {
+            recorder.record_open_loop_completion(
+                operation,
+                api,
+                successful,
+                return_latency,
+                api_latency,
+                response_latency,
+                scheduling_delay,
+                payload.read_bytes,
+                payload.write_bytes,
+            );
+        } else {
+            self.histograms.record("return", return_latency);
+            self.histograms
+                .record(format!("return/{operation}"), return_latency);
+            self.histograms.record(format!("api/{api}"), api_latency);
+            self.histograms.record("response", response_latency);
             self.histograms.record("scheduling_delay", scheduling_delay);
         }
     }
