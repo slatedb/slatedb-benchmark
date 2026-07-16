@@ -292,17 +292,17 @@ impl ApplicationWindowRecorder {
         include_in_headline: bool,
     ) {
         self.update(|window| {
-            window.completed_operations = window.completed_operations.saturating_add(1);
-            window.successful_operations = window.successful_operations.saturating_add(1);
-            window.read_payload_bytes = window
-                .read_payload_bytes
-                .saturating_add(operation.read_payload_bytes);
-            window.write_payload_bytes = window
-                .write_payload_bytes
-                .saturating_add(operation.write_payload_bytes);
-            window.read_hits = window.read_hits.saturating_add(operation.read_hits);
-            window.read_misses = window.read_misses.saturating_add(operation.read_misses);
             if include_in_headline {
+                window.completed_operations = window.completed_operations.saturating_add(1);
+                window.successful_operations = window.successful_operations.saturating_add(1);
+                window.read_payload_bytes = window
+                    .read_payload_bytes
+                    .saturating_add(operation.read_payload_bytes);
+                window.write_payload_bytes = window
+                    .write_payload_bytes
+                    .saturating_add(operation.write_payload_bytes);
+                window.read_hits = window.read_hits.saturating_add(operation.read_hits);
+                window.read_misses = window.read_misses.saturating_add(operation.read_misses);
                 window.histograms.record("return", operation.latency);
             }
             window
@@ -947,11 +947,11 @@ mod tests {
             .drain_window(0, 1_000_000_000)
             .expect("drain application window");
 
-        assert_eq!(window.completed_operations, 3);
-        assert_eq!(window.successful_operations, 2);
+        assert_eq!(window.completed_operations, 2);
+        assert_eq!(window.successful_operations, 1);
         assert_eq!(window.errors, 1);
         assert_eq!(window.read_payload_bytes, 1024);
-        assert_eq!(window.write_payload_bytes, 384);
+        assert_eq!(window.write_payload_bytes, 256);
         assert_eq!(window.read_hits, 1);
         assert_eq!(window.read_misses, 0);
         assert_eq!(window.return_latency.expect("return latency").count, 2);

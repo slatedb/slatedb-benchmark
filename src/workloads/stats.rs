@@ -137,12 +137,14 @@ impl WorkerStats {
         payload: Payload,
         include_in_headline: bool,
     ) {
-        self.total += 1;
-        self.successful += 1;
-        self.read_payload_bytes = self.read_payload_bytes.saturating_add(payload.read_bytes);
-        self.write_payload_bytes = self.write_payload_bytes.saturating_add(payload.write_bytes);
-        self.read_hits = self.read_hits.saturating_add(payload.read_hits);
-        self.read_misses = self.read_misses.saturating_add(payload.read_misses);
+        if include_in_headline {
+            self.total += 1;
+            self.successful += 1;
+            self.read_payload_bytes = self.read_payload_bytes.saturating_add(payload.read_bytes);
+            self.write_payload_bytes = self.write_payload_bytes.saturating_add(payload.write_bytes);
+            self.read_hits = self.read_hits.saturating_add(payload.read_hits);
+            self.read_misses = self.read_misses.saturating_add(payload.read_misses);
+        }
         if let Some(recorder) = &self.window_recorder {
             if include_in_headline {
                 recorder.record_success(
@@ -413,14 +415,16 @@ mod tests {
     }
 
     #[test]
-    fn background_operation_is_excluded_from_headline_latency() {
+    fn background_operation_is_excluded_from_headline_totals_and_payload() {
         let mut stats = WorkerStats::default();
         stats.record_success("read", Duration::from_millis(1), Payload::read(1));
         stats.record_background_success("writer-update", Duration::from_secs(1), Payload::write(1));
 
         let application = stats.application(Duration::from_secs(1));
 
-        assert_eq!(application.total_operations, 2);
+        assert_eq!(application.total_operations, 1);
+        assert_eq!(application.successful_operations, 1);
+        assert_eq!(application.payload_mib_per_second, 1.0 / (1024.0 * 1024.0));
         assert_eq!(application.return_latency.count, 1);
         assert_eq!(application.return_latency.max_ns, 1_000_000);
         assert_eq!(application.return_latency_by_operation["read"].count, 1);
@@ -453,9 +457,6 @@ mod tests {
             application.background_writer_achieved_mib_per_second,
             Some(420.0 / (1024.0 * 1024.0))
         );
-        assert_eq!(
-            application.payload_mib_per_second,
-            400.0 / (1024.0 * 1024.0)
-        );
+        assert_eq!(application.payload_mib_per_second, 0.0);
     }
 }

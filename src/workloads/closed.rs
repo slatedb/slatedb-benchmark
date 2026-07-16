@@ -1021,11 +1021,16 @@ mod tests {
         .await?;
         let elapsed = started.elapsed();
 
+        let writer_operations = stats
+            .histograms
+            .get("return/writer-update")
+            .expect("writer return histogram")
+            .len();
         assert!(
-            stats.successful > 100,
-            "expected pipelined writes, got {}",
-            stats.successful
+            writer_operations > 100,
+            "expected pipelined writes, got {writer_operations}"
         );
+        assert_eq!(stats.successful, 0);
         assert_eq!(stats.errors, 0);
         assert_eq!(
             stats.background_writer_target_bytes_per_second,
@@ -1033,7 +1038,7 @@ mod tests {
         );
         assert_eq!(
             stats.background_writer_logical_bytes,
-            stats.successful * 420
+            writer_operations * 420
         );
         let achieved = stats
             .application(elapsed)

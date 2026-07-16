@@ -260,11 +260,9 @@ fn validate_invariants(
         .unwrap_or(0);
     let background_returns =
         background_return_count(&result.application.return_latency_by_operation);
-    let expected_returns =
-        validate_return_histogram_count(&result.application, return_count, background_returns)?;
-    let expected_headline_returns = expected_returns
-        .checked_sub(background_returns)
-        .context("background operations exceed returned operations")?;
+    let expected_headline_returns =
+        validate_return_histogram_count(&result.application, return_count)?;
+    let expected_operation_returns = expected_headline_returns.saturating_add(background_returns);
     if result.application.return_latency.count != return_count {
         bail!("return latency summary does not match encoded histogram count");
     }
@@ -288,9 +286,9 @@ fn validate_invariants(
         .values()
         .map(|summary| summary.count)
         .sum::<u64>();
-    if operation_returns != expected_returns {
+    if operation_returns != expected_operation_returns {
         bail!(
-            "per-operation return histograms contain {operation_returns} observations for {expected_returns} returned operations"
+            "per-operation return histograms contain {operation_returns} observations for {expected_operation_returns} foreground and background operations"
         );
     }
     let histogram_apis = histograms
@@ -318,13 +316,7 @@ fn validate_invariants(
             validate_histogram_summary(histograms, name, summary)?;
         }
     }
-    validate_application_windows(
-        result,
-        histograms,
-        timeseries,
-        expected_returns,
-        expected_headline_returns,
-    )?;
+    validate_application_windows(result, histograms, timeseries, expected_headline_returns)?;
     validate_durability_windows(result, timeseries)?;
     if result.application.errors != 0 {
         bail!(
@@ -424,7 +416,6 @@ fn validate_application_windows(
     result: &ResultRecord,
     histograms: &HistogramsFile,
     timeseries: &TimeseriesFile,
-    expected_returns: u64,
     expected_headline_returns: u64,
 ) -> Result<()> {
     if timeseries.application_windows.is_empty() {
@@ -468,9 +459,9 @@ fn validate_application_windows(
         .filter_map(|window| window.return_latency.as_ref())
         .map(|latency| latency.count)
         .sum::<u64>();
-    if completed != expected_returns || return_windows != expected_headline_returns {
+    if completed != expected_headline_returns || return_windows != expected_headline_returns {
         bail!(
-            "application windows contain {completed} completions and {return_windows} headline return latencies for {expected_returns} returned operations and {expected_headline_returns} headline operations"
+            "application windows contain {completed} completions and {return_windows} headline return latencies for {expected_headline_returns} foreground operations"
         );
     }
     if successful != result.application.successful_operations {
@@ -507,20 +498,19 @@ fn validate_application_windows(
             .values()
             .map(|latency| latency.count)
             .sum::<u64>();
-        if operation_returns != window.completed_operations {
+        let background_returns = background_return_count(&window.return_latency_by_operation);
+        let expected_operation_returns = window
+            .completed_operations
+            .saturating_add(background_returns);
+        if operation_returns != expected_operation_returns {
             bail!(
-                "application window contains {operation_returns} per-operation return latencies for {} completed operations",
-                window.completed_operations
+                "application window contains {operation_returns} per-operation return latencies for {expected_operation_returns} foreground and background operations"
             );
         }
-        let background_returns = background_return_count(&window.return_latency_by_operation);
-        let expected_headline = window
-            .completed_operations
-            .checked_sub(background_returns)
-            .context("application window has more background returns than completions")?;
-        if returns != expected_headline {
+        if returns != window.completed_operations {
             bail!(
-                "application window contains {returns} headline return latencies for {expected_headline} foreground operations"
+                "application window contains {returns} headline return latencies for {} foreground operations",
+                window.completed_operations
             );
         }
         if window.successful_operations > window.completed_operations {
@@ -634,18 +624,14 @@ fn validate_window_layout(windows: impl Iterator<Item = (u64, u64)>, name: &str)
 fn validate_return_histogram_count(
     application: &ApplicationPerformance,
     return_count: u64,
-    background_return_count: u64,
 ) -> Result<u64> {
-    let expected_returns = application.total_operations;
-    let expected_headline_returns = expected_returns
-        .checked_sub(background_return_count)
-        .context("background operations exceed returned operations")?;
+    let expected_headline_returns = application.total_operations;
     if return_count != expected_headline_returns {
         bail!(
             "return histogram count {return_count} does not match headline operation count {expected_headline_returns}"
         );
     }
-    Ok(expected_returns)
+    Ok(expected_headline_returns)
 }
 
 fn background_return_count(summaries: &BTreeMap<String, LatencySummary>) -> u64 {
@@ -746,7 +732,7 @@ mod tests {
         };
 
         assert_eq!(
-            validate_return_histogram_count(&application, 8, 2)
+            validate_return_histogram_count(&application, 10)
                 .expect("valid background return count"),
             10
         );

@@ -161,11 +161,11 @@ Run the tests below in order against the same database.
    for durability.
 
 For the three while-writing workloads, headline return latency contains only
-the reader or scanner operations. The capped writer remains visible as
-`writer-update` in the per-operation return latency, API latency, throughput,
-payload, and durability metrics. The writer keeps at most 1,024 durable puts in
-flight, charges each key and value against the 2 MiB/s limit, and publishes both
-its target and achieved logical throughput.
+the reader or scanner operations, and headline operation counts and payload
+exclude the capped writer. The writer remains visible as `writer-update` in the
+per-operation return latency, API latency, durability metrics, and its target
+and achieved logical throughput. It keeps at most 1,024 durable puts in flight
+and charges each key and value against the 2 MiB/s limit.
 
 RocksDB publishes both buffered-I/O and direct-I/O variants. Direct I/O does not
 apply to SlateDB's object-store path, so this suite omits that variant.
