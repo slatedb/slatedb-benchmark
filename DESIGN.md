@@ -259,11 +259,10 @@ $ ./target/release/slatedb-benchmark --version
 slatedb-benchmark <runner-version> (slatedb <version> <commit>)
 ```
 
-Compatibility and release jobs run `scripts/select-slate-source.sh` first.
-The script asks Cargo to replace the runner's SlateDB dependencies with
-absolute paths into the selected checkout and resolves the lockfile. It
-explicitly modifies `Cargo.toml` and `Cargo.lock`; CI runs it only in a
-disposable checkout. Subsequent builds use `--locked`.
+Compatibility and release jobs use `cargo add --path` to replace the runner's
+SlateDB dependencies with absolute paths into the selected checkout and resolve
+the lockfile. This modifies `Cargo.toml` and `Cargo.lock`, so the commands run
+only in disposable CI checkouts. Subsequent builds use `--locked`.
 
 The binary reads S3-compatible object-store configuration from the
 environment:

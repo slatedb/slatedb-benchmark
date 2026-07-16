@@ -32,7 +32,9 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@1.89.0
       - name: Configure selected SlateDB source
-        run: scripts/select-slate-source.sh "$GITHUB_WORKSPACE/.slatedb-source"
+        run: |
+          cargo add --quiet --path "$GITHUB_WORKSPACE/.slatedb-source/slatedb" --features aws,wal_disable,zstd
+          cargo add --quiet --path "$GITHUB_WORKSPACE/.slatedb-source/slatedb-common" --features serde
       - name: Record selected source
         id: selected-source
         env:

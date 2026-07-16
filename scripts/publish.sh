@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Publishes one validated suite from a run directory to the results checkout.
-# Usage: publish-results.sh <run-directory> <version> <suite> <publish-checkout>
+# Usage: publish.sh <run-directory> <version> <suite> <publish-checkout>
 # Replaces that suite's published results and retries the push when another
 # publisher advances main concurrently. Website builds run in the Pages workflow.
 set -euo pipefail
 
 if [[ $# -ne 4 ]]; then
-  echo "usage: publish-results.sh <run-directory> <version> <suite> <publish-checkout>" >&2
+  echo "usage: publish.sh <run-directory> <version> <suite> <publish-checkout>" >&2
   exit 2
 fi
 

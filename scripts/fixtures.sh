@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Generates local website fixtures by running every release suite at scale.
-# Usage: ./scripts/generate-scaled-fixtures.sh
+# Usage: ./scripts/fixtures.sh
 # Set BENCHMARK_SCALE to override the default 0.01% scale.
 set -euo pipefail
 
