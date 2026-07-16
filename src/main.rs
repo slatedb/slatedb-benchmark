@@ -10,7 +10,6 @@ async fn main() -> Result<()> {
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .with_writer(std::io::stderr)
-        .without_time()
         .init();
 
     let cli = Cli::parse();
