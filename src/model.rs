@@ -79,6 +79,7 @@ pub struct BenchmarkConfiguration {
     pub record_count: u64,
     pub key_bytes: usize,
     pub value_bytes: usize,
+    pub value_compression_ratio: f64,
     pub block_cache_bytes: Option<u64>,
     pub metadata_cache_bytes: Option<u64>,
     pub object_store_cache_bytes: Option<u64>,

@@ -40,6 +40,7 @@ pub struct SuiteConfig {
     pub record_count: u64,
     pub key_bytes: usize,
     pub value_bytes: usize,
+    pub value_compression_ratio: f64,
     pub block_cache_bytes: Option<u64>,
     pub metadata_cache_bytes: Option<u64>,
     pub object_store_cache_bytes: Option<u64>,
@@ -114,6 +115,7 @@ struct SuiteFile {
     record_count: u64,
     key_bytes: usize,
     value_bytes: usize,
+    value_compression_ratio: f64,
     block_cache_bytes: Option<u64>,
     metadata_cache_bytes: Option<u64>,
     object_store_cache_bytes: Option<u64>,
@@ -220,6 +222,14 @@ impl BenchmarkConfig {
             }
             if suite.key_bytes == 0 || suite.value_bytes == 0 {
                 bail!("suite {} has a zero-sized key or value", suite.name);
+            }
+            if !suite.value_compression_ratio.is_finite()
+                || !(0.0 < suite.value_compression_ratio && suite.value_compression_ratio <= 1.0)
+            {
+                bail!(
+                    "suite {} has a value compression ratio outside (0, 1]",
+                    suite.name
+                );
             }
             if suite.sst_block_bytes.is_some_and(|size| size != 8192) {
                 bail!(
@@ -388,6 +398,10 @@ impl VariantConfig {
         self.workload.value_bytes.unwrap_or(self.suite.value_bytes)
     }
 
+    pub fn value_compression_ratio(&self) -> f64 {
+        self.suite.value_compression_ratio
+    }
+
     pub fn warmup_ms(&self) -> u64 {
         self.workload.warmup_ms.unwrap_or(self.suite.warmup_ms)
     }
@@ -474,6 +488,7 @@ fn load_suite(suite_path: &Path) -> Result<SuiteConfig> {
         record_count: file.record_count,
         key_bytes: file.key_bytes,
         value_bytes: file.value_bytes,
+        value_compression_ratio: file.value_compression_ratio,
         block_cache_bytes: file.block_cache_bytes,
         metadata_cache_bytes: file.metadata_cache_bytes,
         object_store_cache_bytes: file.object_store_cache_bytes,
@@ -655,6 +670,19 @@ mod tests {
     }
 
     #[test]
+    fn value_compression_ratio_must_be_within_unit_interval() {
+        let mut benchmark = BenchmarkConfig::load_from(Path::new("config")).expect("config");
+        benchmark.suites[0].value_compression_ratio = 0.0;
+
+        let error = benchmark
+            .validate()
+            .expect_err("zero compression ratio should fail");
+        assert!(error
+            .to_string()
+            .contains("value compression ratio outside (0, 1]"));
+    }
+
+    #[test]
     fn rocksdb_workloads_follow_declaration_order() {
         let benchmark = BenchmarkConfig::load_from(Path::new("config")).expect("config");
         let suite = benchmark
@@ -700,6 +728,7 @@ mod tests {
             suite_settings.compression_codec,
             Some(CompressionCodec::Zstd)
         );
+        assert_eq!(suite.value_compression_ratio, 0.5);
         assert!(suite_settings.wal_enabled);
         assert!(suite_settings.compactor_options.is_some());
         assert_eq!(suite.block_cache_bytes, Some(6 * 1024 * 1024 * 1024));

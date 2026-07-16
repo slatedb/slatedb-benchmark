@@ -1,7 +1,8 @@
 use super::durability::DurabilitySender;
 use super::stats::{Payload, WorkerStats};
 use super::util::{
-    choose_coprime_multiplier, key_for_id, prefix_key, random_unique_key, random_value, KeySelector,
+    choose_coprime_multiplier, key_for_id, prefix_key, random_unique_key, KeySelector,
+    ValueGenerator,
 };
 use crate::config::{VariantConfig, WorkloadKind};
 use crate::system::{measure_backpressure, ApplicationCounters};
@@ -90,6 +91,7 @@ async fn worker_loop(
         await_durable: variant.workload.await_durable,
         ..Default::default()
     };
+    let mut values = ValueGenerator::new(variant.value_compression_ratio());
     let mut stats = WorkerStats::with_window_recorder(
         counters
             .as_ref()
@@ -103,6 +105,7 @@ async fn worker_loop(
             &write_options,
             &state,
             &mut rng,
+            &mut values,
             &mut stats,
         ))
         .await;
@@ -177,6 +180,7 @@ async fn execute_operation(
     write_options: &WriteOptions,
     state: &ClosedLoopState,
     rng: &mut StdRng,
+    values: &mut ValueGenerator,
     stats: &mut WorkerStats,
 ) -> OperationCompletion {
     let started = Instant::now();
@@ -192,6 +196,7 @@ async fn execute_operation(
                     selector.sample(rng),
                     write_options,
                     rng,
+                    values,
                     "update",
                     stats,
                 )
@@ -208,6 +213,7 @@ async fn execute_operation(
                     selector.sample(rng),
                     write_options,
                     rng,
+                    values,
                     "update",
                     stats,
                 )
@@ -224,7 +230,7 @@ async fn execute_operation(
                 let id = latest.saturating_sub(1 + rng.random_range(0..window));
                 read(db, variant, id, "read", stats).await
             } else {
-                return ycsb_d_insert(db, variant, write_options, state, rng, stats).await;
+                return ycsb_d_insert(db, variant, write_options, state, rng, values, stats).await;
             }
         }
         WorkloadKind::YcsbE => {
@@ -242,7 +248,7 @@ async fn execute_operation(
                 .await
             } else {
                 let id = state.next_insert.fetch_add(1, Ordering::Relaxed);
-                update(db, variant, id, write_options, rng, "insert", stats).await
+                update(db, variant, id, write_options, rng, values, "insert", stats).await
             }
         }
         WorkloadKind::YcsbF => {
@@ -258,7 +264,7 @@ async fn execute_operation(
                         .map_err(|error| OperationError::Other(error.into()))?
                         .context("read-modify-write key not found")
                         .map_err(OperationError::Other)?;
-                    let value = random_value(variant.value_bytes(), rng);
+                    let value = values.generate(variant.value_bytes(), rng);
                     let handle = stats
                         .measure_api(
                             "put",
@@ -296,6 +302,7 @@ async fn execute_operation(
                 selector.sample(rng),
                 write_options,
                 rng,
+                values,
                 "update",
                 stats,
             )
@@ -305,7 +312,7 @@ async fn execute_operation(
             async {
                 let id = state.next_insert.fetch_add(1, Ordering::Relaxed);
                 let key = random_unique_key(id, variant.key_bytes(), rng);
-                let value = random_value(variant.value_bytes(), rng);
+                let value = values.generate(variant.value_bytes(), rng);
                 let handle = stats
                     .measure_api(
                         "put",
@@ -329,7 +336,7 @@ async fn execute_operation(
             .await
         }
         WorkloadKind::TransactionContention => {
-            transaction(db, variant, write_options, rng, stats).await
+            transaction(db, variant, write_options, rng, values, stats).await
         }
         WorkloadKind::PrefixScan => prefix_scan(db, variant, rng, stats).await,
         other => Err(OperationError::Other(anyhow::anyhow!(
@@ -348,12 +355,13 @@ async fn ycsb_d_insert(
     write_options: &WriteOptions,
     state: &ClosedLoopState,
     rng: &mut StdRng,
+    values: &mut ValueGenerator,
     stats: &mut WorkerStats,
 ) -> OperationCompletion {
     let _guard = state.insert_lock.lock().await;
     let started = Instant::now();
     let id = state.next_insert.load(Ordering::Relaxed);
-    let result = update(db, variant, id, write_options, rng, "insert", stats).await;
+    let result = update(db, variant, id, write_options, rng, values, "insert", stats).await;
     if result.is_ok() {
         state
             .next_insert
@@ -393,10 +401,11 @@ async fn update(
     id: u64,
     write_options: &WriteOptions,
     rng: &mut StdRng,
+    values: &mut ValueGenerator,
     name: &'static str,
     stats: &mut WorkerStats,
 ) -> std::result::Result<OperationOutcome, OperationError> {
-    let value = random_value(variant.value_bytes(), rng);
+    let value = values.generate(variant.value_bytes(), rng);
     let handle = stats
         .measure_api(
             "put",
@@ -551,6 +560,7 @@ async fn transaction(
     variant: &VariantConfig,
     write_options: &WriteOptions,
     rng: &mut StdRng,
+    values: &mut ValueGenerator,
     stats: &mut WorkerStats,
 ) -> std::result::Result<OperationOutcome, OperationError> {
     let transaction = stats
@@ -578,7 +588,7 @@ async fn transaction(
                 .map_err(OperationError::Other)?;
             read_payload_bytes = read_payload_bytes.saturating_add(value.len() as u64);
         } else {
-            let value = random_value(variant.value_bytes(), rng);
+            let value = values.generate(variant.value_bytes(), rng);
             write_payload_bytes = write_payload_bytes.saturating_add(value.len() as u64);
             stats
                 .measure_api_sync("transaction.put", || transaction.put(key, value))
@@ -612,7 +622,10 @@ async fn run_bulk_load(
     durability: Option<DurabilitySender>,
     counters: Option<Arc<ApplicationCounters>>,
 ) -> Result<WorkerStats> {
+    const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
+
     let mut rng = StdRng::from_os_rng();
+    let mut values = ValueGenerator::new(variant.value_compression_ratio());
     let count = variant.record_count();
     let multiplier = choose_coprime_multiplier(count, &mut rng);
     let offset = if count > 0 {
@@ -624,11 +637,21 @@ async fn run_bulk_load(
         await_durable: false,
         ..Default::default()
     };
+    let put_options = PutOptions::default();
     let mut stats = WorkerStats::with_window_recorder(
         counters
             .as_ref()
             .map(|counters| counters.register_window_recorder()),
     );
+    let load_started = Instant::now();
+    let mut last_reported_at = load_started;
+    let mut last_reported_records = 0_u64;
+    let mut last_reported_backpressure_ns = 0_u64;
+    let logical_bytes_per_record = variant.key_bytes().saturating_add(variant.value_bytes()) as f64;
+    let mut heartbeat = tokio::time::interval(HEARTBEAT_INTERVAL);
+    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    heartbeat.tick().await;
+
     for sequence in 0..count {
         let id = if count > 0 {
             (sequence.wrapping_mul(multiplier).wrapping_add(offset)) % count
@@ -636,13 +659,67 @@ async fn run_bulk_load(
             0
         };
         let key = key_for_id(id, variant.key_bytes());
-        let value = random_value(variant.value_bytes(), &mut rng);
+        let value = values.generate(variant.value_bytes(), &mut rng);
         let started = Instant::now();
-        let (result, backpressure) = measure_backpressure(stats.measure_api(
-            "put",
-            db.put_with_options(key, value.clone(), &PutOptions::default(), &write_options),
-        ))
-        .await;
+        let mut put = Box::pin(measure_backpressure(db.put_with_options(
+            key,
+            value.clone(),
+            &put_options,
+            &write_options,
+        )));
+        let (result, backpressure) = loop {
+            tokio::select! {
+                result = &mut put => break result,
+                _ = heartbeat.tick() => {
+                    let now = Instant::now();
+                    let interval = now.saturating_duration_since(last_reported_at);
+                    let elapsed = now.saturating_duration_since(load_started);
+                    let records = sequence;
+                    let recent_records = records.saturating_sub(last_reported_records);
+                    let recent_puts_per_second =
+                        recent_records as f64 / interval.as_secs_f64().max(f64::EPSILON);
+                    let average_puts_per_second =
+                        records as f64 / elapsed.as_secs_f64().max(f64::EPSILON);
+                    let recent_backpressure_ns = stats
+                        .backpressure_ns
+                        .saturating_sub(last_reported_backpressure_ns);
+                    let backpressure_percent = (recent_backpressure_ns as f64 / 1e9
+                        / interval.as_secs_f64().max(f64::EPSILON)
+                        * 100.0)
+                        .min(100.0);
+                    let progress_percent = if count == 0 {
+                        100.0
+                    } else {
+                        records as f64 / count as f64 * 100.0
+                    };
+                    let eta_seconds = if recent_puts_per_second > 0.0 {
+                        count.saturating_sub(records) as f64 / recent_puts_per_second
+                    } else {
+                        -1.0
+                    };
+                    tracing::info!(
+                        records_completed = records,
+                        successful_records = stats.successful,
+                        total_records = count,
+                        errors = stats.errors,
+                        progress_percent,
+                        recent_puts_per_second,
+                        average_puts_per_second,
+                        logical_mib_per_second = recent_puts_per_second
+                            * logical_bytes_per_record
+                            / (1024.0 * 1024.0),
+                        backpressure_percent,
+                        elapsed_seconds = elapsed.as_secs_f64(),
+                        eta_seconds,
+                        "bulk-load progress"
+                    );
+                    last_reported_at = now;
+                    last_reported_records = records;
+                    last_reported_backpressure_ns = stats.backpressure_ns;
+                }
+            }
+        };
+        stats.record_api_latency("put", started.elapsed());
         stats.record_backpressure(backpressure);
         match result {
             Ok(handle) => {
@@ -669,6 +746,23 @@ async fn run_bulk_load(
             }
         }
     }
+    let elapsed = load_started.elapsed();
+    let average_puts_per_second = count as f64 / elapsed.as_secs_f64().max(f64::EPSILON);
+    tracing::info!(
+        records_completed = count,
+        successful_records = stats.successful,
+        total_records = count,
+        errors = stats.errors,
+        progress_percent = 100.0,
+        average_puts_per_second,
+        logical_mib_per_second =
+            average_puts_per_second * logical_bytes_per_record / (1024.0 * 1024.0),
+        backpressure_percent =
+            (stats.backpressure_ns as f64 / 1e9 / elapsed.as_secs_f64().max(f64::EPSILON) * 100.0)
+                .min(100.0),
+        elapsed_seconds = elapsed.as_secs_f64(),
+        "bulk-load insert phase complete"
+    );
     Ok(stats)
 }
 
@@ -726,6 +820,7 @@ async fn capped_writer(
         ..Default::default()
     };
     let mut rng = StdRng::from_os_rng();
+    let mut values = ValueGenerator::new(variant.value_compression_ratio());
     let mut stats = WorkerStats::with_window_recorder(
         counters
             .as_ref()
@@ -734,7 +829,7 @@ async fn capped_writer(
     while Instant::now() < deadline {
         ticker.tick().await;
         let started = Instant::now();
-        let value = random_value(variant.value_bytes(), &mut rng);
+        let value = values.generate(variant.value_bytes(), &mut rng);
         let (result, backpressure) = measure_backpressure(stats.measure_api(
             "put",
             db.put_with_options(
@@ -799,9 +894,11 @@ pub async fn populate_dataset(
     record_count: u64,
     key_bytes: usize,
     value_bytes: usize,
+    value_compression_ratio: f64,
     prefix_layout: bool,
 ) -> Result<()> {
     let mut rng = StdRng::from_os_rng();
+    let mut values = ValueGenerator::new(value_compression_ratio);
     let options = WriteOptions {
         await_durable: false,
         ..Default::default()
@@ -814,7 +911,7 @@ pub async fn populate_dataset(
         };
         db.put_with_options(
             key,
-            random_value(value_bytes, &mut rng),
+            values.generate(value_bytes, &mut rng),
             &PutOptions::default(),
             &options,
         )
@@ -829,6 +926,7 @@ pub async fn populate_dataset(
 mod tests {
     use super::{ycsb_d_insert, ClosedLoopState, WorkerStats};
     use crate::config::BenchmarkConfig;
+    use crate::workloads::util::ValueGenerator;
     use anyhow::{Context, Result};
     use object_store::memory::InMemory;
     use rand::rngs::StdRng;
@@ -854,6 +952,7 @@ mod tests {
             drop(held_lock);
         });
         let mut rng = StdRng::seed_from_u64(1);
+        let mut values = ValueGenerator::new(variant.value_compression_ratio());
         let mut stats = WorkerStats::default();
         let write_options = WriteOptions {
             await_durable: false,
@@ -861,8 +960,16 @@ mod tests {
         };
 
         let wall_started = Instant::now();
-        let completion =
-            ycsb_d_insert(&db, &variant, &write_options, &state, &mut rng, &mut stats).await;
+        let completion = ycsb_d_insert(
+            &db,
+            &variant,
+            &write_options,
+            &state,
+            &mut rng,
+            &mut values,
+            &mut stats,
+        )
+        .await;
         let wall_elapsed = wall_started.elapsed();
         release.await.context("joining insert-lock release task")?;
 

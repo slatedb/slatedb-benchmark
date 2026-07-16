@@ -7,6 +7,8 @@ use rand_distr::Zipf;
 const YCSB_ZIPFIAN_ITEM_COUNT: u64 = 10_000_000_000;
 const YCSB_FNV_OFFSET_BASIS_64: u64 = 0xcbf2_9ce4_8422_2325;
 const YCSB_FNV_PRIME_64: u64 = 1_099_511_628_211;
+const VALUE_CORPUS_BYTES: usize = 1_048_576;
+const COMPRESSIBLE_FRAGMENT_BYTES: usize = 100;
 
 pub fn key_for_id(id: u64, size: usize) -> Bytes {
     let mut key = vec![0_u8; size];
@@ -35,10 +37,61 @@ pub fn random_unique_key(id: u64, size: usize, rng: &mut impl RngCore) -> Bytes 
     Bytes::from(key)
 }
 
-pub fn random_value(size: usize, rng: &mut impl RngCore) -> Bytes {
-    let mut value = vec![0_u8; size];
-    rng.fill_bytes(&mut value);
-    Bytes::from(value)
+pub struct ValueGenerator {
+    compression_ratio: f64,
+    corpus: Option<Bytes>,
+    position: usize,
+}
+
+impl ValueGenerator {
+    pub fn new(compression_ratio: f64) -> Self {
+        Self {
+            compression_ratio,
+            corpus: None,
+            position: 0,
+        }
+    }
+
+    pub fn generate(&mut self, size: usize, rng: &mut impl RngCore) -> Bytes {
+        if size == 0 {
+            return Bytes::new();
+        }
+        let compression_ratio = self.compression_ratio;
+        let corpus = self.corpus.get_or_insert_with(|| {
+            Bytes::from(compressible_data(
+                VALUE_CORPUS_BYTES,
+                compression_ratio,
+                rng,
+            ))
+        });
+        if size > corpus.len() {
+            return Bytes::from(compressible_data(size, self.compression_ratio, rng));
+        }
+        if self.position + size > corpus.len() {
+            self.position = 0;
+        }
+        let value = corpus.slice(self.position..self.position + size);
+        self.position += size;
+        value
+    }
+}
+
+fn compressible_data(size: usize, compression_ratio: f64, rng: &mut impl RngCore) -> Vec<u8> {
+    let mut data = Vec::with_capacity(size);
+    let random_bytes = ((COMPRESSIBLE_FRAGMENT_BYTES as f64 * compression_ratio) as usize)
+        .max(1)
+        .min(COMPRESSIBLE_FRAGMENT_BYTES);
+    while data.len() < size {
+        let fragment_size = COMPRESSIBLE_FRAGMENT_BYTES.min(size - data.len());
+        let mut seed = [0_u8; COMPRESSIBLE_FRAGMENT_BYTES];
+        rng.fill_bytes(&mut seed[..random_bytes]);
+        let fragment_start = data.len();
+        while data.len() - fragment_start < fragment_size {
+            let remaining = fragment_size - (data.len() - fragment_start);
+            data.extend_from_slice(&seed[..remaining.min(random_bytes)]);
+        }
+    }
+    data
 }
 
 pub struct KeySelector {
@@ -108,9 +161,33 @@ fn gcd(mut left: u64, mut right: u64) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{key_for_id, prefix_key, random_unique_key, ycsb_scramble, KeySelector};
+    use super::{
+        key_for_id, prefix_key, random_unique_key, ycsb_scramble, KeySelector, ValueGenerator,
+    };
     use rand::SeedableRng;
     use std::collections::BTreeSet;
+
+    #[test]
+    fn benchmark_values_repeat_the_configured_random_fraction() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(7);
+        let mut values = ValueGenerator::new(0.5);
+        let value = values.generate(400, &mut rng);
+
+        assert_eq!(value.len(), 400);
+        for fragment in value.chunks_exact(100) {
+            assert_eq!(&fragment[..50], &fragment[50..]);
+        }
+    }
+
+    #[test]
+    fn incompressible_benchmark_values_keep_every_byte_random() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(7);
+        let mut values = ValueGenerator::new(1.0);
+        let value = values.generate(400, &mut rng);
+
+        assert_eq!(value.len(), 400);
+        assert_ne!(&value[..200], &value[200..]);
+    }
 
     #[test]
     fn numeric_keys_preserve_lexicographic_order() {

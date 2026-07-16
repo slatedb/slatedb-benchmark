@@ -29,7 +29,8 @@ apply.
   p99.9, and maximum request latency from the runner to the benchmark bucket,
   measured outside SlateDB
 - Configuration: client count, duration, record count, key and value sizes,
-  cache sizes, SlateDB settings, build profile, and enabled features
+  target value compression ratio, cache sizes, SlateDB settings, build profile,
+  and enabled features
 - Application performance: total operations, accepted and completed ops/s, payload MiB/s,
   errors, and p50, p95, p99, p99.9, and maximum return latency overall and per
   operation type. The same percentiles are recorded for each SlateDB API used
@@ -83,7 +84,8 @@ and the defaults in
 [`tools/benchmark.sh`](https://github.com/facebook/rocksdb/blob/main/tools/benchmark.sh)
 where SlateDB has an equivalent setting.
 
-- Dataset: 900 million records with 20-byte keys and 400-byte values
+- Dataset: 900 million records with 20-byte keys and 400-byte values generated
+  with RocksDB's default 0.5 target compression ratio
 - Cache: 6 GiB block cache, 128 MiB metadata/index cache, and 16 GiB local
   object-store cache
 - SST block size: 8 KiB
@@ -102,7 +104,9 @@ Run the tests below in order against the same database.
    suite settings, and wait for compaction to finish. RocksDB also uses its
    vector memtable and an explicit full compaction; SlateDB has no exact
    equivalents. Bulk-load workloads must have an effective warmup of zero
-   because their record-count-driven phase ignores duration.
+   because their record-count-driven phase ignores duration. While inserting,
+   report progress, recent and average throughput, backpressure, and ETA every
+   30 seconds.
 2. `random-read`: Read uniformly random existing keys.
 3. `multi-random-read`: Read batches of 10 uniformly random keys. SlateDB has no
    native `MultiGet`, so issue 10 `get` calls concurrently and report batch

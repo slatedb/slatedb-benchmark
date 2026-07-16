@@ -405,6 +405,7 @@ for (const suite of published.suites) {
           record_count: recordCount,
           key_bytes: keyBytes,
           value_bytes: valueBytes,
+          value_compression_ratio: suite.value_compression_ratio,
           block_cache_bytes: suite.block_cache_bytes,
           metadata_cache_bytes: suite.metadata_cache_bytes,
           object_store_cache_bytes: suite.object_store_cache_bytes ?? null,

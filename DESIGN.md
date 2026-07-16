@@ -60,6 +60,14 @@ suite settings and waits for compaction to finish. Every result records the
 resolved `Settings`; the ephemeral object-store cache root is omitted while its
 capacity is recorded explicitly.
 
+Suites also declare a target value compression ratio. A ratio of `1.0`
+generates fully random values. The RocksDB-derived suite uses `0.5`, matching
+`db_bench`: the generator builds a reusable 1 MiB corpus from 100-byte pieces,
+fills the configured fraction of each piece with random bytes, and repeats that
+fragment to fill the piece. Values are consecutive slices of that corpus. The
+ratio is part of golden database identity and every result's resolved
+configuration.
+
 Dataset sizes, operation mixes, timings, durability behavior, cache capacities,
 SST block size, object-store probe parameters, release eligibility, workloads,
 variants, and execution model live in `suite.toml`. Block and metadata caches

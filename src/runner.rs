@@ -531,11 +531,12 @@ fn golden_key(variant: &VariantConfig) -> Result<String> {
         variant.record_count()
     };
     Ok(format!(
-        "{}-{}-{}-{}-{}-{}",
+        "{}-{}-{}-{}-compression-{:016x}-{}-{}",
         if prefix_layout { "prefix" } else { "records" },
         record_count,
         variant.key_bytes(),
         variant.value_bytes(),
+        variant.value_compression_ratio().to_bits(),
         variant.suite.sst_block_bytes.unwrap_or_default(),
         settings_digest(&variant.slate_settings)?
     ))
@@ -572,6 +573,7 @@ async fn prepare_golden_database(
         record_count,
         variant.key_bytes(),
         variant.value_bytes(),
+        variant.value_compression_ratio(),
         prefix_layout,
     )
     .await?;
@@ -922,6 +924,7 @@ fn write_variant_result(
             record_count: variant.record_count(),
             key_bytes: variant.key_bytes(),
             value_bytes: variant.value_bytes(),
+            value_compression_ratio: variant.value_compression_ratio(),
             block_cache_bytes: variant.suite.block_cache_bytes,
             metadata_cache_bytes: Some(
                 variant
@@ -1379,6 +1382,7 @@ mod tests {
             record_count: 8,
             key_bytes: 16,
             value_bytes: 64,
+            value_compression_ratio: 1.0,
             block_cache_bytes: Some(1024 * 1024),
             metadata_cache_bytes: Some(1024 * 1024),
             object_store_cache_bytes: None,
@@ -1419,7 +1423,7 @@ mod tests {
             recorder,
         )
         .await?;
-        populate_dataset(Arc::clone(&db), 8, 16, 64, false).await?;
+        populate_dataset(Arc::clone(&db), 8, 16, 64, 1.0, false).await?;
         db.close().await?;
 
         let (first, before_overwrite, initial_overwrite_size) = execute_rocks_variant(

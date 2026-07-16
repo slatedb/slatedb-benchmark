@@ -29,6 +29,7 @@ export type BenchmarkResult = {
     record_count: number;
     key_bytes: number;
     value_bytes: number;
+    value_compression_ratio: number;
     block_cache_bytes: number | null;
     metadata_cache_bytes: number | null;
     object_store_cache_bytes: number | null;
