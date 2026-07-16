@@ -249,8 +249,17 @@ impl WorkerStats {
         self.histograms.merge(&other.histograms)
     }
 
-    pub fn application(&self, elapsed: Duration, open_loop: bool) -> ApplicationPerformance {
+    pub fn application(
+        &self,
+        elapsed: Duration,
+        scheduler_elapsed: Option<Duration>,
+    ) -> ApplicationPerformance {
+        let open_loop = scheduler_elapsed.is_some();
         let seconds = elapsed.as_secs_f64().max(f64::EPSILON);
+        let scheduler_seconds = scheduler_elapsed
+            .unwrap_or(elapsed)
+            .as_secs_f64()
+            .max(f64::EPSILON);
         let histogram_summary = |name| {
             self.histograms
                 .get(name)
@@ -280,11 +289,11 @@ impl WorkerStats {
         ApplicationPerformance {
             total_operations: self.total,
             successful_operations: self.successful,
-            accepted_ops_per_second: accepted as f64 / seconds,
+            accepted_ops_per_second: accepted as f64 / scheduler_seconds,
             completed_ops_per_second: completed as f64 / seconds,
-            offered_ops_per_second: open_loop.then_some(self.offered as f64 / seconds),
+            offered_ops_per_second: open_loop.then_some(self.offered as f64 / scheduler_seconds),
             dropped_operations: open_loop.then_some(self.dropped),
-            dropped_ops_per_second: open_loop.then_some(self.dropped as f64 / seconds),
+            dropped_ops_per_second: open_loop.then_some(self.dropped as f64 / scheduler_seconds),
             payload_mib_per_second: Payload::read_write(
                 self.read_payload_bytes,
                 self.write_payload_bytes,
@@ -330,7 +339,7 @@ mod tests {
     }
 
     #[test]
-    fn application_exposes_scheduler_drop_count() {
+    fn application_uses_scheduler_window_for_arrival_rates() {
         let stats = WorkerStats {
             total: 10,
             successful: 7,
@@ -339,13 +348,13 @@ mod tests {
             ..Default::default()
         };
 
-        let application = stats.application(Duration::from_secs(2), true);
+        let application = stats.application(Duration::from_secs(2), Some(Duration::from_secs(1)));
 
         assert_eq!(application.dropped_operations, Some(2));
-        assert_eq!(application.offered_ops_per_second, Some(5.0));
-        assert_eq!(application.accepted_ops_per_second, 4.0);
+        assert_eq!(application.offered_ops_per_second, Some(10.0));
+        assert_eq!(application.accepted_ops_per_second, 8.0);
         assert_eq!(application.completed_ops_per_second, 4.0);
-        assert_eq!(application.dropped_ops_per_second, Some(1.0));
+        assert_eq!(application.dropped_ops_per_second, Some(2.0));
     }
 
     #[test]
@@ -353,7 +362,7 @@ mod tests {
         let mut stats = WorkerStats::default();
         stats.record_transaction_conflict(Duration::from_millis(1));
 
-        let application = stats.application(Duration::from_secs(1), false);
+        let application = stats.application(Duration::from_secs(1), None);
 
         assert_eq!(application.total_operations, 1);
         assert_eq!(application.successful_operations, 0);
@@ -369,7 +378,7 @@ mod tests {
             Payload::read_write(1024 * 1024, 2 * 1024 * 1024),
         );
 
-        let application = stats.application(Duration::from_secs(1), false);
+        let application = stats.application(Duration::from_secs(1), None);
 
         assert_eq!(application.payload_mib_per_second, 3.0);
     }
@@ -380,7 +389,7 @@ mod tests {
         stats.record_success("read", Duration::from_millis(1), Payload::read(1));
         stats.record_background_success("writer-update", Duration::from_secs(1), Payload::write(1));
 
-        let application = stats.application(Duration::from_secs(1), false);
+        let application = stats.application(Duration::from_secs(1), None);
 
         assert_eq!(application.total_operations, 2);
         assert_eq!(application.return_latency.count, 1);

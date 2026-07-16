@@ -24,7 +24,7 @@ pub async fn run_open_phase(
     duration: Duration,
     durability: Option<DurabilitySender>,
     counters: Option<Arc<ApplicationCounters>>,
-) -> Result<WorkerStats> {
+) -> Result<(WorkerStats, Duration)> {
     let target_rate = variant
         .target_rate
         .context("open-loop variant has no target rate")?;
@@ -84,6 +84,7 @@ pub async fn run_open_phase(
     if now < deadline {
         tokio::time::sleep_until(deadline.into()).await;
     }
+    let scheduler_elapsed = started.elapsed();
     drop(sender);
 
     let mut merged = WorkerStats::default();
@@ -93,7 +94,7 @@ pub async fn run_open_phase(
     merged.offered = offered;
     merged.dropped = dropped;
     merged.total = merged.total.saturating_add(dropped);
-    Ok(merged)
+    Ok((merged, scheduler_elapsed))
 }
 
 async fn open_worker(

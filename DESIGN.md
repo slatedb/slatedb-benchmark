@@ -236,12 +236,14 @@ records:
 - return latency from SlateDB invocation to completion
 - scheduling delay, offered ops/s, accepted ops/s, completed ops/s, and the scheduler's dropped operation count and rate
 
-Open-loop results record the offered rate as `configuration.target_rate`; their
-`configuration.clients` field is `null`. Accepted operations are offered
-arrivals that entered the worker queue. Offered, accepted, completed, and
-dropped rates use the same measured elapsed interval, including the final queue
-drain, so their ratios are directly comparable. A result fails validation if
-the scheduler cannot sustain the target rate while SlateDB has capacity.
+Open-loop results record the requested rate as `configuration.target_rate`;
+their `configuration.clients` field is `null`. Accepted operations are offered
+arrivals that entered the worker queue. Offered, accepted, and dropped rates use
+the scheduler's generation interval. Completed and payload rates use the full
+measurement interval, including the final worker drain. This keeps slow returns
+from being misreported as scheduler underproduction while preserving their
+effect on completed throughput. A result fails validation if the scheduler
+cannot sustain the target rate while SlateDB has capacity.
 
 ### Durability
 

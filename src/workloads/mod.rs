@@ -120,25 +120,29 @@ pub async fn execute_variant(
     let tracker = tracks_lag.then(|| DurabilityTracker::start(Arc::clone(&db), measured_started));
     let durability_sender = tracker.as_ref().map(DurabilityTracker::sender);
     let configured_duration = Duration::from_millis(variant.measurement_ms());
-    let mut stats = if is_open_loop(variant.workload.kind) {
-        open_loop::run_open_phase(
+    let (mut stats, scheduler_elapsed) = if is_open_loop(variant.workload.kind) {
+        let (stats, elapsed) = open_loop::run_open_phase(
             Arc::clone(&db),
             variant,
             configured_duration,
             durability_sender,
             Some(Arc::clone(&counters)),
         )
-        .await?
+        .await?;
+        (stats, Some(elapsed))
     } else {
-        closed::run_closed_phase(
-            Arc::clone(&db),
-            variant,
-            configured_duration,
-            durability_sender,
-            Some(Arc::clone(&counters)),
-            &closed_state,
+        (
+            closed::run_closed_phase(
+                Arc::clone(&db),
+                variant,
+                configured_duration,
+                durability_sender,
+                Some(Arc::clone(&counters)),
+                &closed_state,
+            )
+            .await?,
+            None,
         )
-        .await?
     };
     let generation_stopped = Instant::now();
     let measurement_elapsed = generation_stopped.saturating_duration_since(measured_started);
@@ -176,7 +180,7 @@ pub async fn execute_variant(
     );
     storage.database_size_bytes = 0;
     let resources = system::summarize_resources(&timeseries.samples);
-    let application = stats.application(measurement_elapsed, open_loop);
+    let application = stats.application(measurement_elapsed, scheduler_elapsed);
     Ok(WorkloadOutcome {
         application,
         durability,
