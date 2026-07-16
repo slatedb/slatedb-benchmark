@@ -1,338 +1,243 @@
 ---
-import type { BenchmarkResult, BenchmarkTimeseries, Latency } from '../lib/results';
+import type { ChartManifest } from '../lib/charts';
 
 interface Props {
-  result: BenchmarkResult;
-  timeseries: BenchmarkTimeseries;
+  charts: ChartManifest[];
   variant: string;
 }
 
-type Point = { x: number; y: number };
-type ChartDefinition = {
-  key: string;
-  title: string;
-  description: string;
-  unit: string;
-  digits: number;
-  showPoints?: boolean;
-  datasets: Array<{
-    label: string;
-    color: string;
-    points: Point[];
-    dash?: number[];
-    width?: number;
-  }>;
-};
-
-const { result, timeseries, variant } = Astro.props;
-const application = timeseries.application_windows;
-const atEnd = (window: { start_offset_ns: number; duration_ns: number }) =>
-  (window.start_offset_ns + window.duration_ns) / 1e9;
-const seconds = (window: { duration_ns: number }) => window.duration_ns / 1e9;
-const mibPerSecond = (bytes: number, durationSeconds: number) =>
-  bytes / 1_048_576 / Math.max(durationSeconds, Number.EPSILON);
-const bytesPerSecondToMib = (bytes: number) => bytes / 1_048_576;
-const machineRate = (field: 'network_bytes_sent' | 'network_bytes_received') =>
-  timeseries.samples.slice(1).flatMap((sample, index) => {
-    const previous = timeseries.samples[index];
-    const duration = (sample.offset_ns - previous.offset_ns) / 1e9;
-    if (duration <= 0) return [];
-    return [{
-      x: sample.offset_ns / 1e9,
-      y: mibPerSecond(Math.max(0, sample[field] - previous[field]), duration),
-    }];
-  });
-const scalarMetricSeries = (name: string, valueType: 'counter' | 'gauge') =>
-  timeseries.slatedb_metrics.filter((series) =>
-    series.name === name && series.value_type === valueType
-  );
-const scalarValue = (value: number | Record<string, unknown> | null | undefined) =>
-  typeof value === 'number' ? value : null;
-const compactorReadPoints = (() => {
-  const series = scalarMetricSeries('slatedb.compactor.total_throughput_bytes_per_sec', 'gauge');
-  return timeseries.samples.flatMap((sample, index) => {
-    const values = series.flatMap((metric) => {
-      const value = scalarValue(metric.values[index]);
-      return value === null ? [] : [value];
-    });
-    return values.length === 0 ? [] : [{
-      x: sample.offset_ns / 1e9,
-      y: bytesPerSecondToMib(Math.max(0, values.reduce((sum, value) => sum + value, 0))),
-    }];
-  });
-})();
-const compactorWritePoints = (() => {
-  const series = scalarMetricSeries('slatedb.compactor.bytes_compacted', 'counter');
-  return timeseries.samples.slice(1).flatMap((sample, index) => {
-    const duration = (sample.offset_ns - timeseries.samples[index].offset_ns) / 1e9;
-    if (duration <= 0) return [];
-    const deltas = series.flatMap((metric) => {
-      const previous = scalarValue(metric.values[index]);
-      const current = scalarValue(metric.values[index + 1]);
-      return previous === null || current === null ? [] : [Math.max(0, current - previous)];
-    });
-    return deltas.length === 0 ? [] : [{
-      x: sample.offset_ns / 1e9,
-      y: mibPerSecond(deltas.reduce((sum, value) => sum + value, 0), duration),
-    }];
-  });
-})();
-const latencyDatasets = (rows: Array<{ x: number; latency: Latency }>) => [
-  { label: 'p50', color: '#8b94a3', value: (latency: Latency) => latency.p50_ns },
-  { label: 'p95', color: '#5e6878', value: (latency: Latency) => latency.p95_ns },
-  { label: 'p99', color: '#b26844', value: (latency: Latency) => latency.p99_ns },
-].map(({ label, color, value }) => ({
-  label,
-  color,
-  points: rows.map(({ x, latency }) => ({ x, y: value(latency) / 1e6 })),
-}));
-const awaitsDurability = result.durability.final_flush_drain_ns !== null
-  && result.durability.lag === null;
-
-const throughputChart: ChartDefinition = {
-  key: 'payload-throughput',
-  title: 'Throughput',
-  description: 'Logical application payload, SlateDB compaction, and host-wide network traffic',
-  unit: 'MiB / second',
-  digits: 2,
-  datasets: [
-    {
-      label: 'Application read',
-      color: '#3f6f8f',
-      width: 2.2,
-      points: application.map((window) => ({
-        x: atEnd(window),
-        y: mibPerSecond(window.read_payload_bytes, seconds(window)),
-      })),
-    },
-    {
-      label: 'Application write',
-      color: '#b26844',
-      width: 2.2,
-      points: application.map((window) => ({
-        x: atEnd(window),
-        y: mibPerSecond(window.write_payload_bytes, seconds(window)),
-      })),
-    },
-    {
-      label: 'Compactor read',
-      color: '#3f6f8f',
-      dash: [2, 4],
-      points: compactorReadPoints,
-    },
-    {
-      label: 'Compactor write',
-      color: '#b26844',
-      dash: [2, 4],
-      points: compactorWritePoints,
-    },
-    {
-      label: 'Machine download',
-      color: '#3f6f8f',
-      dash: [7, 5],
-      points: machineRate('network_bytes_received'),
-    },
-    {
-      label: 'Machine upload',
-      color: '#b26844',
-      dash: [7, 5],
-      points: machineRate('network_bytes_sent'),
-    },
-  ],
-};
-
-const apiOrder = [
-  'get',
-  'put',
-  'scan',
-  'transaction.begin',
-  'transaction.get',
-  'transaction.put',
-  'transaction.commit',
-  'flush',
-];
-const apiLabel = (api: string) => `${api}()`;
-const apiChartLabel = (api: string) => `${api.replace(/^transaction\./, '')}()`;
-const apiDescription = (api: string) => {
-  if (api === 'scan') return 'SlateDB scan invocation through iterator exhaustion';
-  if (api === 'flush') return 'SlateDB flush() invocation through durable completion';
-  const durability = ['put', 'transaction.commit'].includes(api) && awaitsDurability
-    ? ' · includes durability'
-    : '';
-  return `SlateDB ${apiLabel(api)} invocation to API return${durability}`;
-};
-const apiCharts: ChartDefinition[] = [...new Set(application.flatMap((window) =>
-  Object.keys(window.api_latency),
-))]
-  .sort((left, right) => {
-    const leftIndex = apiOrder.indexOf(left);
-    const rightIndex = apiOrder.indexOf(right);
-    return (leftIndex < 0 ? apiOrder.length : leftIndex)
-      - (rightIndex < 0 ? apiOrder.length : rightIndex)
-      || left.localeCompare(right);
-  })
-  .flatMap((api) => {
-    const rows = application.flatMap((window) => {
-      const latency = window.api_latency[api];
-      return latency ? [{ x: atEnd(window), latency }] : [];
-    });
-    const calls = rows.reduce((count, row) => count + row.latency.count, 0);
-    if (api === 'flush' && calls < 2) return [];
-    return [{
-      key: `api-${api.replaceAll('.', '-')}`,
-      title: `${apiChartLabel(api)} latency`,
-      description: apiDescription(api),
-      unit: 'Milliseconds',
-      digits: 3,
-      showPoints: rows.length < 3,
-      datasets: latencyDatasets(rows),
-    }];
-  });
-
-const durabilityRows = (timeseries.durability_windows || [])
-  .filter((window) => window.durability_lag !== null)
-  .map((window) => ({ x: atEnd(window), latency: window.durability_lag! }));
-const durabilityChart: ChartDefinition | null = durabilityRows.length > 0 ? {
-  key: 'durability-latency',
-  title: 'Durability latency',
-  description: 'API return to durable frontier coverage',
-  unit: 'Milliseconds',
-  digits: 3,
-  datasets: latencyDatasets(durabilityRows),
-} : null;
-
-const charts = [throughputChart, ...apiCharts, durabilityChart]
-  .filter((chart): chart is ChartDefinition => chart !== null);
+const { charts, variant } = Astro.props;
+const initial = charts[0];
 ---
 
-<section class="timeseries-region" aria-label="Performance charts" data-chart-switcher>
+<section
+  class="timeseries-region"
+  aria-label="Performance charts"
+  data-chart-switcher
+  data-chart-variant={variant}
+>
   <div class="chart-toolbar">
-    <p class="chart-description" id="active-chart-description" data-chart-description>{charts[0].description}</p>
+    <p class="chart-description" id="active-chart-description" data-chart-description>
+      {initial.description}
+    </p>
     <label class="chart-selector">
       <span>Chart</span>
       <select data-chart-select aria-label="Chart">
         {charts.map((chart, index) => (
-          <option value={chart.key} selected={index === 0}>{chart.title}</option>
+          <option
+            value={chart.key}
+            data-chart-href={chart.href}
+            data-chart-description={chart.description}
+            selected={index === 0}
+          >
+            {chart.title}
+          </option>
         ))}
       </select>
     </label>
   </div>
-  <div class="chart-stage">
-    {charts.map((chart, index) => (
-      <figure
-        class="time-chart"
-        id={`${chart.key}-panel`}
-        data-chart-panel={chart.key}
-        data-chart-description={chart.description}
-        hidden={index !== 0}
-      >
-        <div class="time-chart-canvas">
-          <canvas
-            data-time-chart={JSON.stringify(chart)}
-            aria-label={`${chart.title} for ${variant}`}
-            aria-describedby="active-chart-description"
-          ></canvas>
-        </div>
-      </figure>
-    ))}
+  <div class="chart-stage" data-chart-stage aria-busy="false">
+    <figure class="time-chart">
+      <div class="time-chart-canvas">
+        <canvas
+          data-time-chart
+          aria-label={`${initial.title} for ${variant}`}
+          aria-describedby="active-chart-description"
+        ></canvas>
+        <p class="chart-status" data-chart-status role="status">Loading chart…</p>
+      </div>
+    </figure>
   </div>
 </section>
 
 <script>
-  import Chart from 'chart.js/auto';
+  type ChartPayload = {
+    key: string;
+    title: string;
+    description: string;
+    unit: string;
+    digits: number;
+    showPoints?: boolean;
+    x: number[][];
+    datasets: Array<{
+      label: string;
+      color: string;
+      x: number;
+      y: number[];
+      dash?: number[];
+      width?: number;
+    }>;
+  };
+  type ChartConstructor = typeof import('chart.js/auto').default;
 
-  const renderChart = (canvas: HTMLCanvasElement) => {
-    const existing = Chart.getChart(canvas);
-    if (existing) {
-      existing.resize();
-      return;
-    }
-    const chart = JSON.parse(canvas.dataset.timeChart || '{}');
-    new Chart(canvas, {
-      type: 'line',
-      data: {
-        datasets: chart.datasets.map((dataset: { label: string; color: string; points: Array<{ x: number; y: number }>; dash?: number[]; width?: number }) => ({
-          label: dataset.label,
-          data: dataset.points,
-          borderColor: dataset.color,
-          backgroundColor: dataset.color,
-          borderWidth: dataset.width ?? 1.8,
-          borderDash: dataset.dash ?? [],
-          pointRadius: chart.showPoints ? 3 : 0,
-          pointHoverRadius: chart.showPoints ? 5 : 3,
-          tension: 0.16,
-        })),
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        animation: { duration: 320, easing: 'easeOutQuart' },
-        interaction: { mode: 'index', intersect: false },
-        scales: {
-          x: {
-            type: 'linear',
-            grid: { display: false },
-            title: { display: true, text: 'Elapsed seconds' },
-            ticks: { maxTicksLimit: 8 },
-          },
-          y: {
-            beginAtZero: chart.key === 'payload-throughput',
-            title: { display: true, text: chart.unit },
-            grid: { color: 'rgba(15,22,32,.07)' },
-            ticks: { maxTicksLimit: 6 },
-          },
-        },
-        plugins: {
-          legend: {
-            display: chart.datasets.length > 1,
-            align: 'end',
-            labels: {
-              usePointStyle: true,
-              pointStyle: 'line',
-              boxWidth: 28,
-              pointStyleWidth: 28,
-              generateLabels: (legendChart) =>
-                Chart.defaults.plugins.legend.labels.generateLabels(legendChart).map((label) => {
-                  const dataset = legendChart.data.datasets[label.datasetIndex ?? 0] as {
-                    borderDash?: number[];
-                    borderWidth?: number;
-                  };
-                  return {
-                    ...label,
-                    lineDash: Array.isArray(dataset?.borderDash) ? dataset.borderDash : [],
-                    lineWidth: typeof dataset?.borderWidth === 'number'
-                      ? dataset.borderWidth
-                      : label.lineWidth,
-                  };
-                }),
-            },
-          },
-          tooltip: {
-            callbacks: {
-              title: (items) => `${Number(items[0]?.parsed.x || 0).toFixed(2)} seconds`,
-              label: (context) => `${context.dataset.label}: ${Number(context.parsed.y).toFixed(chart.digits)} ${chart.unit}`,
-            },
-          },
-        },
-      },
-    });
+  const payloads = new Map<string, Promise<ChartPayload>>();
+  let chartConstructor: Promise<ChartConstructor> | null = null;
+
+  const loadChartConstructor = () => {
+    chartConstructor ??= import('chart.js/auto')
+      .then((module) => module.default)
+      .catch((error) => {
+        chartConstructor = null;
+        throw error;
+      });
+    return chartConstructor;
+  };
+
+  const loadPayload = (href: string) => {
+    const cached = payloads.get(href);
+    if (cached) return cached;
+    const pending = fetch(href)
+      .then((response) => {
+        if (!response.ok) throw new Error(`Chart request failed with ${response.status}`);
+        return response.json() as Promise<ChartPayload>;
+      })
+      .catch((error) => {
+        payloads.delete(href);
+        throw error;
+      });
+    payloads.set(href, pending);
+    return pending;
   };
 
   document.querySelectorAll<HTMLElement>('[data-chart-switcher]').forEach((switcher) => {
     const select = switcher.querySelector<HTMLSelectElement>('[data-chart-select]');
     const description = switcher.querySelector<HTMLElement>('[data-chart-description]');
-    const panels = [...switcher.querySelectorAll<HTMLElement>('[data-chart-panel]')];
-    const activate = (key: string) => {
-      panels.forEach((panel) => {
-        panel.hidden = panel.dataset.chartPanel !== key;
-      });
-      const panel = panels.find((candidate) => !candidate.hidden);
-      if (description && panel?.dataset.chartDescription) description.textContent = panel.dataset.chartDescription;
-      const canvas = panel?.querySelector<HTMLCanvasElement>('[data-time-chart]');
-      if (canvas) requestAnimationFrame(() => renderChart(canvas));
+    const stage = switcher.querySelector<HTMLElement>('[data-chart-stage]');
+    const canvas = switcher.querySelector<HTMLCanvasElement>('[data-time-chart]');
+    const status = switcher.querySelector<HTMLElement>('[data-chart-status]');
+    const variant = switcher.dataset.chartVariant || 'benchmark';
+    let visible = false;
+    let requestVersion = 0;
+    let activeChart: { destroy: () => void } | null = null;
+
+    const selectedOption = () => select?.selectedOptions[0];
+    const renderSelected = async () => {
+      const option = selectedOption();
+      if (!option || !stage || !canvas || !status) return;
+      if (description && option.dataset.chartDescription) {
+        description.textContent = option.dataset.chartDescription;
+      }
+      canvas.setAttribute('aria-label', `${option.textContent || 'Chart'} for ${variant}`);
+      if (!visible) return;
+
+      const href = option.dataset.chartHref;
+      if (!href) return;
+      const currentRequest = ++requestVersion;
+      stage.setAttribute('aria-busy', 'true');
+      status.textContent = 'Loading chart…';
+      status.hidden = false;
+
+      try {
+        const [chart, Chart] = await Promise.all([
+          loadPayload(href),
+          loadChartConstructor(),
+        ]);
+        if (currentRequest !== requestVersion) return;
+
+        const pointCount = chart.datasets.reduce((count, dataset) => count + dataset.y.length, 0);
+        const large = pointCount > 2_000;
+        const datasets = chart.datasets.map((dataset) => {
+          const x = chart.x[dataset.x];
+          if (!x || x.length !== dataset.y.length) {
+            throw new Error(`Invalid X axis for ${chart.key}/${dataset.label}`);
+          }
+          return {
+            label: dataset.label,
+            data: dataset.y.map((y, index) => ({ x: x[index], y })),
+            borderColor: dataset.color,
+            backgroundColor: dataset.color,
+            borderWidth: dataset.width ?? 1.8,
+            borderDash: dataset.dash ?? [],
+            pointRadius: chart.showPoints ? 3 : 0,
+            pointHoverRadius: chart.showPoints ? 5 : 3,
+            tension: large ? 0 : 0.16,
+          };
+        });
+
+        activeChart?.destroy();
+        activeChart = new Chart(canvas, {
+          type: 'line',
+          data: { datasets },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            parsing: false,
+            normalized: true,
+            devicePixelRatio: Math.min(window.devicePixelRatio || 1, 2),
+            animation: large ? false : { duration: 320, easing: 'easeOutQuart' },
+            interaction: { mode: 'index', intersect: false },
+            scales: {
+              x: {
+                type: 'linear',
+                grid: { display: false },
+                title: { display: true, text: 'Elapsed seconds' },
+                ticks: { maxTicksLimit: 8 },
+              },
+              y: {
+                beginAtZero: chart.key === 'payload-throughput',
+                title: { display: true, text: chart.unit },
+                grid: { color: 'rgba(15,22,32,.07)' },
+                ticks: { maxTicksLimit: 6 },
+              },
+            },
+            plugins: {
+              decimation: { enabled: false },
+              legend: {
+                display: chart.datasets.length > 1,
+                align: 'end',
+                labels: {
+                  usePointStyle: true,
+                  pointStyle: 'line',
+                  boxWidth: 28,
+                  pointStyleWidth: 28,
+                  generateLabels: (legendChart) =>
+                    Chart.defaults.plugins.legend.labels.generateLabels(legendChart).map((label) => {
+                      const dataset = legendChart.data.datasets[label.datasetIndex ?? 0] as {
+                        borderDash?: number[];
+                        borderWidth?: number;
+                      };
+                      return {
+                        ...label,
+                        lineDash: Array.isArray(dataset?.borderDash) ? dataset.borderDash : [],
+                        lineWidth: typeof dataset?.borderWidth === 'number'
+                          ? dataset.borderWidth
+                          : label.lineWidth,
+                      };
+                    }),
+                },
+              },
+              tooltip: {
+                callbacks: {
+                  title: (items) => `${Number(items[0]?.parsed.x || 0).toFixed(2)} seconds`,
+                  label: (context) => `${context.dataset.label}: ${Number(context.parsed.y).toFixed(chart.digits)} ${chart.unit}`,
+                },
+              },
+            },
+          },
+        });
+        stage.setAttribute('aria-busy', 'false');
+        status.hidden = true;
+      } catch (error) {
+        if (currentRequest !== requestVersion) return;
+        stage.setAttribute('aria-busy', 'false');
+        status.textContent = 'Chart data could not be loaded.';
+        status.hidden = false;
+        console.error('Unable to render chart', error);
+      }
     };
 
-    select?.addEventListener('change', () => activate(select.value));
-    if (select) activate(select.value);
+    select?.addEventListener('change', () => void renderSelected());
+    if ('IntersectionObserver' in window) {
+      const observer = new IntersectionObserver((entries) => {
+        if (!entries.some((entry) => entry.isIntersecting)) return;
+        visible = true;
+        observer.disconnect();
+        void renderSelected();
+      }, { rootMargin: '240px 0px' });
+      observer.observe(switcher);
+    } else {
+      visible = true;
+      void renderSelected();
+    }
   });
 </script>

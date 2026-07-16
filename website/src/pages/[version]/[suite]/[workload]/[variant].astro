@@ -4,6 +4,7 @@ import ConfigurationTable from '../../../../components/ConfigurationTable.astro'
 import ResultChart from '../../../../components/ResultChart.astro';
 import CostCalculator from '../../../../components/CostCalculator.astro';
 import Base from '../../../../layouts/Base.astro';
+import { buildCharts, chartManifest } from '../../../../lib/charts';
 import { loadPricing, loadResults, routeHref, type BenchmarkResult, type BenchmarkTimeseries } from '../../../../lib/results';
 
 export async function getStaticPaths() {
@@ -14,6 +15,7 @@ export async function getStaticPaths() {
 const { route, routes } = Astro.props;
 const result = route.result as BenchmarkResult;
 const timeseries = route.timeseries as BenchmarkTimeseries;
+const charts = buildCharts(result, timeseries).map((chart) => chartManifest(route, chart));
 const pricing = await loadPricing();
 const catalog = routes.map((candidate: typeof route) => ({ version: candidate.version, suite: candidate.suite, workload: candidate.workload, variant: candidate.variant, href: routeHref(candidate) }));
 const rawBase = `/raw/${route.version}/${route.suite}/${route.workload}/${route.variant}`;
@@ -143,7 +145,7 @@ tables.push(['Object-store baseline', result.object_store_baseline]);
     </aside>
 
     <div class="result-content">
-      <ResultChart result={result} timeseries={timeseries} variant={route.variant} />
+      <ResultChart charts={charts} variant={route.variant} />
 
       <section class="detail-region" aria-labelledby="configuration-title">
         <div class="section-heading"><div><h2 id="configuration-title">Configuration</h2></div></div>
