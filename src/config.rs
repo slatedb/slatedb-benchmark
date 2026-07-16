@@ -774,6 +774,19 @@ mod tests {
         assert_eq!(suite.object_store_probe.throughput_warmup_ms, 5_000);
         assert_eq!(suite.workloads[0].measurement_ms, Some(0));
 
+        let ycsb = benchmark
+            .suites
+            .iter()
+            .find(|suite| suite.name == "ycsb")
+            .expect("ycsb suite");
+        let slatedb = benchmark
+            .suites
+            .iter()
+            .find(|suite| suite.name == "slatedb")
+            .expect("slatedb suite");
+        assert_eq!(ycsb.compaction_timeout_ms, 60 * 60 * 1_000);
+        assert_eq!(ycsb.compaction_timeout_ms, slatedb.compaction_timeout_ms);
+
         let resolved = serde_json::to_value(suite).expect("resolved configuration");
         assert!(resolved.get("measurement_ms").is_some());
         assert!(resolved.get("measurement").is_none());
