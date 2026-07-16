@@ -36,8 +36,10 @@ apply.
   during measurement. One-second application windows report return and API
   latency, successful-operation counts, and logical read, write, and total
   payload bytes over time. For open-loop workloads, accepted operations are
-  offered arrivals that entered the worker queue; all rates use the same actual
-  measured elapsed time.
+  offered arrivals that entered the worker queue. Offered, accepted, and
+  dropped rates use the scheduler interval; completed throughput includes the
+  final worker drain. Drops and high scheduling delay are reported as
+  saturation rather than invalidating the run.
 - Durability performance: p50, p95, p99, p99.9, and maximum durability lag,
   final flush/drain time, and durable ops/s. Asynchronous writes also report
   one-second durability-lag windows through the final drain; awaited writes do

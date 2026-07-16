@@ -41,11 +41,17 @@ export type BenchmarkResult = {
   application: Record<string, unknown> & {
     successful_operations: number;
     accepted_ops_per_second: number;
+    completed_ops_per_second: number;
+    offered_ops_per_second: number | null;
+    dropped_operations: number | null;
+    dropped_ops_per_second: number | null;
     payload_mib_per_second: number;
     errors: number;
     return_latency: Latency;
     return_latency_by_operation: Record<string, Latency>;
     api_latency: Record<string, Latency>;
+    response_latency: Latency | null;
+    scheduling_delay: Latency | null;
   };
   durability: Record<string, unknown> & {
     lag: Latency | null;

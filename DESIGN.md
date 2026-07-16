@@ -242,8 +242,9 @@ arrivals that entered the worker queue. Offered, accepted, and dropped rates use
 the scheduler's generation interval. Completed and payload rates use the full
 measurement interval, including the final worker drain. This keeps slow returns
 from being misreported as scheduler underproduction while preserving their
-effect on completed throughput. A result fails validation if the scheduler
-cannot sustain the target rate while SlateDB has capacity.
+effect on completed throughput. Validation requires the scheduler to offer at
+least 95% of the target rate. Queue drops and high scheduling delay indicate a
+saturated system and remain publishable benchmark results.
 
 ### Durability
 

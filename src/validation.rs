@@ -273,17 +273,14 @@ fn validate_invariants(
         result.configuration.target_rate,
         result.application.offered_ops_per_second,
     ) {
-        if offered < target as f64 * 0.95 {
-            bail!("scheduler offered only {offered:.2} ops/s for target {target}");
-        }
-        if result
-            .application
-            .scheduling_delay
-            .as_ref()
-            .is_none_or(|latency| latency.p99_ns > 1_000_000_000)
-        {
-            bail!("open-loop scheduler p99 delay exceeds its one-second queue bound");
-        }
+        validate_open_loop_offered_rate(target, offered)?;
+    }
+    Ok(())
+}
+
+fn validate_open_loop_offered_rate(target: u64, offered: f64) -> Result<()> {
+    if offered < target as f64 * 0.95 {
+        bail!("scheduler offered only {offered:.2} ops/s for target {target}");
     }
     Ok(())
 }
@@ -662,7 +659,7 @@ fn find_named(root: &Path, name: &str) -> Result<Vec<PathBuf>> {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_return_histogram_count;
+    use super::{validate_open_loop_offered_rate, validate_return_histogram_count};
     use crate::model::ApplicationPerformance;
 
     #[test]
@@ -694,5 +691,12 @@ mod tests {
                 .expect("valid background return count"),
             10
         );
+    }
+
+    #[test]
+    fn open_loop_validation_requires_offered_rate_not_completed_capacity() {
+        validate_open_loop_offered_rate(10_000, 10_000.0)
+            .expect("a scheduler that maintains the offered rate is valid");
+        assert!(validate_open_loop_offered_rate(10_000, 9_499.0).is_err());
     }
 }
