@@ -92,8 +92,10 @@ and the defaults in
 [`tools/benchmark.sh`](https://github.com/facebook/rocksdb/blob/main/tools/benchmark.sh)
 where SlateDB has an equivalent setting.
 
-- Dataset: 900 million records with 20-byte keys and 400-byte values generated
-  with RocksDB's default 0.5 target compression ratio
+- Keyspace: 900 million possible 20-byte keys with 400-byte values generated
+  with RocksDB's default 0.5 target compression ratio. Bulk load performs 900
+  million uniformly random puts with replacement, matching `fillrandom`, so it
+  produces about 569 million distinct keys on average.
 - Key encoding: `db_bench`'s big-endian binary integer prefix followed by ASCII
   `0` padding
 - Cache: 6 GiB block cache, 128 MiB metadata/index cache, and 16 GiB local
@@ -119,24 +121,27 @@ are intentionally not mapped.
 
 Run the tests below in order against the same database.
 
-1. `bulk-load`: With one client, insert all 900 million records in random key
-   order. Disable the WAL and compactor, and do not wait for durability during
-   individual writes. Set both L0 SST limits to `u32::MAX` so the uncompacted L0
-   can hold the complete load. Flush all memtables after loading, restore the
-   suite settings, and wait for compaction to finish. RocksDB also uses its
-   vector memtable and an explicit full compaction; SlateDB has no exact
-   equivalents. Bulk-load workloads must have an effective warmup of zero
-   because their record-count-driven phase ignores duration. While inserting,
-   report progress, recent and average throughput, backpressure, and ETA every
-   30 seconds.
-2. `random-read`: Read uniformly random existing keys.
-3. `multi-random-read`: Read batches of 10 uniformly random keys. SlateDB has no
-   native `MultiGet`, so issue 10 `get` calls concurrently and report batch
-   latency and total key throughput.
+1. `bulk-load`: With one client, issue 900 million uniformly random puts over
+   the 900-million-key ID space, sampling with replacement to match `fillrandom`.
+   Disable the WAL and compactor, and do not wait for durability during individual
+   writes. Set both L0 SST limits to `u32::MAX` so the uncompacted L0 can hold the
+   complete load. Flush all memtables after loading, restore the suite settings,
+   and wait for compaction to finish. RocksDB also uses its vector memtable and
+   an explicit full compaction; SlateDB has no exact equivalents. Bulk-load
+   workloads must have an effective warmup of zero because their
+   record-count-driven phase ignores duration. While inserting, report progress,
+   recent and average throughput, backpressure, and ETA every 30 seconds.
+2. `random-read`: Sample uniformly from the full configured key ID space. After
+   bulk load, about 63.2% of IDs are expected to exist; report hits and misses.
+3. `multi-random-read`: Read batches of 10 IDs sampled uniformly from the full
+   configured key ID space. SlateDB has no native `MultiGet`, so issue 10 `get`
+   calls concurrently and report batch latency, total key throughput, hits, and
+   misses.
 4. `forward-range`: Scan up to 10 records from uniformly random start keys.
 5. `reverse-range`: Scan up to 10 records in descending order from uniformly
    random start keys.
-6. `overwrite`: Update uniformly random existing keys and wait for durability.
+6. `overwrite`: Put uniformly random key IDs and wait for durability. IDs absent
+   after bulk load become new records.
 7. `read-while-writing`: Run 64 random-read clients and one additional writer
    capped at 2 MiB/s. The writer waits for durability.
 8. `forward-range-while-writing`: Run 64 forward-scan clients and one additional
