@@ -29,11 +29,14 @@ jobs:
       slate_version: ${{ steps.selected-source.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/checkout@v4
         with:
           repository: slatedb/slatedb
           ref: ${{ inputs.slate_ref }}
           path: .slatedb-source
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@1.89.0
       - name: Configure selected SlateDB source
         run: scripts/select-slate-source.sh "$GITHUB_WORKSPACE/.slatedb-source"
@@ -64,26 +67,16 @@ jobs:
           retention-days: 7
 "#;
 
-const SUITE_SETUP: &str = r#"    needs: build-runner
+const BENCHMARK_SETUP: &str = r#"    needs: build-runner
     permissions:
-      actions: write
-      contents: write
+      contents: read
     runs-on: warp-ubuntu-latest-x64-16x
     timeout-minutes: 1440
     environment: benchmark
-    env:
-      CLOUD_PROVIDER: aws
-      AWS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
-      AWS_REGION: auto
-      AWS_ENDPOINT_URL_S3: https://t3.storage.dev
-      AWS_ENDPOINT_URL_IAM: https://iam.storage.dev
-"#;
-
-const SUITE_STEPS: &str = r#"      SLATEDB_BENCH_REGION: fra
-      SLATEDB_BENCH_RUNNER_TYPE: warp-ubuntu-latest-x64-16x
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Download runner binary
         uses: actions/download-artifact@v4
         with:
@@ -91,17 +84,18 @@ const SUITE_STEPS: &str = r#"      SLATEDB_BENCH_REGION: fra
           path: bin
       - name: Prepare runner binary
         run: chmod +x bin/slatedb-benchmark
+"#;
+
+const PUBLISH_SETUP: &str = r#"    permissions:
+      actions: write
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
       - name: Check out current main for publication
         uses: actions/checkout@v4
         with:
           ref: main
-          path: publish
           fetch-depth: 0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: publish/website/package-lock.json
 "#;
 
 pub fn generate(args: GenerateWorkflowArgs) -> Result<()> {
@@ -138,15 +132,24 @@ pub fn render(benchmark: &BenchmarkConfig) -> Result<String> {
     for suite in benchmark.suites.iter().filter(|suite| suite.release) {
         writeln!(output, "\n  benchmark-{}:", suite.name)?;
         writeln!(output, "    name: Benchmark {}", suite.name)?;
-        output.push_str(SUITE_SETUP);
-        output.push_str("      SLATEDB_BENCH_BUCKET: ${{ vars.TIGRIS_BUCKET_PREFIX }}-");
+        output.push_str(BENCHMARK_SETUP);
+        writeln!(output, "      - name: Run {} suite", suite.name)?;
+        output.push_str("        env:\n");
+        output.push_str("          CLOUD_PROVIDER: aws\n");
+        output.push_str("          AWS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}\n");
+        output
+            .push_str("          AWS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}\n");
+        output.push_str("          AWS_REGION: auto\n");
+        output.push_str("          AWS_ENDPOINT_URL_S3: https://t3.storage.dev\n");
+        output.push_str("          AWS_ENDPOINT_URL_IAM: https://iam.storage.dev\n");
+        output.push_str("          SLATEDB_BENCH_BUCKET: ${{ vars.TIGRIS_BUCKET_PREFIX }}-");
         output.push_str(&suite.name);
         output.push('\n');
         output.push_str(
-            "      SLATEDB_BENCH_PREFIX: release/${{ needs.build-runner.outputs.slate_version }}\n",
+            "          SLATEDB_BENCH_PREFIX: release/${{ needs.build-runner.outputs.slate_version }}\n",
         );
-        output.push_str(SUITE_STEPS);
-        writeln!(output, "      - name: Run {} suite", suite.name)?;
+        output.push_str("          SLATEDB_BENCH_REGION: fra\n");
+        output.push_str("          SLATEDB_BENCH_RUNNER_TYPE: warp-ubuntu-latest-x64-16x\n");
         output.push_str("        run: |\n");
         output.push_str("          bin/slatedb-benchmark run \\\n");
         writeln!(output, "            --suite \"{}\" \\", suite.name)?;
@@ -154,29 +157,12 @@ pub fn render(benchmark: &BenchmarkConfig) -> Result<String> {
         output.push_str(&suite.name);
         output.push_str("\" \\\n");
         writeln!(output, "            --output \".runs/{}\"", suite.name)?;
+        writeln!(output, "      - name: Validate {} suite", suite.name)?;
         writeln!(
             output,
-            "          bin/slatedb-benchmark validate --output \".runs/{}\"",
+            "        run: bin/slatedb-benchmark validate --output \".runs/{}\"",
             suite.name
         )?;
-        writeln!(output, "      - name: Publish {} suite", suite.name)?;
-        output.push_str("        run: |\n");
-        output.push_str("          ./scripts/publish-results.sh \\\n");
-        writeln!(output, "            \".runs/{}\" \\", suite.name)?;
-        output.push_str("            \"${{ needs.build-runner.outputs.slate_version }}\" \\\n");
-        writeln!(output, "            \"{}\" \\", suite.name)?;
-        output.push_str("            publish\n");
-        writeln!(output, "      - name: Deploy {} suite", suite.name)?;
-        output.push_str("        uses: actions/github-script@v9\n");
-        output.push_str("        with:\n");
-        output.push_str("          github-token: ${{ github.token }}\n");
-        output.push_str("          script: |\n");
-        output.push_str("            await github.rest.actions.createWorkflowDispatch({\n");
-        output.push_str("              owner: context.repo.owner,\n");
-        output.push_str("              repo: context.repo.repo,\n");
-        output.push_str("              workflow_id: \"pages.yml\",\n");
-        output.push_str("              ref: \"main\",\n");
-        output.push_str("            });\n");
         output.push_str("      - name: Preserve suite artifacts\n");
         output.push_str("        if: always()\n");
         output.push_str("        uses: actions/upload-artifact@v4\n");
@@ -190,6 +176,43 @@ pub fn render(benchmark: &BenchmarkConfig) -> Result<String> {
         output.push('\n');
         output.push_str("          if-no-files-found: ignore\n");
         output.push_str("          overwrite: true\n");
+
+        writeln!(output, "\n  publish-{}:", suite.name)?;
+        writeln!(output, "    name: Publish {}", suite.name)?;
+        output.push_str("    needs:\n");
+        output.push_str("      - build-runner\n");
+        output.push_str("      - benchmark-");
+        output.push_str(&suite.name);
+        output.push('\n');
+        output.push_str(PUBLISH_SETUP);
+        output.push_str("      - name: Download suite artifacts\n");
+        output.push_str("        uses: actions/download-artifact@v4\n");
+        output.push_str("        with:\n");
+        output
+            .push_str("          name: benchmark-${{ needs.build-runner.outputs.slate_version }}-");
+        output.push_str(&suite.name);
+        output.push('\n');
+        output.push_str("          path: .runs/");
+        output.push_str(&suite.name);
+        output.push('\n');
+        writeln!(output, "      - name: Publish {} suite", suite.name)?;
+        output.push_str("        run: |\n");
+        output.push_str("          ./scripts/publish-results.sh \\\n");
+        writeln!(output, "            \".runs/{}\" \\", suite.name)?;
+        output.push_str("            \"${{ needs.build-runner.outputs.slate_version }}\" \\\n");
+        writeln!(output, "            \"{}\" \\", suite.name)?;
+        output.push_str("            .\n");
+        writeln!(output, "      - name: Deploy {} suite", suite.name)?;
+        output.push_str("        uses: actions/github-script@v9\n");
+        output.push_str("        with:\n");
+        output.push_str("          github-token: ${{ github.token }}\n");
+        output.push_str("          script: |\n");
+        output.push_str("            await github.rest.actions.createWorkflowDispatch({\n");
+        output.push_str("              owner: context.repo.owner,\n");
+        output.push_str("              repo: context.repo.repo,\n");
+        output.push_str("              workflow_id: \"pages.yml\",\n");
+        output.push_str("              ref: \"main\",\n");
+        output.push_str("            });\n");
     }
     Ok(output)
 }
@@ -227,12 +250,62 @@ mod tests {
         let dispatches = workflow
             .matches("              workflow_id: \"pages.yml\"")
             .count();
+        let suite_uploads = workflow
+            .matches("      - name: Preserve suite artifacts")
+            .count();
+        let suite_downloads = workflow
+            .matches("      - name: Download suite artifacts")
+            .count();
 
-        assert!(workflow.contains("      actions: write"));
         assert!(!workflow.contains("            --workload"));
+        assert!(!workflow.contains("npm "));
         assert_eq!(runs, release_suites);
         assert_eq!(publishes, release_suites);
         assert_eq!(dispatches, release_suites);
+        assert_eq!(suite_uploads, release_suites);
+        assert_eq!(suite_downloads, release_suites);
+    }
+
+    #[test]
+    fn release_workflow_isolates_benchmark_and_publish_credentials() {
+        let benchmark = BenchmarkConfig::load_from(Path::new("config")).expect("config");
+        let release_suites = benchmark
+            .suites
+            .iter()
+            .filter(|suite| suite.release)
+            .collect::<Vec<_>>();
+        let workflow = render(&benchmark).expect("render workflow");
+
+        assert_eq!(
+            workflow.matches("      contents: read").count(),
+            release_suites.len()
+        );
+        assert_eq!(
+            workflow.matches("      contents: write").count(),
+            release_suites.len()
+        );
+        assert_eq!(
+            workflow.matches("      actions: write").count(),
+            release_suites.len()
+        );
+        assert_eq!(
+            workflow
+                .matches("          AWS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}")
+                .count(),
+            release_suites.len()
+        );
+        assert_eq!(
+            workflow
+                .matches("          persist-credentials: false")
+                .count(),
+            release_suites.len() + 2
+        );
+        for suite in release_suites {
+            assert!(workflow.contains(&format!(
+                "  publish-{}:\n    name: Publish {}\n    needs:\n      - build-runner\n      - benchmark-{}",
+                suite.name, suite.name, suite.name
+            )));
+        }
     }
 
     #[test]
@@ -261,13 +334,13 @@ mod tests {
 
         assert_eq!(
             workflow
-                .matches("      AWS_ENDPOINT_URL_S3: https://t3.storage.dev")
+                .matches("          AWS_ENDPOINT_URL_S3: https://t3.storage.dev")
                 .count(),
             release_suites
         );
         assert_eq!(
             workflow
-                .matches("      AWS_ENDPOINT_URL_IAM: https://iam.storage.dev")
+                .matches("          AWS_ENDPOINT_URL_IAM: https://iam.storage.dev")
                 .count(),
             release_suites
         );

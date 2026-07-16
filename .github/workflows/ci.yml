@@ -10,6 +10,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@1.89.0
         with:
           components: rustfmt, clippy
@@ -24,7 +26,7 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: website/package-lock.json
-      - run: npm ci
+      - run: npm ci --ignore-scripts
         working-directory: website
       - run: npm run build
         working-directory: website
@@ -33,6 +35,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@1.89.0
       - run: ./scripts/smoke.sh
 
@@ -43,11 +47,14 @@ jobs:
         slate-ref: [v0.14.1, main]
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/checkout@v4
         with:
           repository: slatedb/slatedb
           ref: ${{ matrix.slate-ref }}
           path: .slatedb-source
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@1.89.0
       - run: scripts/select-slate-source.sh "$GITHUB_WORKSPACE/.slatedb-source"
       - run: cargo check --locked

@@ -23,11 +23,14 @@ jobs:
       slate_version: ${{ steps.selected-source.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/checkout@v4
         with:
           repository: slatedb/slatedb
           ref: ${{ inputs.slate_ref }}
           path: .slatedb-source
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@1.89.0
       - name: Configure selected SlateDB source
         run: scripts/select-slate-source.sh "$GITHUB_WORKSPACE/.slatedb-source"
@@ -61,24 +64,14 @@ jobs:
     name: Benchmark rocksdb
     needs: build-runner
     permissions:
-      actions: write
-      contents: write
+      contents: read
     runs-on: warp-ubuntu-latest-x64-16x
     timeout-minutes: 1440
     environment: benchmark
-    env:
-      CLOUD_PROVIDER: aws
-      AWS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
-      AWS_REGION: auto
-      AWS_ENDPOINT_URL_S3: https://t3.storage.dev
-      AWS_ENDPOINT_URL_IAM: https://iam.storage.dev
-      SLATEDB_BENCH_BUCKET: ${{ vars.TIGRIS_BUCKET_PREFIX }}-rocksdb
-      SLATEDB_BENCH_PREFIX: release/${{ needs.build-runner.outputs.slate_version }}
-      SLATEDB_BENCH_REGION: fra
-      SLATEDB_BENCH_RUNNER_TYPE: warp-ubuntu-latest-x64-16x
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Download runner binary
         uses: actions/download-artifact@v4
         with:
@@ -86,31 +79,61 @@ jobs:
           path: bin
       - name: Prepare runner binary
         run: chmod +x bin/slatedb-benchmark
-      - name: Check out current main for publication
-        uses: actions/checkout@v4
-        with:
-          ref: main
-          path: publish
-          fetch-depth: 0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: publish/website/package-lock.json
       - name: Run rocksdb suite
+        env:
+          CLOUD_PROVIDER: aws
+          AWS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
+          AWS_REGION: auto
+          AWS_ENDPOINT_URL_S3: https://t3.storage.dev
+          AWS_ENDPOINT_URL_IAM: https://iam.storage.dev
+          SLATEDB_BENCH_BUCKET: ${{ vars.TIGRIS_BUCKET_PREFIX }}-rocksdb
+          SLATEDB_BENCH_PREFIX: release/${{ needs.build-runner.outputs.slate_version }}
+          SLATEDB_BENCH_REGION: fra
+          SLATEDB_BENCH_RUNNER_TYPE: warp-ubuntu-latest-x64-16x
         run: |
           bin/slatedb-benchmark run \
             --suite "rocksdb" \
             --session "github-${{ github.run_id }}-rocksdb" \
             --output ".runs/rocksdb"
-          bin/slatedb-benchmark validate --output ".runs/rocksdb"
+      - name: Validate rocksdb suite
+        run: bin/slatedb-benchmark validate --output ".runs/rocksdb"
+      - name: Preserve suite artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-${{ needs.build-runner.outputs.slate_version }}-rocksdb
+          path: .runs/rocksdb
+          if-no-files-found: ignore
+          overwrite: true
+
+  publish-rocksdb:
+    name: Publish rocksdb
+    needs:
+      - build-runner
+      - benchmark-rocksdb
+    permissions:
+      actions: write
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out current main for publication
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Download suite artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: benchmark-${{ needs.build-runner.outputs.slate_version }}-rocksdb
+          path: .runs/rocksdb
       - name: Publish rocksdb suite
         run: |
           ./scripts/publish-results.sh \
             ".runs/rocksdb" \
             "${{ needs.build-runner.outputs.slate_version }}" \
             "rocksdb" \
-            publish
+            .
       - name: Deploy rocksdb suite
         uses: actions/github-script@v9
         with:
@@ -122,37 +145,19 @@ jobs:
               workflow_id: "pages.yml",
               ref: "main",
             });
-      - name: Preserve suite artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: benchmark-${{ needs.build-runner.outputs.slate_version }}-rocksdb
-          path: .runs/rocksdb
-          if-no-files-found: ignore
-          overwrite: true
 
   benchmark-slatedb:
     name: Benchmark slatedb
     needs: build-runner
     permissions:
-      actions: write
-      contents: write
+      contents: read
     runs-on: warp-ubuntu-latest-x64-16x
     timeout-minutes: 1440
     environment: benchmark
-    env:
-      CLOUD_PROVIDER: aws
-      AWS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
-      AWS_REGION: auto
-      AWS_ENDPOINT_URL_S3: https://t3.storage.dev
-      AWS_ENDPOINT_URL_IAM: https://iam.storage.dev
-      SLATEDB_BENCH_BUCKET: ${{ vars.TIGRIS_BUCKET_PREFIX }}-slatedb
-      SLATEDB_BENCH_PREFIX: release/${{ needs.build-runner.outputs.slate_version }}
-      SLATEDB_BENCH_REGION: fra
-      SLATEDB_BENCH_RUNNER_TYPE: warp-ubuntu-latest-x64-16x
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Download runner binary
         uses: actions/download-artifact@v4
         with:
@@ -160,31 +165,61 @@ jobs:
           path: bin
       - name: Prepare runner binary
         run: chmod +x bin/slatedb-benchmark
-      - name: Check out current main for publication
-        uses: actions/checkout@v4
-        with:
-          ref: main
-          path: publish
-          fetch-depth: 0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: publish/website/package-lock.json
       - name: Run slatedb suite
+        env:
+          CLOUD_PROVIDER: aws
+          AWS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
+          AWS_REGION: auto
+          AWS_ENDPOINT_URL_S3: https://t3.storage.dev
+          AWS_ENDPOINT_URL_IAM: https://iam.storage.dev
+          SLATEDB_BENCH_BUCKET: ${{ vars.TIGRIS_BUCKET_PREFIX }}-slatedb
+          SLATEDB_BENCH_PREFIX: release/${{ needs.build-runner.outputs.slate_version }}
+          SLATEDB_BENCH_REGION: fra
+          SLATEDB_BENCH_RUNNER_TYPE: warp-ubuntu-latest-x64-16x
         run: |
           bin/slatedb-benchmark run \
             --suite "slatedb" \
             --session "github-${{ github.run_id }}-slatedb" \
             --output ".runs/slatedb"
-          bin/slatedb-benchmark validate --output ".runs/slatedb"
+      - name: Validate slatedb suite
+        run: bin/slatedb-benchmark validate --output ".runs/slatedb"
+      - name: Preserve suite artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-${{ needs.build-runner.outputs.slate_version }}-slatedb
+          path: .runs/slatedb
+          if-no-files-found: ignore
+          overwrite: true
+
+  publish-slatedb:
+    name: Publish slatedb
+    needs:
+      - build-runner
+      - benchmark-slatedb
+    permissions:
+      actions: write
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out current main for publication
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Download suite artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: benchmark-${{ needs.build-runner.outputs.slate_version }}-slatedb
+          path: .runs/slatedb
       - name: Publish slatedb suite
         run: |
           ./scripts/publish-results.sh \
             ".runs/slatedb" \
             "${{ needs.build-runner.outputs.slate_version }}" \
             "slatedb" \
-            publish
+            .
       - name: Deploy slatedb suite
         uses: actions/github-script@v9
         with:
@@ -196,37 +231,19 @@ jobs:
               workflow_id: "pages.yml",
               ref: "main",
             });
-      - name: Preserve suite artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: benchmark-${{ needs.build-runner.outputs.slate_version }}-slatedb
-          path: .runs/slatedb
-          if-no-files-found: ignore
-          overwrite: true
 
   benchmark-ycsb:
     name: Benchmark ycsb
     needs: build-runner
     permissions:
-      actions: write
-      contents: write
+      contents: read
     runs-on: warp-ubuntu-latest-x64-16x
     timeout-minutes: 1440
     environment: benchmark
-    env:
-      CLOUD_PROVIDER: aws
-      AWS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
-      AWS_REGION: auto
-      AWS_ENDPOINT_URL_S3: https://t3.storage.dev
-      AWS_ENDPOINT_URL_IAM: https://iam.storage.dev
-      SLATEDB_BENCH_BUCKET: ${{ vars.TIGRIS_BUCKET_PREFIX }}-ycsb
-      SLATEDB_BENCH_PREFIX: release/${{ needs.build-runner.outputs.slate_version }}
-      SLATEDB_BENCH_REGION: fra
-      SLATEDB_BENCH_RUNNER_TYPE: warp-ubuntu-latest-x64-16x
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Download runner binary
         uses: actions/download-artifact@v4
         with:
@@ -234,31 +251,61 @@ jobs:
           path: bin
       - name: Prepare runner binary
         run: chmod +x bin/slatedb-benchmark
-      - name: Check out current main for publication
-        uses: actions/checkout@v4
-        with:
-          ref: main
-          path: publish
-          fetch-depth: 0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: publish/website/package-lock.json
       - name: Run ycsb suite
+        env:
+          CLOUD_PROVIDER: aws
+          AWS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
+          AWS_REGION: auto
+          AWS_ENDPOINT_URL_S3: https://t3.storage.dev
+          AWS_ENDPOINT_URL_IAM: https://iam.storage.dev
+          SLATEDB_BENCH_BUCKET: ${{ vars.TIGRIS_BUCKET_PREFIX }}-ycsb
+          SLATEDB_BENCH_PREFIX: release/${{ needs.build-runner.outputs.slate_version }}
+          SLATEDB_BENCH_REGION: fra
+          SLATEDB_BENCH_RUNNER_TYPE: warp-ubuntu-latest-x64-16x
         run: |
           bin/slatedb-benchmark run \
             --suite "ycsb" \
             --session "github-${{ github.run_id }}-ycsb" \
             --output ".runs/ycsb"
-          bin/slatedb-benchmark validate --output ".runs/ycsb"
+      - name: Validate ycsb suite
+        run: bin/slatedb-benchmark validate --output ".runs/ycsb"
+      - name: Preserve suite artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-${{ needs.build-runner.outputs.slate_version }}-ycsb
+          path: .runs/ycsb
+          if-no-files-found: ignore
+          overwrite: true
+
+  publish-ycsb:
+    name: Publish ycsb
+    needs:
+      - build-runner
+      - benchmark-ycsb
+    permissions:
+      actions: write
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out current main for publication
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Download suite artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: benchmark-${{ needs.build-runner.outputs.slate_version }}-ycsb
+          path: .runs/ycsb
       - name: Publish ycsb suite
         run: |
           ./scripts/publish-results.sh \
             ".runs/ycsb" \
             "${{ needs.build-runner.outputs.slate_version }}" \
             "ycsb" \
-            publish
+            .
       - name: Deploy ycsb suite
         uses: actions/github-script@v9
         with:
@@ -270,11 +317,3 @@ jobs:
               workflow_id: "pages.yml",
               ref: "main",
             });
-      - name: Preserve suite artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: benchmark-${{ needs.build-runner.outputs.slate_version }}-ycsb
-          path: .runs/ycsb
-          if-no-files-found: ignore
-          overwrite: true

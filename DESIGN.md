@@ -84,21 +84,21 @@ It derives the result version from the selected source: a release tag such as
 `sha-<12-character resolved commit>`. This version is used for result paths,
 object-store prefixes, artifacts, and the website version selector.
 
-The workflow then runs one job per release suite. Suite jobs have no
-dependencies on one another and therefore run in parallel. Generated suite
-jobs set `timeout-minutes: 1440` instead of GitHub's 360-minute default so the
-RocksDB-derived suite can finish its bulk load and twelve hours of timed
-measurements in one job:
+The workflow then runs one benchmark job and one publisher job per release
+suite. Benchmark jobs have no dependencies on one another and therefore run in
+parallel. They set `timeout-minutes: 1440` instead of GitHub's 360-minute
+default so the RocksDB-derived suite can finish its bulk load and twelve hours
+of timed measurements in one job:
 
 ```text
-                         /-> rocksdb job: run suite -> publish suite
-build runner artifact --+-> slatedb job: run suite -> publish suite
-                         \-> ycsb job:    run suite -> publish suite
+                         /-> rocksdb benchmark -> artifact -> rocksdb publisher
+build runner artifact --+-> slatedb benchmark -> artifact -> slatedb publisher
+                         \-> ycsb benchmark    -> artifact -> ycsb publisher
 ```
 
-Every suite job has its own Tigris bucket in the `fra` region. One runner
-invocation executes the workloads in declaration order, followed by one
-publication step after the suite completes. The runner preserves a commit
+Every benchmark job has its own Tigris bucket in the `fra` region. One runner
+invocation executes the workloads in declaration order and uploads the
+validated suite output as a workflow artifact. The runner preserves a commit
 boundary after each workload: it validates the accumulated suite output and
 commits the workload's result bundle and any database checkpoint before moving
 to the next workload:
@@ -107,21 +107,29 @@ to the next workload:
 restore session -> measure workload -> validate -> commit session
 ```
 
-If a suite job is interrupted or reaches its explicit timeout, rerunning the
+If a benchmark job is interrupted or reaches its explicit timeout, rerunning the
 same workflow run preserves `github.run_id` and therefore the session name.
 The runner restores and skips committed workloads; only the workload that was
 in flight at interruption is measured again.
 
 The benchmark runner owns measurement and object-store persistence. It never
-modifies the repository. The release workflow validates the local result tree,
-copies it into a publication checkout, commits it, and pushes it to `main`.
+modifies the repository. A separate publisher job downloads the validated
+artifact on a fresh runner, copies it into a checkout of `main`, commits it, and
+pushes it.
+
+Benchmark jobs have read-only repository permissions. Tigris credentials and
+object-store settings are scoped to the runner step and are absent from every
+other step. Publisher jobs have repository and workflow write permissions but
+do not receive the benchmark environment, Tigris credentials, or a Node.js
+runtime. Non-publishing checkouts do not persist their GitHub credentials.
 
 The workflow builds the runner in release mode on the configured WarpBuild
 host. It verifies the runner type, CPU count, memory, and object-store endpoint
-before starting. Workloads are ordinary steps, so only one measurement runs at
-a time within a suite job; parallel suite jobs do not share a bucket. Dataset
-preparation, object-store probes, and cleanup never overlap a measurement
-window within the suite. A failed suite does not cancel the other suite jobs.
+before starting. Workloads execute serially inside one suite invocation, so
+only one measurement runs at a time within a benchmark job; parallel benchmark
+jobs do not share a bucket. Dataset preparation, object-store probes, and
+cleanup never overlap a measurement window within the suite. A failed suite
+does not cancel the other benchmark jobs.
 
 `.github/workflows/release.yml` is generated from the release suites and their
 declared workload order. Regenerate it after changing suite configuration:
@@ -517,17 +525,19 @@ covers all measured writes, resource samples span the measurement window, and
 the workload used the expected initial manifest. Secrets, credentials, and
 signed URLs are rejected from result files.
 
-Every release suite has one run step and one publish step. A publication failure
-does not invalidate the per-workload object-store commits: rerunning the GitHub
-job with the same run ID restores and skips every completed workload, then
-retries suite publication without measuring them again. The same behavior
-applies to isolated and sequential suites.
+Every release suite has one run step and a dependent publisher job. A benchmark
+failure does not invalidate the per-workload object-store commits: rerunning it
+with the same run ID restores and skips every completed workload. A publisher
+failure can be rerun against the already-uploaded suite artifact without
+measuring the suite again. The same behavior applies to isolated and sequential
+suites.
 
 Publication replaces that suite's destination with all of its validated
 workload and variant results in a fresh checkout of `main`, commits only that
 result subtree, and rebases before pushing. A non-fast-forward push refetches,
-rebases, rebuilds the website, and retries instead of pushing from the
-benchmark's original stale checkout. A separate Pages workflow deploys after
-each suite results push, so a successful suite becomes visible without waiting
-for the rest of the release. Failed and interrupted jobs keep their local output
-as CI artifacts. The published schema omits trial and repetition fields.
+rebases, and retries instead of pushing from a stale checkout. A separate Pages
+workflow installs dependencies without lifecycle scripts, builds the website,
+and deploys after each suite results push, so a successful suite becomes visible
+without waiting for the rest of the release. Failed and interrupted benchmark
+jobs keep their local output as CI artifacts. The published schema omits trial
+and repetition fields.

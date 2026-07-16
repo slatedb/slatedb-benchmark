@@ -25,6 +25,8 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -32,7 +34,7 @@ jobs:
           cache-dependency-path: website/package-lock.json
       - name: Install website dependencies
         working-directory: website
-        run: npm ci
+        run: npm ci --ignore-scripts
       - name: Build website
         working-directory: website
         run: npm run build

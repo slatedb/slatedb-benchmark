@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Publishes one validated suite from a run directory to the results checkout.
 # Usage: publish-results.sh <run-directory> <version> <suite> <publish-checkout>
-# Replaces that suite's published results, rebuilds the website, and retries the
-# push when another publisher advances main concurrently.
+# Replaces that suite's published results and retries the push when another
+# publisher advances main concurrently. Website builds run in the Pages workflow.
 set -euo pipefail
 
 if [[ $# -ne 4 ]]; then
@@ -47,16 +47,10 @@ git -C "$publish_checkout" config user.name "slatedb-benchmark[bot]"
 git -C "$publish_checkout" config user.email "slatedb-benchmark[bot]@users.noreply.github.com"
 git -C "$publish_checkout" commit -m "Publish SlateDB $version $suite benchmarks"
 
-# Rebase and rebuild before every push so the published website includes any results
-# committed by concurrent suite jobs.
+# Rebase before every push so concurrent suite publications are retained.
 for attempt in 1 2 3 4 5; do
   git -C "$publish_checkout" fetch origin main
   git -C "$publish_checkout" rebase origin/main
-  (
-    cd "$publish_checkout/website"
-    npm ci
-    npm run build
-  )
   if git -C "$publish_checkout" push origin HEAD:main; then
     exit 0
   fi
