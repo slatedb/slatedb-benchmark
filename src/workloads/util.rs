@@ -137,27 +137,6 @@ fn ycsb_scramble(mut value: u64) -> u64 {
     (hash as i64).wrapping_abs() as u64
 }
 
-pub fn choose_coprime_multiplier(record_count: u64, rng: &mut impl Rng) -> u64 {
-    if record_count <= 2 {
-        return 1;
-    }
-    loop {
-        let candidate = rng.random_range(1..record_count);
-        if gcd(candidate, record_count) == 1 {
-            return candidate;
-        }
-    }
-}
-
-fn gcd(mut left: u64, mut right: u64) -> u64 {
-    while right != 0 {
-        let remainder = left % right;
-        left = right;
-        right = remainder;
-    }
-    left
-}
-
 #[cfg(test)]
 mod tests {
     use super::{

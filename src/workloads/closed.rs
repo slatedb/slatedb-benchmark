@@ -1,9 +1,6 @@
 use super::durability::DurabilitySender;
 use super::stats::{Payload, WorkerStats};
-use super::util::{
-    choose_coprime_multiplier, key_for_id, prefix_key, random_unique_key, KeySelector,
-    ValueGenerator,
-};
+use super::util::{key_for_id, prefix_key, random_unique_key, KeySelector, ValueGenerator};
 use crate::config::{KeyDistribution, VariantConfig, WorkloadKind};
 use crate::system::{measure_backpressure, ApplicationWindowRegistry};
 use anyhow::{Context, Result};
@@ -587,12 +584,6 @@ pub(super) async fn run_bulk_load(
     let mut rng = StdRng::from_os_rng();
     let mut values = ValueGenerator::new(variant.value_compression_ratio());
     let count = variant.record_count();
-    let multiplier = choose_coprime_multiplier(count, &mut rng);
-    let offset = if count > 0 {
-        rng.random_range(0..count)
-    } else {
-        0
-    };
     let write_options = WriteOptions {
         await_durable: false,
         ..Default::default()
@@ -613,11 +604,7 @@ pub(super) async fn run_bulk_load(
     heartbeat.tick().await;
 
     for sequence in 0..count {
-        let id = if count > 0 {
-            (sequence.wrapping_mul(multiplier).wrapping_add(offset)) % count
-        } else {
-            0
-        };
+        let id = rng.random_range(0..count);
         let key = key_for_id(id, variant.key_bytes());
         let value = values.generate(variant.value_bytes(), &mut rng);
         let started = Instant::now();
