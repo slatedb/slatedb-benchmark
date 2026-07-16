@@ -106,7 +106,7 @@ pub async fn execute_variant(
         Arc::clone(&windows),
         Arc::clone(&store_metrics),
         Arc::clone(&slate_metrics),
-        system::DatabaseSizeSource::LiveDatabase(Arc::clone(&db)),
+        Arc::clone(&db),
         stop_rx,
     ));
 

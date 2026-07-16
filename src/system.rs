@@ -6,7 +6,6 @@ use crate::model::{
     MetricSnapshot, MetricValue, MetricValueType, ResourceUse, TimeseriesFile, TimeseriesSample,
 };
 use anyhow::{bail, ensure, Result};
-use object_store::path::Path;
 use slatedb::Db;
 use slatedb_common::metrics::{
     CounterFn, DefaultMetricsRecorder, GaugeFn, HistogramFn, MetricValue as SlateMetricValue,
@@ -521,7 +520,7 @@ pub(crate) async fn sample_until_stopped(
     windows: Arc<ApplicationWindowRegistry>,
     store_metrics: Arc<StoreMetrics>,
     slate_metrics: Arc<BenchmarkMetricsRecorder>,
-    database_size: DatabaseSizeSource,
+    db: Arc<Db>,
     mut stop: watch::Receiver<bool>,
 ) -> Result<SampledTimeseries> {
     let mut sampler = HostSampler::new();
@@ -529,7 +528,7 @@ pub(crate) async fn sample_until_stopped(
         started,
         &store_metrics,
         &slate_metrics,
-        database_size.bytes(&store_metrics),
+        live_database_size_bytes(&db.manifest()),
     )];
     let mut application_windows = Vec::new();
     let mut histograms = HistogramSet::default();
@@ -544,7 +543,7 @@ pub(crate) async fn sample_until_stopped(
                     started,
                     &store_metrics,
                     &slate_metrics,
-                    database_size.bytes(&store_metrics),
+                    live_database_size_bytes(&db.manifest()),
                 );
                 if sample.offset_ns > window_start_ns {
                     let (window, window_histograms) = windows.drain_window(
@@ -563,7 +562,7 @@ pub(crate) async fn sample_until_stopped(
                         started,
                         &store_metrics,
                         &slate_metrics,
-                        database_size.bytes(&store_metrics),
+                        live_database_size_bytes(&db.manifest()),
                     );
                     if sample.offset_ns > window_start_ns {
                         let (window, window_histograms) = windows.drain_window(
@@ -584,20 +583,6 @@ pub(crate) async fn sample_until_stopped(
         application_windows,
         histograms,
     })
-}
-
-pub(crate) enum DatabaseSizeSource {
-    LiveDatabase(Arc<Db>),
-    TrackedPrefix(Path),
-}
-
-impl DatabaseSizeSource {
-    fn bytes(&self, store_metrics: &StoreMetrics) -> u64 {
-        match self {
-            Self::LiveDatabase(db) => live_database_size_bytes(&db.manifest()),
-            Self::TrackedPrefix(path) => store_metrics.prefix_bytes(path),
-        }
-    }
 }
 
 pub fn compact_timeseries(mut samples: Vec<TimeseriesSample>) -> Result<TimeseriesFile> {

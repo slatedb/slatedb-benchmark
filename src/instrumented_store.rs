@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::BoxStream;
-use futures::{StreamExt, TryStreamExt};
+use futures::StreamExt;
 use object_store::path::Path;
 use object_store::{
     CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 const STORE_OPERATION_NAMES: [&str; 9] = [
     "put",
@@ -87,7 +87,6 @@ pub struct StoreMetrics {
     operation_bytes_read: AtomicU64,
     operation_bytes_written: AtomicU64,
     http: HttpRequestMetrics,
-    objects: Mutex<BTreeMap<String, u64>>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -182,40 +181,6 @@ impl StoreMetrics {
 
     fn record_http_error(&self, operation: StoreOperation) {
         self.http.request_errors[operation.index()].fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub fn prefix_bytes(&self, prefix: &Path) -> u64 {
-        let prefix = prefix.to_string();
-        let child_prefix = format!("{prefix}/");
-        self.objects
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .iter()
-            .filter(|(location, _)| *location == &prefix || location.starts_with(&child_prefix))
-            .map(|(_, size)| *size)
-            .sum()
-    }
-
-    fn record_object(&self, location: &Path, size: u64) {
-        self.objects
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .insert(location.to_string(), size);
-    }
-
-    fn remove_object(&self, location: &Path) -> Option<u64> {
-        self.objects
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .remove(&location.to_string())
-    }
-
-    fn object_size(&self, location: &Path) -> Option<u64> {
-        self.objects
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .get(&location.to_string())
-            .copied()
     }
 }
 
@@ -315,21 +280,6 @@ impl InstrumentedStore {
         Arc::clone(&self.metrics)
     }
 
-    /// Record objects that predate this wrapper instance without charging the
-    /// benchmark's request counters. This is used before measurement when a
-    /// database is opened by a fresh process.
-    pub async fn seed_prefix(&self, prefix: &Path) -> StoreResult<()> {
-        let objects = self
-            .inner
-            .list(Some(prefix))
-            .try_collect::<Vec<_>>()
-            .await?;
-        for object in objects {
-            self.metrics.record_object(&object.location, object.size);
-        }
-        Ok(())
-    }
-
     fn error<T>(&self, result: &StoreResult<T>) {
         if result.is_err() {
             self.metrics.errors.fetch_add(1, Ordering::Relaxed);
@@ -368,7 +318,6 @@ impl ObjectStore for InstrumentedStore {
             self.metrics
                 .operation_bytes_written
                 .fetch_add(size, Ordering::Relaxed);
-            self.metrics.record_object(location, size);
         }
         result
     }
@@ -387,8 +336,6 @@ impl ObjectStore for InstrumentedStore {
             Box::new(InstrumentedUpload {
                 inner,
                 metrics: Arc::clone(&self.metrics),
-                location: location.clone(),
-                object_bytes: 0,
             }) as Box<dyn MultipartUpload>
         })
     }
@@ -440,13 +387,8 @@ impl ObjectStore for InstrumentedStore {
             .delete_stream(locations)
             .map(move |result| {
                 metrics.delete.fetch_add(1, Ordering::Relaxed);
-                match &result {
-                    Ok(location) => {
-                        metrics.remove_object(location);
-                    }
-                    Err(_) => {
-                        metrics.errors.fetch_add(1, Ordering::Relaxed);
-                    }
+                if result.is_err() {
+                    metrics.errors.fetch_add(1, Ordering::Relaxed);
                 }
                 result
             })
@@ -478,11 +420,6 @@ impl ObjectStore for InstrumentedStore {
         self.metrics.copy.fetch_add(1, Ordering::Relaxed);
         let result = self.inner.copy_opts(from, to, options).await;
         self.error(&result);
-        if result.is_ok() {
-            if let Some(size) = self.metrics.object_size(from) {
-                self.metrics.record_object(to, size);
-            }
-        }
         result
     }
 
@@ -491,11 +428,6 @@ impl ObjectStore for InstrumentedStore {
         self.metrics.delete.fetch_add(1, Ordering::Relaxed);
         let result = self.inner.rename_opts(from, to, options).await;
         self.error(&result);
-        if result.is_ok() {
-            if let Some(size) = self.metrics.remove_object(from) {
-                self.metrics.record_object(to, size);
-            }
-        }
         result
     }
 }
@@ -540,8 +472,6 @@ mod tests {
 struct InstrumentedUpload {
     inner: Box<dyn MultipartUpload>,
     metrics: Arc<StoreMetrics>,
-    location: Path,
-    object_bytes: u64,
 }
 
 #[async_trait]
@@ -552,7 +482,6 @@ impl MultipartUpload for InstrumentedUpload {
         self.metrics
             .operation_bytes_written
             .fetch_add(size, Ordering::Relaxed);
-        self.object_bytes = self.object_bytes.saturating_add(size);
         self.inner.put_part(data)
     }
 
@@ -561,10 +490,7 @@ impl MultipartUpload for InstrumentedUpload {
             .complete_multipart
             .fetch_add(1, Ordering::Relaxed);
         let result = self.inner.complete().await;
-        if result.is_ok() {
-            self.metrics
-                .record_object(&self.location, self.object_bytes);
-        } else {
+        if result.is_err() {
             self.metrics.errors.fetch_add(1, Ordering::Relaxed);
         }
         result

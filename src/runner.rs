@@ -11,7 +11,7 @@ use crate::model::{
 use crate::object_store_probe::{delete_prefix, ObjectStoreContext};
 use crate::system::{
     inspect_environment, sample_until_stopped, ApplicationWindowRegistry, BenchmarkMetricsRecorder,
-    DatabaseSizeSource, SampledTimeseries,
+    SampledTimeseries,
 };
 use crate::workloads::{
     execute_variant, extend_with_compaction_phase, populate_dataset, prepare_bulk_load,
@@ -102,7 +102,7 @@ impl CompactionMeasurement {
     fn start(
         store_metrics: Arc<StoreMetrics>,
         recorder: Arc<BenchmarkMetricsRecorder>,
-        database_path: Path,
+        db: Arc<Db>,
     ) -> Self {
         let started = Instant::now();
         let start_store = store_metrics.snapshot();
@@ -114,7 +114,7 @@ impl CompactionMeasurement {
             windows,
             Arc::clone(&store_metrics),
             Arc::clone(&recorder),
-            DatabaseSizeSource::TrackedPrefix(database_path),
+            db,
             stop_rx,
         ));
         Self {
@@ -277,11 +277,6 @@ pub async fn execute_worker(args: WorkerArgs) -> Result<()> {
         .context("worker selection did not resolve to a variant")?;
     let context = ObjectStoreContext::load()?;
     let database_path = Path::from(args.database_path);
-    context
-        .instrumented
-        .seed_prefix(&database_path)
-        .await
-        .context("seeding worker database-size tracker")?;
     let store: Arc<dyn ObjectStore> = context.instrumented.clone();
     let recorder = Arc::new(BenchmarkMetricsRecorder::new());
     let db = open_database_with_object_store_cache(
@@ -500,14 +495,7 @@ async fn execute_bulk_load_and_compact(
         close_database_after(&bulk_db, bulk_result, "closing bulk-load database").await?;
 
     let recorder = Arc::new(BenchmarkMetricsRecorder::new());
-    let measurement = execution.outcome.as_ref().map(|_| {
-        CompactionMeasurement::start(
-            Arc::clone(&store_metrics),
-            Arc::clone(&recorder),
-            database_path.clone(),
-        )
-    });
-    let compaction_db = match open_database_with_object_store_cache(
+    let compaction_db = open_database_with_object_store_cache(
         database_path.clone(),
         Arc::clone(&store),
         &bulk_variant.suite,
@@ -515,16 +503,14 @@ async fn execute_bulk_load_and_compact(
         object_store_cache.as_ref().map(|cache| cache.path()),
         Arc::clone(&recorder),
     )
-    .await
-    {
-        Ok(db) => db,
-        Err(error) => {
-            if let Some(measurement) = measurement {
-                let _ = measurement.finish().await;
-            }
-            return Err(error);
-        }
-    };
+    .await?;
+    let measurement = execution.outcome.as_ref().map(|_| {
+        CompactionMeasurement::start(
+            Arc::clone(&store_metrics),
+            Arc::clone(&recorder),
+            Arc::clone(&compaction_db),
+        )
+    });
     let compaction_result = compact_database_fully(
         database_path.clone(),
         Arc::clone(&store),
