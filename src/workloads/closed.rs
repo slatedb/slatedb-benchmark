@@ -1,7 +1,8 @@
 use super::durability::DurabilitySender;
 use super::stats::{Payload, WorkerStats};
 use super::util::{
-    key_for_id, prefix_key, random_unique_key, KeySelector, ValueGenerator, YcsbLatestSelector,
+    ordered_key_for_id, prefix_key, random_unique_key, rocksdb_key_for_id, ycsb_key_for_id,
+    KeySelector, ValueGenerator, YcsbLatestSelector,
 };
 use crate::config::{KeyDistribution, VariantConfig, WorkloadKind};
 use crate::system::{measure_backpressure, ApplicationWindowRegistry};
@@ -17,6 +18,18 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::task::JoinSet;
+
+fn key_for_suite(suite: &str, id: u64, size: usize) -> bytes::Bytes {
+    match suite {
+        "ycsb" => ycsb_key_for_id(id, size),
+        "rocksdb" => rocksdb_key_for_id(id, size),
+        _ => ordered_key_for_id(id, size),
+    }
+}
+
+fn key_for_variant(variant: &VariantConfig, id: u64) -> bytes::Bytes {
+    key_for_suite(&variant.suite.name, id, variant.key_bytes())
+}
 
 #[derive(Clone)]
 pub struct ClosedLoopState {
@@ -259,7 +272,7 @@ async fn execute_operation(
                     read(db, variant, selector.sample(rng), "read", stats).await
                 } else {
                     let id = selector.sample(rng);
-                    let key = key_for_id(id, variant.key_bytes());
+                    let key = key_for_variant(variant, id);
                     let previous = stats
                         .measure_api("get", db.get(key.clone()))
                         .await
@@ -366,7 +379,7 @@ async fn read(
     stats: &mut WorkerStats,
 ) -> std::result::Result<OperationOutcome, OperationError> {
     let value = stats
-        .measure_api("get", db.get(key_for_id(id, variant.key_bytes())))
+        .measure_api("get", db.get(key_for_variant(variant, id)))
         .await
         .map_err(|error| OperationError::Other(error.into()))?;
     let payload = match value {
@@ -397,7 +410,7 @@ async fn update(
         .measure_api(
             "put",
             db.put_with_options(
-                key_for_id(id, variant.key_bytes()),
+                key_for_variant(variant, id),
                 value.clone(),
                 &PutOptions::default(),
                 context.write_options,
@@ -422,7 +435,7 @@ async fn multi_read(
     stats: &mut WorkerStats,
 ) -> std::result::Result<OperationOutcome, OperationError> {
     let keys = (0..10)
-        .map(|_| key_for_id(selector.sample(rng), variant.key_bytes()))
+        .map(|_| key_for_variant(variant, selector.sample(rng)))
         .collect::<Vec<_>>();
     let values = join_all(keys.into_iter().map(|key| async {
         let started = Instant::now();
@@ -463,7 +476,7 @@ async fn scan(
 ) -> std::result::Result<OperationOutcome, OperationError> {
     let started = Instant::now();
     let result = async {
-        let key = key_for_id(start_id, variant.key_bytes());
+        let key = key_for_variant(variant, start_id);
         let mut iterator = if reverse {
             db.scan_with_options(
                 ..=key,
@@ -567,7 +580,7 @@ async fn transaction(
     operations.shuffle(rng);
     for read_operation in operations {
         let id = rng.random_range(0..variant.record_count().max(1));
-        let key = key_for_id(id, variant.key_bytes());
+        let key = key_for_variant(variant, id);
         if read_operation {
             let value = stats
                 .measure_api("transaction.get", transaction.get(key))
@@ -637,7 +650,7 @@ pub(super) async fn run_bulk_load(
 
     for sequence in 0..count {
         let id = rng.random_range(0..count);
-        let key = key_for_id(id, variant.key_bytes());
+        let key = key_for_variant(variant, id);
         let value = values.generate(variant.value_bytes(), &mut rng);
         let started = Instant::now();
         let mut put = Box::pin(measure_backpressure(db.put_with_options(
@@ -805,7 +818,7 @@ async fn capped_writer(
         let (result, backpressure) = measure_backpressure(stats.measure_api(
             "put",
             db.put_with_options(
-                key_for_id(selector.sample(&mut rng), variant.key_bytes()),
+                key_for_variant(&variant, selector.sample(&mut rng)),
                 value.clone(),
                 &PutOptions::default(),
                 &options,
@@ -845,6 +858,7 @@ async fn merge_tasks(mut tasks: JoinSet<Result<WorkerStats>>) -> Result<WorkerSt
 
 pub async fn populate_dataset(
     db: Arc<Db>,
+    suite: &str,
     record_count: u64,
     key_bytes: usize,
     value_bytes: usize,
@@ -861,7 +875,7 @@ pub async fn populate_dataset(
         let key = if prefix_layout {
             prefix_key(id / 10, id % 10)
         } else {
-            key_for_id(id, key_bytes)
+            key_for_suite(suite, id, key_bytes)
         };
         db.put_with_options(
             key,

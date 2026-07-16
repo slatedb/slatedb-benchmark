@@ -11,7 +11,7 @@ const YCSB_FNV_PRIME_64: u64 = 1_099_511_628_211;
 const VALUE_CORPUS_BYTES: usize = 1_048_576;
 const COMPRESSIBLE_FRAGMENT_BYTES: usize = 100;
 
-pub fn key_for_id(id: u64, size: usize) -> Bytes {
+pub fn ordered_key_for_id(id: u64, size: usize) -> Bytes {
     let mut key = vec![0_u8; size];
     let encoded = id.to_be_bytes();
     if size >= encoded.len() {
@@ -19,6 +19,17 @@ pub fn key_for_id(id: u64, size: usize) -> Bytes {
     } else {
         key.copy_from_slice(&encoded[encoded.len() - size..]);
     }
+    Bytes::from(key)
+}
+
+pub fn ycsb_key_for_id(id: u64, size: usize) -> Bytes {
+    ordered_key_for_id(ycsb_scramble(id), size)
+}
+
+pub fn rocksdb_key_for_id(id: u64, size: usize) -> Bytes {
+    let mut key = vec![b'0'; size];
+    let bytes_to_fill = size.min(8);
+    key[..bytes_to_fill].copy_from_slice(&id.to_be_bytes()[8 - bytes_to_fill..]);
     Bytes::from(key)
 }
 
@@ -174,8 +185,8 @@ fn ycsb_scramble(mut value: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        key_for_id, prefix_key, random_unique_key, ycsb_scramble, KeySelector, ValueGenerator,
-        YcsbLatestSelector,
+        ordered_key_for_id, prefix_key, random_unique_key, rocksdb_key_for_id, ycsb_key_for_id,
+        ycsb_scramble, KeySelector, ValueGenerator, YcsbLatestSelector,
     };
     use rand::SeedableRng;
     use std::collections::BTreeSet;
@@ -204,7 +215,9 @@ mod tests {
 
     #[test]
     fn numeric_keys_preserve_lexicographic_order() {
-        let keys = (0..256).map(|id| key_for_id(id, 16)).collect::<Vec<_>>();
+        let keys = (0..256)
+            .map(|id| ordered_key_for_id(id, 16))
+            .collect::<Vec<_>>();
         assert!(keys.windows(2).all(|pair| pair[0] < pair[1]));
     }
 
@@ -214,6 +227,28 @@ mod tests {
         assert_eq!(key.len(), 16);
         assert_eq!(&key[..8], &7_u64.to_be_bytes());
         assert_eq!(&key[8..], &9_u64.to_be_bytes());
+    }
+
+    #[test]
+    fn ycsb_keys_hash_logical_ids_before_fixed_width_encoding() {
+        let logical_id = 42;
+
+        assert_eq!(
+            ycsb_key_for_id(logical_id, 16),
+            ordered_key_for_id(ycsb_scramble(logical_id), 16)
+        );
+        assert_ne!(
+            ycsb_key_for_id(logical_id, 16),
+            ordered_key_for_id(logical_id, 16)
+        );
+    }
+
+    #[test]
+    fn rocksdb_keys_match_db_bench_binary_prefix_and_padding() {
+        let key = rocksdb_key_for_id(0x0102_0304_0506_0708, 20);
+
+        assert_eq!(&key[..8], &[1, 2, 3, 4, 5, 6, 7, 8]);
+        assert_eq!(&key[8..], &[b'0'; 12]);
     }
 
     #[test]

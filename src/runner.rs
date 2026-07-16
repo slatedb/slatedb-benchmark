@@ -363,7 +363,8 @@ fn golden_key(variant: &VariantConfig) -> Result<String> {
         variant.record_count()
     };
     Ok(format!(
-        "{}-{}-{}-{}-compression-{:016x}-{}-{}",
+        "{}-{}-{}-{}-{}-compression-{:016x}-{}-{}",
+        variant.suite.name,
         if prefix_layout { "prefix" } else { "records" },
         record_count,
         variant.key_bytes(),
@@ -402,6 +403,7 @@ async fn prepare_golden_database(
     .await?;
     populate_dataset(
         Arc::clone(&db),
+        &variant.suite.name,
         record_count,
         variant.key_bytes(),
         variant.value_bytes(),
@@ -1154,7 +1156,7 @@ mod tests {
             recorder,
         )
         .await?;
-        populate_dataset(Arc::clone(&db), 8, 16, 64, 1.0, false).await?;
+        populate_dataset(Arc::clone(&db), "slatedb", 8, 16, 64, 1.0, false).await?;
         db.close().await?;
 
         let (first, before_overwrite, initial_overwrite_size) = execute_rocks_variant(

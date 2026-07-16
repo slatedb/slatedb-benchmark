@@ -71,8 +71,10 @@ apply.
 Reset each test to the same preloaded dataset. YCSB A, B, C, E, and F use YCSB's
 scrambled Zipfian key distribution: exponent 0.99 over YCSB's 10-billion-rank
 space, with each sampled rank mapped into the loaded keyspace by YCSB's FNV-64
-hash. Workload E expands the mapped keyspace as inserts complete. Call `flush()`
-after measurement and include the drain in the durability results.
+hash. Logical IDs are hashed again before fixed-width encoding to preserve
+YCSB's default hashed insertion order. Workload E expands the mapped keyspace
+as inserts complete. Call `flush()` after measurement and include the drain in
+the durability results.
 
 1. `ycsb-a`: 50% reads and 50% updates.
 2. `ycsb-b`: 95% reads and 5% updates.
@@ -92,6 +94,8 @@ where SlateDB has an equivalent setting.
 
 - Dataset: 900 million records with 20-byte keys and 400-byte values generated
   with RocksDB's default 0.5 target compression ratio
+- Key encoding: `db_bench`'s big-endian binary integer prefix followed by ASCII
+  `0` padding
 - Cache: 6 GiB block cache, 128 MiB metadata/index cache, and 16 GiB local
   object-store cache
 - SST block size: 8 KiB
