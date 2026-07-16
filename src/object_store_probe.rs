@@ -22,6 +22,8 @@ use uuid::Uuid;
 pub struct ObjectStoreContext {
     pub raw: Arc<dyn ObjectStore>,
     pub instrumented: Arc<InstrumentedStore>,
+    /// A store with no benchmark metrics, used for runner control-plane operations.
+    pub control: Arc<dyn ObjectStore>,
     pub root: Path,
     pub provider: String,
     pub endpoint: String,
@@ -38,29 +40,43 @@ impl ObjectStoreContext {
             .clone()
             .unwrap_or_else(|| "https://t3.storage.dev".to_string());
         let metrics = Arc::new(StoreMetrics::default());
-        let raw: Arc<dyn ObjectStore> = match provider.to_ascii_lowercase().as_str() {
+        let (raw, control): (Arc<dyn ObjectStore>, Arc<dyn ObjectStore>) = match provider
+            .to_ascii_lowercase()
+            .as_str()
+        {
             "aws" => {
                 let bucket = env::var("SLATEDB_BENCH_BUCKET")
                     .or_else(|_| env::var("AWS_BUCKET_NAME"))
                     .context("SLATEDB_BENCH_BUCKET is required")?;
-                Arc::new(
-                    AmazonS3Builder::from_env()
-                        .with_bucket_name(bucket)
+                let builder = AmazonS3Builder::from_env().with_bucket_name(bucket);
+                let raw: Arc<dyn ObjectStore> = Arc::new(
+                    builder
+                        .clone()
                         .with_http_connector(InstrumentedHttpConnector::new(
                             Arc::clone(&metrics),
                             configured_endpoint.as_deref(),
                         ))
                         .build()
                         .context("building S3-compatible object store")?,
-                )
+                );
+                let control: Arc<dyn ObjectStore> = Arc::new(
+                    builder
+                        .build()
+                        .context("building S3-compatible control store")?,
+                );
+                (raw, control)
             }
-            "memory" => Arc::new(object_store::memory::InMemory::new()),
+            "memory" => {
+                let store: Arc<dyn ObjectStore> = Arc::new(object_store::memory::InMemory::new());
+                (Arc::clone(&store), store)
+            }
             "local" => {
                 let path = env::var("LOCAL_PATH").context("LOCAL_PATH is required")?;
-                Arc::new(
+                let store: Arc<dyn ObjectStore> = Arc::new(
                     object_store::local::LocalFileSystem::new_with_prefix(path)
                         .context("building local object store")?,
-                )
+                );
+                (Arc::clone(&store), store)
             }
             other => bail!("unsupported CLOUD_PROVIDER {other}; expected aws, memory, or local"),
         };
@@ -72,6 +88,7 @@ impl ObjectStoreContext {
         Ok(Self {
             raw,
             instrumented,
+            control,
             root: Path::from(prefix),
             provider,
             endpoint,

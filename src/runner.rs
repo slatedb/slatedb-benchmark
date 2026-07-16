@@ -376,6 +376,7 @@ async fn prepare_golden_database(
     variant: &VariantConfig,
     path: Path,
     store: Arc<dyn ObjectStore>,
+    control_store: Arc<dyn ObjectStore>,
     key: &str,
 ) -> Result<DatabaseCheckpoint> {
     let prefix_layout = variant.workload.kind == WorkloadKind::PrefixScan;
@@ -408,7 +409,7 @@ async fn prepare_golden_database(
         prefix_layout,
     )
     .await?;
-    compact_database_fully(path.clone(), Arc::clone(&store), &variant.suite).await?;
+    compact_database_fully(path.clone(), control_store, &variant.suite).await?;
     db.close().await.context("closing golden database")?;
 
     let admin = AdminBuilder::new(path.clone(), Arc::clone(&store)).build();
@@ -450,6 +451,7 @@ async fn execute_bulk_load_and_compact(
     compaction_settings: &Settings,
     database_path: &Path,
     store: Arc<dyn ObjectStore>,
+    control_store: Arc<dyn ObjectStore>,
     store_metrics: Arc<StoreMetrics>,
     measure_bulk_load: bool,
 ) -> Result<BulkLoadExecution> {
@@ -511,12 +513,8 @@ async fn execute_bulk_load_and_compact(
             Arc::clone(&compaction_db),
         )
     });
-    let compaction_result = compact_database_fully(
-        database_path.clone(),
-        Arc::clone(&store),
-        &bulk_variant.suite,
-    )
-    .await;
+    let compaction_result =
+        compact_database_fully(database_path.clone(), control_store, &bulk_variant.suite).await;
     let measurement_result = match measurement {
         Some(measurement) => measurement.finish().await.map(Some),
         None => Ok(None),
@@ -1251,7 +1249,9 @@ mod tests {
         compactor.commit_compacted_interval = std::time::Duration::from_millis(10);
 
         let path = Path::from("full-compaction-test");
-        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let control_store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let instrumented = Arc::new(InstrumentedStore::new(Arc::clone(&control_store)));
+        let store: Arc<dyn ObjectStore> = instrumented.clone();
         let db = open_database(
             path.clone(),
             Arc::clone(&store),
@@ -1275,8 +1275,8 @@ mod tests {
             db.flush().await?;
         }
 
-        compact_database_fully(path.clone(), Arc::clone(&store), &suite).await?;
-        let manifest = AdminBuilder::new(path, store)
+        compact_database_fully(path.clone(), Arc::clone(&control_store), &suite).await?;
+        let manifest = AdminBuilder::new(path.clone(), Arc::clone(&control_store))
             .build()
             .read_manifest(None)
             .await?
@@ -1284,6 +1284,14 @@ mod tests {
         assert!(manifest.l0().is_empty());
         assert_eq!(manifest.compacted().len(), 1);
         db.close().await?;
+
+        let before_control_poll = instrumented.metrics().snapshot();
+        compact_database_fully(path, control_store, &suite).await?;
+        let after_control_poll = instrumented.metrics().snapshot();
+        assert_eq!(
+            before_control_poll.operations,
+            after_control_poll.operations
+        );
         Ok(())
     }
 

@@ -205,6 +205,7 @@ pub(super) async fn execute(
                     stage_root,
                     &state,
                     Arc::clone(&store),
+                    Arc::clone(&object_store.control),
                     object_store.instrumented.metrics(),
                     !object_store.provider.eq_ignore_ascii_case("memory"),
                     session,
@@ -286,8 +287,14 @@ async fn execute_isolated_workload(
                 delete_prefix(Arc::clone(&store), &path)
                     .await
                     .context("removing an abandoned golden database")?;
-                let golden =
-                    prepare_golden_database(variant, path, Arc::clone(&store), &key).await?;
+                let golden = prepare_golden_database(
+                    variant,
+                    path,
+                    Arc::clone(&store),
+                    Arc::clone(&object_store.control),
+                    &key,
+                )
+                .await?;
                 state.goldens.insert(key.clone(), golden.clone());
                 save_state(Arc::clone(&object_store.raw), state_path, state).await?;
                 golden
@@ -318,6 +325,7 @@ async fn execute_sequential_workload(
     stage_root: Path,
     state: &SessionState,
     store: Arc<dyn ObjectStore>,
+    control_store: Arc<dyn ObjectStore>,
     store_metrics: Arc<crate::instrumented_store::StoreMetrics>,
     fresh_process: bool,
     session: &str,
@@ -333,6 +341,7 @@ async fn execute_sequential_workload(
             first,
             stage_root.join("database"),
             store,
+            control_store,
             store_metrics,
             session,
             result_context,
@@ -395,6 +404,7 @@ async fn execute_bulk_load(
     variant: &VariantConfig,
     database_path: Path,
     store: Arc<dyn ObjectStore>,
+    control_store: Arc<dyn ObjectStore>,
     store_metrics: Arc<crate::instrumented_store::StoreMetrics>,
     session: &str,
     result_context: &ResultContext<'_>,
@@ -406,6 +416,7 @@ async fn execute_bulk_load(
         &variant.slate_settings,
         &database_path,
         Arc::clone(&store),
+        control_store,
         store_metrics,
         true,
     )
