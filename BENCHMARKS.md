@@ -101,9 +101,21 @@ where SlateDB has an equivalent setting.
 - SST block size: 8 KiB
 - Compression: Zstandard
 - Concurrency: 64 clients
+- Write buffer and compaction output SST target: 128 MiB, mapped to SlateDB's
+  L0 SST threshold and compaction-worker output limit
+- Background compaction concurrency: 16 coordinator jobs and 16 embedded-worker
+  jobs, with one subcompaction per job to match `benchmark.sh`
 - Writes: use `await_durable=true` where `benchmark.sh` uses `sync=1`
 - Duration: 90 minutes per test, except `bulk-load`
 - Warmup: none
+
+RocksDB's `max_background_jobs=16` is a shared budget for flush and compaction
+threads. SlateDB has no shared background-job pool, so the suite applies 16 to
+both compaction limits and leaves SlateDB's separate L0 object-store upload
+parallelism unchanged. RocksDB's leveled-compaction geometry
+(`max_bytes_for_level_base`, level multiplier, and number of levels) has no
+SlateDB equivalent because SlateDB uses size-tiered compaction, so those settings
+are intentionally not mapped.
 
 Run the tests below in order against the same database.
 

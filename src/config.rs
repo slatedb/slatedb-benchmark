@@ -1019,7 +1019,16 @@ mod tests {
         );
         assert_eq!(suite.value_compression_ratio, 0.5);
         assert!(suite_settings.wal_enabled);
-        assert!(suite_settings.compactor_options.is_some());
+        assert_eq!(suite_settings.l0_sst_size_bytes, 128 * 1024 * 1024);
+        let compactor = suite_settings
+            .compactor_options
+            .as_ref()
+            .expect("rocksdb compactor options");
+        assert_eq!(compactor.max_concurrent_compactions, 16);
+        let worker = compactor.worker.as_ref().expect("embedded worker options");
+        assert_eq!(worker.max_concurrent_compactions, 16);
+        assert_eq!(worker.max_sst_size, 128 * 1024 * 1024);
+        assert_eq!(worker.max_subcompactions, 1);
         assert_eq!(suite.block_cache_bytes, Some(6 * 1024 * 1024 * 1024));
         assert_eq!(suite.metadata_cache_bytes, Some(128 * 1024 * 1024));
         assert_eq!(
