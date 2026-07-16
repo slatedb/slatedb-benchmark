@@ -59,6 +59,14 @@ apply.
   Storage, or Google Cloud Storage bucket in US East, with request costs broken
   down by operation
 
+Published results have a zero-error policy. The runner records final operation
+errors and continues the measurement long enough to produce a complete
+diagnostic bundle, but validation rejects any variant whose `errors` count is
+nonzero. Consequently, the `errors` field is useful in failed-run artifacts and
+is always zero in published results. A workload with an operation error is not
+committed to its resumable session and is measured again when that session is
+retried.
+
 ## YCSB suite
 
 - Dataset: 100 million records with 16-byte keys and 1 KiB values

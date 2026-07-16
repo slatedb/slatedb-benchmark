@@ -521,9 +521,14 @@ The runner reads each completed workload bundle back through strict Serde
 models and validates it once before committing the session. Semantic checks
 ensure that histogram counts match operation counts, the durable frontier
 covers all measured writes, resource samples span the measurement window, and
-the workload used the expected initial manifest. Secrets, credentials, and
-signed URLs are rejected from result files. The checked-in JSON schemas remain
-the published data contract rather than a second runtime validation engine.
+the workload used the expected initial manifest. Validation also enforces the
+publication policy of zero final operation errors. Workers record an operation
+error and continue so the failed run retains complete diagnostic metrics, but a
+nonzero `errors` count prevents the workload bundle and its database checkpoint
+from reaching the session commit point. Retrying the session therefore measures
+that workload again. Secrets, credentials, and signed URLs are rejected from
+result files. The checked-in JSON schemas remain the published data contract
+rather than a second runtime validation engine.
 
 Every release suite has one run step and a dependent publisher job. A benchmark
 failure does not invalidate the per-workload object-store commits: rerunning it
