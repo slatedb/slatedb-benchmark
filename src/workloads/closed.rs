@@ -97,12 +97,15 @@ async fn worker_loop(
             .as_ref()
             .map(|counters| counters.register_window_recorder()),
     );
+    let operation_context = OperationContext {
+        db: &db,
+        variant: &variant,
+        write_options: &write_options,
+    };
     while Instant::now() < deadline {
         let (completion, backpressure) = measure_backpressure(execute_operation(
-            &db,
-            &variant,
+            &operation_context,
             &selector,
-            &write_options,
             &state,
             &mut rng,
             &mut values,
@@ -173,51 +176,38 @@ impl From<anyhow::Error> for OperationError {
     }
 }
 
+struct OperationContext<'a> {
+    db: &'a Db,
+    variant: &'a VariantConfig,
+    write_options: &'a WriteOptions,
+}
+
 async fn execute_operation(
-    db: &Db,
-    variant: &VariantConfig,
+    context: &OperationContext<'_>,
     selector: &KeySelector,
-    write_options: &WriteOptions,
     state: &ClosedLoopState,
     rng: &mut StdRng,
     values: &mut ValueGenerator,
     stats: &mut WorkerStats,
 ) -> OperationCompletion {
     let started = Instant::now();
+    let db = context.db;
+    let variant = context.variant;
+    let write_options = context.write_options;
     let kind = variant.workload.kind;
     let result = match kind {
         WorkloadKind::YcsbA => {
             if rng.random_bool(0.5) {
                 read(db, variant, selector.sample(rng), "read", stats).await
             } else {
-                update(
-                    db,
-                    variant,
-                    selector.sample(rng),
-                    write_options,
-                    rng,
-                    values,
-                    "update",
-                    stats,
-                )
-                .await
+                update(context, selector.sample(rng), rng, values, "update", stats).await
             }
         }
         WorkloadKind::YcsbB => {
             if rng.random_bool(0.95) {
                 read(db, variant, selector.sample(rng), "read", stats).await
             } else {
-                update(
-                    db,
-                    variant,
-                    selector.sample(rng),
-                    write_options,
-                    rng,
-                    values,
-                    "update",
-                    stats,
-                )
-                .await
+                update(context, selector.sample(rng), rng, values, "update", stats).await
             }
         }
         WorkloadKind::YcsbC | WorkloadKind::ColdRead | WorkloadKind::RandomRead => {
@@ -230,7 +220,7 @@ async fn execute_operation(
                 let id = latest.saturating_sub(1 + rng.random_range(0..window));
                 read(db, variant, id, "read", stats).await
             } else {
-                return ycsb_d_insert(db, variant, write_options, state, rng, values, stats).await;
+                return ycsb_d_insert(context, state, rng, values, stats).await;
             }
         }
         WorkloadKind::YcsbE => {
@@ -248,7 +238,7 @@ async fn execute_operation(
                 .await
             } else {
                 let id = state.next_insert.fetch_add(1, Ordering::Relaxed);
-                update(db, variant, id, write_options, rng, values, "insert", stats).await
+                update(context, id, rng, values, "insert", stats).await
             }
         }
         WorkloadKind::YcsbF => {
@@ -296,17 +286,7 @@ async fn execute_operation(
             scan(db, variant, selector.sample(rng), 10, true, "scan", stats).await
         }
         WorkloadKind::Overwrite => {
-            update(
-                db,
-                variant,
-                selector.sample(rng),
-                write_options,
-                rng,
-                values,
-                "update",
-                stats,
-            )
-            .await
+            update(context, selector.sample(rng), rng, values, "update", stats).await
         }
         WorkloadKind::SustainedIngest => {
             async {
@@ -350,9 +330,7 @@ async fn execute_operation(
 }
 
 async fn ycsb_d_insert(
-    db: &Db,
-    variant: &VariantConfig,
-    write_options: &WriteOptions,
+    context: &OperationContext<'_>,
     state: &ClosedLoopState,
     rng: &mut StdRng,
     values: &mut ValueGenerator,
@@ -361,7 +339,7 @@ async fn ycsb_d_insert(
     let _guard = state.insert_lock.lock().await;
     let started = Instant::now();
     let id = state.next_insert.load(Ordering::Relaxed);
-    let result = update(db, variant, id, write_options, rng, values, "insert", stats).await;
+    let result = update(context, id, rng, values, "insert", stats).await;
     if result.is_ok() {
         state
             .next_insert
@@ -396,15 +374,15 @@ async fn read(
 }
 
 async fn update(
-    db: &Db,
-    variant: &VariantConfig,
+    context: &OperationContext<'_>,
     id: u64,
-    write_options: &WriteOptions,
     rng: &mut StdRng,
     values: &mut ValueGenerator,
     name: &'static str,
     stats: &mut WorkerStats,
 ) -> std::result::Result<OperationOutcome, OperationError> {
+    let db = context.db;
+    let variant = context.variant;
     let value = values.generate(variant.value_bytes(), rng);
     let handle = stats
         .measure_api(
@@ -413,7 +391,7 @@ async fn update(
                 key_for_id(id, variant.key_bytes()),
                 value.clone(),
                 &PutOptions::default(),
-                write_options,
+                context.write_options,
             ),
         )
         .await
@@ -924,7 +902,7 @@ pub async fn populate_dataset(
 
 #[cfg(test)]
 mod tests {
-    use super::{ycsb_d_insert, ClosedLoopState, WorkerStats};
+    use super::{ycsb_d_insert, ClosedLoopState, OperationContext, WorkerStats};
     use crate::config::BenchmarkConfig;
     use crate::workloads::util::ValueGenerator;
     use anyhow::{Context, Result};
@@ -958,12 +936,15 @@ mod tests {
             await_durable: false,
             ..Default::default()
         };
+        let operation_context = OperationContext {
+            db: &db,
+            variant: &variant,
+            write_options: &write_options,
+        };
 
         let wall_started = Instant::now();
         let completion = ycsb_d_insert(
-            &db,
-            &variant,
-            &write_options,
+            &operation_context,
             &state,
             &mut rng,
             &mut values,

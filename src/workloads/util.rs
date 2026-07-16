@@ -79,8 +79,7 @@ impl ValueGenerator {
 fn compressible_data(size: usize, compression_ratio: f64, rng: &mut impl RngCore) -> Vec<u8> {
     let mut data = Vec::with_capacity(size);
     let random_bytes = ((COMPRESSIBLE_FRAGMENT_BYTES as f64 * compression_ratio) as usize)
-        .max(1)
-        .min(COMPRESSIBLE_FRAGMENT_BYTES);
+        .clamp(1, COMPRESSIBLE_FRAGMENT_BYTES);
     while data.len() < size {
         let fragment_size = COMPRESSIBLE_FRAGMENT_BYTES.min(size - data.len());
         let mut seed = [0_u8; COMPRESSIBLE_FRAGMENT_BYTES];

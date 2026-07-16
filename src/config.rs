@@ -223,8 +223,9 @@ impl BenchmarkConfig {
             if suite.key_bytes == 0 || suite.value_bytes == 0 {
                 bail!("suite {} has a zero-sized key or value", suite.name);
             }
-            if !suite.value_compression_ratio.is_finite()
-                || !(0.0 < suite.value_compression_ratio && suite.value_compression_ratio <= 1.0)
+            if !(suite.value_compression_ratio.is_finite()
+                && 0.0 < suite.value_compression_ratio
+                && suite.value_compression_ratio <= 1.0)
             {
                 bail!(
                     "suite {} has a value compression ratio outside (0, 1]",
