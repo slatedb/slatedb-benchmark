@@ -16,32 +16,39 @@ trap cleanup EXIT
 scale=${BENCHMARK_SCALE:-0.0001}
 output_root=.runs/docker-smoke
 restored_root=.runs/docker-smoke-restored
+runner_user="$(id -u):$(id -g)"
 
-rm -rf "$output_root" "$restored_root"
+run_runner() {
+  docker compose run --rm --user "$runner_user" --entrypoint slatedb-benchmark runner "$@"
+}
+
+mkdir -p .runs
 docker compose build runner
+docker compose run --rm --no-deps --entrypoint rm runner \
+  -rf /output/docker-smoke /output/docker-smoke-restored
 suites=(rocksdb slatedb ycsb)
 for suite in "${suites[@]}"; do
-  docker compose run --rm --entrypoint slatedb-benchmark runner \
+  run_runner \
     run \
     --suite "$suite" \
     --scale "$scale" \
     --session "docker-smoke-$suite" \
     --output "/output/docker-smoke/$suite"
-  docker compose run --rm --entrypoint slatedb-benchmark runner \
+  run_runner \
     validate \
     --output "/output/docker-smoke/$suite"
 done
 
 # Hydrate a completed sequential session into a new local output directory and
 # verify that its first workload is recognized as already committed.
-docker compose run --rm --entrypoint slatedb-benchmark runner \
+run_runner \
   run \
   --suite rocksdb \
   --workload bulk-load \
   --scale "$scale" \
   --session docker-smoke-rocksdb \
   --output /output/docker-smoke-restored/rocksdb
-docker compose run --rm --entrypoint slatedb-benchmark runner \
+run_runner \
   validate \
   --output /output/docker-smoke-restored/rocksdb
 

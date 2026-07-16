@@ -15,18 +15,25 @@ trap cleanup EXIT
 scale=${BENCHMARK_SCALE:-0.0001}
 working_root=.runs/scaled-fixtures
 fixture_root=.scaled-results
+runner_user="$(id -u):$(id -g)"
 
-rm -rf "$working_root" "$fixture_root"
+run_runner() {
+  docker compose run --rm --user "$runner_user" --entrypoint slatedb-benchmark runner "$@"
+}
+
+rm -rf "$fixture_root"
+mkdir -p .runs
 docker compose build runner
+docker compose run --rm --no-deps --entrypoint rm runner -rf /output/scaled-fixtures
 suites=(rocksdb slatedb ycsb)
 for suite in "${suites[@]}"; do
-  docker compose run --rm --entrypoint slatedb-benchmark runner \
+  run_runner \
     run \
     --suite "$suite" \
     --scale "$scale" \
     --session "scaled-fixtures-$suite" \
     --output "/output/scaled-fixtures/$suite"
-  docker compose run --rm --entrypoint slatedb-benchmark runner \
+  run_runner \
     validate \
     --output "/output/scaled-fixtures/$suite"
 done
