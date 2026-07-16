@@ -260,7 +260,9 @@ impl WorkloadKind {
 
     pub(crate) const fn key_distribution(self) -> KeyDistribution {
         match self {
-            Self::YcsbA | Self::YcsbB | Self::YcsbC | Self::YcsbF => KeyDistribution::Zipfian,
+            Self::YcsbA | Self::YcsbB | Self::YcsbC | Self::YcsbE | Self::YcsbF => {
+                KeyDistribution::Zipfian
+            }
             _ => KeyDistribution::Uniform,
         }
     }
@@ -783,6 +785,10 @@ mod tests {
         assert!(!WorkloadKind::YcsbC.may_write());
         assert_eq!(
             WorkloadKind::YcsbA.key_distribution(),
+            KeyDistribution::Zipfian
+        );
+        assert_eq!(
+            WorkloadKind::YcsbE.key_distribution(),
             KeyDistribution::Zipfian
         );
         assert_eq!(

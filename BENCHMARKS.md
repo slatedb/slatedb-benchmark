@@ -68,11 +68,11 @@ apply.
 - Concurrency: 64 clients
 - Run: 60-second warmup followed by 5 minutes of measurement
 
-Reset each test to the same preloaded dataset. YCSB A, B, C, and F use YCSB's
+Reset each test to the same preloaded dataset. YCSB A, B, C, E, and F use YCSB's
 scrambled Zipfian key distribution: exponent 0.99 over YCSB's 10-billion-rank
 space, with each sampled rank mapped into the loaded keyspace by YCSB's FNV-64
-hash. Call `flush()` after measurement and include the drain in the durability
-results.
+hash. Workload E expands the mapped keyspace as inserts complete. Call `flush()`
+after measurement and include the drain in the durability results.
 
 1. `ycsb-a`: 50% reads and 50% updates.
 2. `ycsb-b`: 95% reads and 5% updates.

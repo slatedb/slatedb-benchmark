@@ -233,7 +233,7 @@ async fn execute_operation(
                     .sample(latest, rng);
                 read(db, variant, id, "read", stats).await
             } else {
-                return ycsb_d_insert(context, state, rng, values, stats).await;
+                return ycsb_insert(context, state, rng, values, stats).await;
             }
         }
         WorkloadKind::YcsbE => {
@@ -242,7 +242,7 @@ async fn execute_operation(
                 scan(
                     db,
                     variant,
-                    selector.sample(rng),
+                    selector.sample_with_record_count(state.acknowledged_insert(), rng),
                     length,
                     false,
                     "scan",
@@ -250,8 +250,7 @@ async fn execute_operation(
                 )
                 .await
             } else {
-                let id = state.next_insert.fetch_add(1, Ordering::Relaxed);
-                update(context, id, rng, values, "insert", stats).await
+                return ycsb_insert(context, state, rng, values, stats).await;
             }
         }
         WorkloadKind::YcsbF => {
@@ -342,7 +341,7 @@ async fn execute_operation(
     }
 }
 
-async fn ycsb_d_insert(
+async fn ycsb_insert(
     context: &OperationContext<'_>,
     state: &ClosedLoopState,
     rng: &mut StdRng,

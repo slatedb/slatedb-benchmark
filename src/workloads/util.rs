@@ -115,15 +115,19 @@ impl KeySelector {
     }
 
     pub fn sample(&self, rng: &mut impl Rng) -> u64 {
-        if self.record_count == 0 {
+        self.sample_with_record_count(self.record_count, rng)
+    }
+
+    pub fn sample_with_record_count(&self, record_count: u64, rng: &mut impl Rng) -> u64 {
+        if record_count == 0 {
             return 0;
         }
         match &self.zipf {
             Some(zipf) => {
                 let rank = (zipf.sample(rng) as u64).saturating_sub(1);
-                ycsb_scramble(rank) % self.record_count
+                ycsb_scramble(rank) % record_count
             }
-            None => rng.random_range(0..self.record_count),
+            None => rng.random_range(0..record_count),
         }
     }
 }
@@ -251,6 +255,18 @@ mod tests {
         let mut rng = rand::rngs::StdRng::seed_from_u64(7);
 
         assert!((0..10_000).all(|_| selector.sample(&mut rng) < 1_000));
+    }
+
+    #[test]
+    fn scrambled_zipfian_domain_expands_with_inserted_keys() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(23);
+        let selector = KeySelector::zipfian(100);
+        let samples = (0..10_000)
+            .map(|_| selector.sample_with_record_count(200, &mut rng))
+            .collect::<Vec<_>>();
+
+        assert!(samples.iter().all(|sample| *sample < 200));
+        assert!(samples.iter().any(|sample| *sample >= 100));
     }
 
     #[test]
