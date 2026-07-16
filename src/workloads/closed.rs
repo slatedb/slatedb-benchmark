@@ -12,24 +12,50 @@ use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 use slatedb::config::{PutOptions, ScanOptions, WriteOptions};
 use slatedb::{Db, ErrorKind, IsolationLevel, IterationOrder, WriteHandle};
+use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tokio::sync::Mutex;
 use tokio::task::JoinSet;
 
 #[derive(Clone)]
 pub struct ClosedLoopState {
     next_insert: Arc<AtomicU64>,
-    insert_lock: Arc<Mutex<()>>,
+    acknowledged_insert: Arc<AtomicU64>,
+    completed_inserts: Arc<Mutex<BTreeSet<u64>>>,
 }
 
 impl ClosedLoopState {
     pub fn new(next_insert: u64) -> Self {
         Self {
             next_insert: Arc::new(AtomicU64::new(next_insert)),
-            insert_lock: Arc::new(Mutex::new(())),
+            acknowledged_insert: Arc::new(AtomicU64::new(next_insert)),
+            completed_inserts: Arc::new(Mutex::new(BTreeSet::new())),
         }
+    }
+
+    fn allocate_insert(&self) -> u64 {
+        self.next_insert.fetch_add(1, Ordering::Relaxed)
+    }
+
+    fn acknowledge_insert(&self, id: u64) {
+        let mut completed = self
+            .completed_inserts
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut frontier = self.acknowledged_insert.load(Ordering::Relaxed);
+        if id < frontier {
+            return;
+        }
+        completed.insert(id);
+        while completed.remove(&frontier) {
+            frontier = frontier.saturating_add(1);
+        }
+        self.acknowledged_insert.store(frontier, Ordering::Release);
+    }
+
+    fn acknowledged_insert(&self) -> u64 {
+        self.acknowledged_insert.load(Ordering::Acquire)
     }
 }
 
@@ -200,7 +226,7 @@ async fn execute_operation(
         }
         WorkloadKind::YcsbD => {
             if rng.random_bool(0.95) {
-                let latest = state.next_insert.load(Ordering::Acquire).max(1);
+                let latest = state.acknowledged_insert().max(1);
                 let id = latest_selector
                     .as_mut()
                     .expect("YCSB D latest selector")
@@ -323,15 +349,10 @@ async fn ycsb_d_insert(
     values: &mut ValueGenerator,
     stats: &mut WorkerStats,
 ) -> OperationCompletion {
-    let _guard = state.insert_lock.lock().await;
     let started = Instant::now();
-    let id = state.next_insert.load(Ordering::Relaxed);
+    let id = state.allocate_insert();
     let result = update(context, id, rng, values, "insert", stats).await;
-    if result.is_ok() {
-        state
-            .next_insert
-            .store(id.saturating_add(1), Ordering::Release);
-    }
+    state.acknowledge_insert(id);
     OperationCompletion {
         result,
         latency: started.elapsed(),
@@ -858,70 +879,21 @@ pub async fn populate_dataset(
 
 #[cfg(test)]
 mod tests {
-    use super::{ycsb_d_insert, ClosedLoopState, OperationContext, WorkerStats};
-    use crate::config::BenchmarkConfig;
-    use crate::workloads::util::ValueGenerator;
-    use anyhow::{Context, Result};
-    use object_store::memory::InMemory;
-    use rand::rngs::StdRng;
-    use rand::SeedableRng;
-    use slatedb::config::WriteOptions;
-    use slatedb::Db;
-    use std::sync::Arc;
-    use std::time::{Duration, Instant};
+    use super::ClosedLoopState;
 
-    #[tokio::test]
-    async fn ycsb_d_insert_latency_excludes_insert_lock_wait() -> Result<()> {
-        let benchmark = BenchmarkConfig::load_from(std::path::Path::new("config"))?;
-        let variant = benchmark
-            .select(Some("ycsb"), Some("ycsb-d"), Some("clients-64"))?
-            .pop()
-            .context("missing YCSB-D test variant")?;
-        let db = Db::open("ycsb-d-insert-latency-test", Arc::new(InMemory::new())).await?;
-        let state = ClosedLoopState::new(1);
-        let held_lock = Arc::clone(&state.insert_lock).lock_owned().await;
-        let lock_delay = Duration::from_millis(50);
-        let release = tokio::spawn(async move {
-            tokio::time::sleep(lock_delay).await;
-            drop(held_lock);
-        });
-        let mut rng = StdRng::seed_from_u64(1);
-        let mut values = ValueGenerator::new(variant.value_compression_ratio());
-        let mut stats = WorkerStats::default();
-        let write_options = WriteOptions {
-            await_durable: false,
-            ..Default::default()
-        };
-        let operation_context = OperationContext {
-            db: &db,
-            variant: &variant,
-            write_options: &write_options,
-        };
+    #[test]
+    fn insert_frontier_advances_after_out_of_order_completions() {
+        let state = ClosedLoopState::new(10);
+        let first = state.allocate_insert();
+        let second = state.allocate_insert();
+        let third = state.allocate_insert();
 
-        let wall_started = Instant::now();
-        let completion = ycsb_d_insert(
-            &operation_context,
-            &state,
-            &mut rng,
-            &mut values,
-            &mut stats,
-        )
-        .await;
-        let wall_elapsed = wall_started.elapsed();
-        release.await.context("joining insert-lock release task")?;
-
-        assert!(completion.result.is_ok());
-        assert_eq!(
-            state.next_insert.load(std::sync::atomic::Ordering::Acquire),
-            2
-        );
-        assert!(
-            wall_elapsed.saturating_sub(completion.latency) >= lock_delay / 2,
-            "reported latency {:?} did not exclude lock wait from wall time {:?}",
-            completion.latency,
-            wall_elapsed
-        );
-        db.close().await?;
-        Ok(())
+        assert_eq!((first, second, third), (10, 11, 12));
+        state.acknowledge_insert(second);
+        assert_eq!(state.acknowledged_insert(), 10);
+        state.acknowledge_insert(first);
+        assert_eq!(state.acknowledged_insert(), 12);
+        state.acknowledge_insert(third);
+        assert_eq!(state.acknowledged_insert(), 13);
     }
 }
