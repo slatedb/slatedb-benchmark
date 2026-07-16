@@ -1,6 +1,6 @@
 use crate::database_size::live_database_size_bytes;
 use crate::histogram::HistogramSet;
-use crate::instrumented_store::{StoreMetrics, StoreSnapshot};
+use crate::instrumented_store::StoreMetrics;
 use crate::model::{
     ApplicationWindow, Environment, MetricHistogramValue, MetricSeries, MetricSeriesValue,
     MetricSnapshot, MetricValue, MetricValueType, ResourceUse, TimeseriesFile, TimeseriesSample,
@@ -16,7 +16,6 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fs;
 use std::future::Future;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use sysinfo::{Disks, Networks, Pid, ProcessRefreshKind, ProcessesToUpdate, System};
@@ -327,30 +326,21 @@ impl ApplicationWindowRecorder {
 }
 
 #[derive(Debug)]
-pub struct ApplicationCounters {
-    pub operations: AtomicU64,
-    pub errors: AtomicU64,
+pub struct ApplicationWindowRegistry {
     window_shards: Mutex<Vec<Arc<Mutex<ApplicationWindowShard>>>>,
 }
 
-impl Default for ApplicationCounters {
+impl Default for ApplicationWindowRegistry {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl ApplicationCounters {
+impl ApplicationWindowRegistry {
     pub fn new() -> Self {
         Self {
-            operations: AtomicU64::new(0),
-            errors: AtomicU64::new(0),
             window_shards: Mutex::new(Vec::new()),
         }
-    }
-
-    pub fn reset(&self) {
-        self.operations.store(0, Ordering::Relaxed);
-        self.errors.store(0, Ordering::Relaxed);
     }
 
     pub fn register_window_recorder(&self) -> ApplicationWindowRecorder {
@@ -407,9 +397,6 @@ impl ApplicationCounters {
             errors: merged.errors,
             read_payload_bytes: merged.read_payload_bytes,
             write_payload_bytes: merged.write_payload_bytes,
-            payload_bytes: merged
-                .read_payload_bytes
-                .saturating_add(merged.write_payload_bytes),
             return_latency: summary("return"),
             return_latency_by_operation: merged.histograms.summaries_with_prefix("return/"),
             api_latency: merged.histograms.summaries_with_prefix("api/"),
@@ -511,7 +498,7 @@ pub fn verify_environment(environment: &Environment, smoke: bool) -> anyhow::Res
 
 pub(crate) async fn sample_until_stopped(
     started: Instant,
-    counters: Arc<ApplicationCounters>,
+    windows: Arc<ApplicationWindowRegistry>,
     store_metrics: Arc<StoreMetrics>,
     slate_metrics: Arc<BenchmarkMetricsRecorder>,
     database_size: DatabaseSizeSource,
@@ -520,7 +507,6 @@ pub(crate) async fn sample_until_stopped(
     let mut sampler = HostSampler::new();
     let mut samples = vec![sampler.sample(
         started,
-        &counters,
         &store_metrics,
         &slate_metrics,
         database_size.bytes(&store_metrics),
@@ -536,13 +522,12 @@ pub(crate) async fn sample_until_stopped(
             _ = interval.tick() => {
                 let sample = sampler.sample(
                     started,
-                    &counters,
                     &store_metrics,
                     &slate_metrics,
                     database_size.bytes(&store_metrics),
                 );
                 if sample.offset_ns > window_start_ns {
-                    let (window, window_histograms) = counters.drain_window(
+                    let (window, window_histograms) = windows.drain_window(
                         window_start_ns,
                         sample.offset_ns.saturating_sub(window_start_ns),
                     )?;
@@ -556,13 +541,12 @@ pub(crate) async fn sample_until_stopped(
                 if changed.is_err() || *stop.borrow() {
                     let sample = sampler.sample(
                         started,
-                        &counters,
                         &store_metrics,
                         &slate_metrics,
                         database_size.bytes(&store_metrics),
                     );
                     if sample.offset_ns > window_start_ns {
-                        let (window, window_histograms) = counters.drain_window(
+                        let (window, window_histograms) = windows.drain_window(
                             window_start_ns,
                             sample.offset_ns.saturating_sub(window_start_ns),
                         )?;
@@ -744,7 +728,6 @@ impl HostSampler {
     fn sample(
         &mut self,
         started: Instant,
-        counters: &ApplicationCounters,
         store_metrics: &StoreMetrics,
         slate_metrics: &BenchmarkMetricsRecorder,
         database_size_bytes: u64,
@@ -778,24 +761,8 @@ impl HostSampler {
                     )
                 });
         let (disk_read_operations, disk_write_operations) = linux_io_operations(self.pid);
-        let StoreSnapshot {
-            operations,
-            requests,
-            successful_requests,
-            request_errors,
-            client_errors,
-            server_errors,
-            transport_errors,
-            bytes_read,
-            bytes_written,
-            operation_bytes_read,
-            operation_bytes_written,
-            ..
-        } = store_metrics.snapshot();
         TimeseriesSample {
             offset_ns: duration_ns(started.elapsed()),
-            operations: counters.operations.load(Ordering::Relaxed),
-            errors: counters.errors.load(Ordering::Relaxed),
             cpu_percent,
             rss_bytes,
             network_bytes_sent,
@@ -805,17 +772,7 @@ impl HostSampler {
             disk_read_operations,
             disk_write_operations,
             database_size_bytes,
-            object_store_operations: operations,
-            object_store_requests: requests,
-            object_store_successful_requests: successful_requests,
-            object_store_request_errors: request_errors,
-            object_store_client_errors: client_errors,
-            object_store_server_errors: server_errors,
-            object_store_transport_errors: transport_errors,
-            object_store_bytes_read: bytes_read,
-            object_store_bytes_written: bytes_written,
-            object_store_operation_bytes_read: operation_bytes_read,
-            object_store_operation_bytes_written: operation_bytes_written,
+            object_store: store_metrics.snapshot(),
             slatedb_metrics: slate_metrics
                 .snapshot()
                 .all()
@@ -942,7 +899,7 @@ fn finite_or_zero(value: f64) -> f64 {
 mod tests {
     use super::{
         append_timeseries, compact_timeseries, is_tigris_endpoint, measure_backpressure,
-        ApplicationCounters, BenchmarkMetricsRecorder,
+        ApplicationWindowRegistry, BenchmarkMetricsRecorder,
     };
     use crate::model::{
         MetricSnapshot, MetricValue, MetricValueType, TimeseriesFile, TimeseriesSample,
@@ -958,14 +915,14 @@ mod tests {
 
     #[test]
     fn drains_application_measurements_into_one_window() {
-        let counters = ApplicationCounters::new();
-        let worker = counters.register_window_recorder();
+        let windows = ApplicationWindowRegistry::new();
+        let worker = windows.register_window_recorder();
         worker.record_success("read-modify-write", Duration::from_millis(2), 1024, 256);
         worker.record_background_success("writer-update", Duration::from_secs(1), 0, 128);
         worker.record_error("read", Duration::from_millis(4));
         worker.record_api_latency("get", Duration::from_millis(3));
 
-        let (window, histograms) = counters
+        let (window, histograms) = windows
             .drain_window(0, 1_000_000_000)
             .expect("drain application window");
 
@@ -974,7 +931,6 @@ mod tests {
         assert_eq!(window.errors, 1);
         assert_eq!(window.read_payload_bytes, 1024);
         assert_eq!(window.write_payload_bytes, 384);
-        assert_eq!(window.payload_bytes, 1408);
         assert_eq!(window.return_latency.expect("return latency").count, 2);
         assert_eq!(window.return_latency_by_operation["writer-update"].count, 1);
         assert_eq!(window.api_latency["get"].count, 1);
@@ -991,11 +947,11 @@ mod tests {
 
     #[test]
     fn resets_reusable_window_buffers() {
-        let counters = ApplicationCounters::new();
-        let worker = counters.register_window_recorder();
+        let windows = ApplicationWindowRegistry::new();
+        let worker = windows.register_window_recorder();
         worker.record_success("read", Duration::from_millis(2), 1024, 0);
 
-        let (first, first_histograms) = counters
+        let (first, first_histograms) = windows
             .drain_window(0, 1_000_000_000)
             .expect("drain first application window");
         assert_eq!(first.completed_operations, 1);
@@ -1012,7 +968,7 @@ mod tests {
         );
 
         worker.record_error("read", Duration::from_millis(4));
-        let (second, _) = counters
+        let (second, _) = windows
             .drain_window(1_000_000_000, 1_000_000_000)
             .expect("drain second application window");
         assert_eq!(second.completed_operations, 1);
@@ -1020,7 +976,7 @@ mod tests {
         assert_eq!(second.errors, 1);
         assert_eq!(second.read_payload_bytes, 0);
 
-        let (empty, empty_histograms) = counters
+        let (empty, empty_histograms) = windows
             .drain_window(2_000_000_000, 1_000_000_000)
             .expect("drain empty application window");
         assert_eq!(empty.completed_operations, 0);

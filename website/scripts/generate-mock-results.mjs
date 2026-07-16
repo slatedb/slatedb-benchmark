@@ -82,8 +82,6 @@ function sample(offset_ns, operations, throughput, databaseSize, networkBytesSen
   };
   return {
     offset_ns,
-    operations,
-    errors: 0,
     cpu_percent: Math.min(1_600, 18 + throughput / 900),
     rss_bytes: 2_684_354_560,
     network_bytes_sent: networkBytesSent,
@@ -93,17 +91,20 @@ function sample(offset_ns, operations, throughput, databaseSize, networkBytesSen
     disk_read_operations: Math.round(operations / 10),
     disk_write_operations: Math.round(operations / 8),
     database_size_bytes: databaseSize,
-    object_store_operations: objectStoreRequests,
-    object_store_requests: objectStoreRequests,
-    object_store_successful_requests: objectStoreRequests,
-    object_store_request_errors: {},
-    object_store_client_errors: {},
-    object_store_server_errors: {},
-    object_store_transport_errors: {},
-    object_store_bytes_read: Math.round(operations * 640),
-    object_store_bytes_written: Math.round(operations * 1024),
-    object_store_operation_bytes_read: Math.round(operations * 576),
-    object_store_operation_bytes_written: Math.round(operations * 1024),
+    object_store: {
+      operations: objectStoreRequests,
+      requests: objectStoreRequests,
+      successful_requests: objectStoreRequests,
+      request_errors: {},
+      client_errors: {},
+      server_errors: {},
+      transport_errors: {},
+      errors: 0,
+      bytes_read: Math.round(operations * 640),
+      bytes_written: Math.round(operations * 1024),
+      operation_bytes_read: Math.round(operations * 576),
+      operation_bytes_written: Math.round(operations * 1024),
+    },
   };
 }
 
@@ -295,7 +296,6 @@ function mockTimeseries({ windowCount, throughput, payload, databaseSize, isWrit
       errors: 0,
       read_payload_bytes: readPayloadBytes,
       write_payload_bytes: writePayloadBytes,
-      payload_bytes: readPayloadBytes + writePayloadBytes,
       return_latency: returnLatency,
       return_latency_by_operation: { operation: returnLatency },
       api_latency: apiLatency,
@@ -349,7 +349,8 @@ for (const suite of published.suites) {
         windowCount, throughput, payload, databaseSize, isWrite, awaitDurable, latency, apiCalls,
       });
       const finalSample = windowed.samples.at(-1);
-      const operations = finalSample?.operations ?? 0;
+      const operations = windowed.application_windows
+        .reduce((total, window) => total + window.completed_operations, 0);
       const completedRate = operations / windowCount;
       const aggregateLatency = latencySummary(latency.summary, operations);
       const aggregateMachineTraffic = {
@@ -438,8 +439,6 @@ for (const suite of published.suites) {
         application: {
           total_operations: operations,
           successful_operations: operations,
-          accepted_ops_per_second: completedRate,
-          completed_ops_per_second: completedRate,
           payload_mib_per_second: completedRate * (payload.read + payload.write) / 1_048_576,
           errors: 0,
           return_latency: aggregateLatency,
@@ -485,48 +484,32 @@ for (const suite of published.suites) {
         storage: {
           database_size_bytes: databaseSize,
           average_database_size_bytes: Math.round(databaseSize * (isWrite ? 1.05 : 1)),
-          object_store_operations: {
-            put: Math.round(operations / 100),
-            get: Math.round(operations / 20),
-            head: 2,
-            list: 4,
-            delete: 0,
-            copy: 0,
-            create_multipart: 0,
-            complete_multipart: 0,
-            abort_multipart: 0,
+          object_store: {
+            operations: {
+              put: Math.round(operations / 100), get: Math.round(operations / 20),
+              head: 2, list: 4, delete: 0, copy: 0, create_multipart: 0,
+              complete_multipart: 0, abort_multipart: 0,
+            },
+            requests: {
+              put: Math.round(operations / 100), get: Math.round(operations / 20),
+              head: 2, list: 4, delete: 0, copy: 0, create_multipart: 0,
+              complete_multipart: 0, abort_multipart: 0,
+            },
+            successful_requests: {
+              put: Math.round(operations / 100), get: Math.round(operations / 20),
+              head: 2, list: 4, delete: 0, copy: 0, create_multipart: 0,
+              complete_multipart: 0, abort_multipart: 0,
+            },
+            request_errors: {},
+            client_errors: {},
+            server_errors: {},
+            transport_errors: {},
+            errors: 0,
+            bytes_read: Math.round(operations * valueBytes * 0.64),
+            bytes_written: isWrite ? operations * valueBytes : 0,
+            operation_bytes_read: Math.round(operations * valueBytes * 0.58),
+            operation_bytes_written: isWrite ? operations * valueBytes : 0,
           },
-          object_store_requests: {
-            put: Math.round(operations / 100),
-            get: Math.round(operations / 20),
-            head: 2,
-            list: 4,
-            delete: 0,
-            copy: 0,
-            create_multipart: 0,
-            complete_multipart: 0,
-            abort_multipart: 0,
-          },
-          object_store_successful_requests: {
-            put: Math.round(operations / 100),
-            get: Math.round(operations / 20),
-            head: 2,
-            list: 4,
-            delete: 0,
-            copy: 0,
-            create_multipart: 0,
-            complete_multipart: 0,
-            abort_multipart: 0,
-          },
-          object_store_request_errors: {},
-          object_store_client_errors: {},
-          object_store_server_errors: {},
-          object_store_transport_errors: {},
-          object_store_errors: 0,
-          bytes_read: Math.round(operations * valueBytes * 0.64),
-          bytes_written: isWrite ? operations * valueBytes : 0,
-          object_store_operation_bytes_read: Math.round(operations * valueBytes * 0.58),
-          object_store_operation_bytes_written: isWrite ? operations * valueBytes : 0,
           compaction_throughput_bytes_per_second: isWrite ? completedRate * valueBytes * 0.31 : null,
           write_amplification: isWrite ? 1.18 : null,
           backpressure_ns: 0,

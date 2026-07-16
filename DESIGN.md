@@ -138,21 +138,15 @@ jobs do not share a bucket. Dataset preparation, object-store probes, and
 cleanup never overlap a measurement window within the suite. A failed suite
 does not cancel the other benchmark jobs.
 
-`.github/workflows/release.yml` is generated from the release suites and their
-declared workload order. Regenerate it after changing suite configuration:
-
-```console
-$ slatedb-benchmark generate-workflow
-```
-
-`generate-workflow --check` verifies that the checked-in workflow is current.
-The `benchmark` GitHub environment supplies `TIGRIS_BUCKET_PREFIX`; a suite
-named `ycsb`, for example, uses `${TIGRIS_BUCKET_PREFIX}-ycsb`.
+`.github/workflows/release.yml` builds the runner and calls the reusable
+`.github/workflows/benchmark-suite.yml` once for each release suite. The
+`benchmark` GitHub environment supplies `TIGRIS_BUCKET_PREFIX`; a suite named
+`ycsb`, for example, uses `${TIGRIS_BUCKET_PREFIX}-ycsb`.
 
 The runner uses monotonic time for durations and latency. Wall-clock time is
-used only for result timestamps. Warmup data is discarded and metric counters
-are reset at the start of measurement. A write workload includes its final
-flush and durability drain.
+used only for result timestamps. Warmup data is discarded, and measurement
+reports deltas from snapshots taken after warmup. A write workload includes its
+final flush and durability drain.
 
 ### Dataset isolation
 
@@ -170,9 +164,8 @@ does not copy the dataset. Writes and compaction output belong to the clone.
 The runner checks the clone's initial manifest against the checkpoint before
 opening a fresh process and empty SlateDB caches.
 
-In an ordinary non-resumable run, the checkpoint stays live until all clones
-have closed and is then deleted. A resumable isolated suite records its golden
-checkpoint in the session as soon as preparation succeeds. Later workload
+An isolated suite records its golden checkpoint in the session as soon as
+preparation succeeds. Later workload
 processes reuse that checkpoint instead of loading the same dataset again. The
 goldens remain live until the last suite workload commits. Each result records
 the checkpoint ID, manifest ID, and a digest of the initial LSM state. These
@@ -277,21 +270,20 @@ export SLATEDB_BENCH_BUCKET=slatedb-benchmarks
 export SLATEDB_BENCH_PREFIX="manual/$USER"
 ```
 
-`--suite` runs one suite, adding `--workload` runs all of that workload's
-variants, and adding `--variant` runs one variant. Workload and variant
-selectors require their parent selectors. For example:
+Every run names one suite and one stable session. By default it runs every
+remaining workload in declaration order; `--workload` may select the next
+complete workload, including all of its variants. For example:
 
 ```console
 $ ./target/release/slatedb-benchmark run \
     --suite ycsb \
     --workload ycsb-a \
-    --variant clients-64 \
+    --session july-0.14.1-ycsb \
     --output .runs/ycsb-a
 {"status":"ok","run":".runs/ycsb-a/run.json"}
 ```
 
-Any suite accepts a stable `--session` name when a complete workload is
-selected. Begin with the first configured workload and use the same name as the
+Begin with the first configured workload and use the same session name as the
 suite advances:
 
 ```console
@@ -313,25 +305,24 @@ before continuing. Use a persistent `aws` or `local` object store to resume
 across processes, and do not run two processes with the same session name
 concurrently.
 
-Omitting the selectors runs all release suites and variants. Suites with
-`release = false`, including `smoke`, require an explicit `--suite`:
+Omitting `--workload` runs the whole suite:
 
 ```console
-$ ./target/release/slatedb-benchmark run --output .runs/release
-{"status":"ok","run":".runs/release/run.json"}
+$ ./target/release/slatedb-benchmark run \
+    --suite ycsb \
+    --session july-0.14.1-ycsb \
+    --output .runs/ycsb
+{"status":"ok","run":".runs/ycsb/run.json"}
 ```
 
 The read-only `catalog` command prints the discovered release identities as
 JSON without running a benchmark. Passing `--suite smoke` includes that
-explicit non-release suite instead. `generate-workflow` is the corresponding
-configuration-to-CI command: it emits the complete release workflow rather
-than requiring a hand-maintained job or matrix.
+explicit non-release suite instead.
 
-Each ordinary `run` invocation probes the object store once per selected suite,
-before preparing that suite's data. A session probes only when its state is
-created. The runner writes progress to stderr and one JSON status line to
-stdout. The output tree is shown below. An ordinary run's output directory must
-not exist before the command starts; resumable output follows the rules above.
+The runner probes the object store only when it creates a session. It writes
+progress to stderr and one JSON status line to stdout. The output tree is shown
+below. An existing output directory is accepted only when its session marker
+matches.
 
 ```text
 .runs/ycsb-a/

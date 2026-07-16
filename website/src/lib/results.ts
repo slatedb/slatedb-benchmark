@@ -40,8 +40,6 @@ export type BenchmarkResult = {
   };
   application: Record<string, unknown> & {
     successful_operations: number;
-    accepted_ops_per_second: number;
-    completed_ops_per_second: number;
     payload_mib_per_second: number;
     errors: number;
     return_latency: Latency;
@@ -57,21 +55,55 @@ export type BenchmarkResult = {
   storage: Record<string, unknown> & {
     database_size_bytes: number;
     average_database_size_bytes: number;
+    object_store?: ObjectStoreMetrics;
     object_store_operations?: Record<string, number>;
-    object_store_requests: Record<string, number>;
+    object_store_requests?: Record<string, number>;
     object_store_successful_requests?: Record<string, number>;
     object_store_request_errors?: Record<string, number>;
     object_store_client_errors?: Record<string, number>;
     object_store_server_errors?: Record<string, number>;
     object_store_transport_errors?: Record<string, number>;
-    bytes_read: number;
-    bytes_written: number;
+    object_store_errors?: number;
+    bytes_read?: number;
+    bytes_written?: number;
     object_store_operation_bytes_read?: number;
     object_store_operation_bytes_written?: number;
   };
   initial_state: Record<string, unknown>;
   source_files: { histograms: string; timeseries: string };
 };
+
+export type ObjectStoreMetrics = {
+  operations: Record<string, number>;
+  requests: Record<string, number>;
+  successful_requests: Record<string, number>;
+  request_errors: Record<string, number>;
+  client_errors: Record<string, number>;
+  server_errors: Record<string, number>;
+  transport_errors: Record<string, number>;
+  errors: number;
+  bytes_read: number;
+  bytes_written: number;
+  operation_bytes_read: number;
+  operation_bytes_written: number;
+};
+
+export function objectStoreMetrics(storage: BenchmarkResult['storage']): ObjectStoreMetrics {
+  return storage.object_store ?? {
+    operations: storage.object_store_operations ?? storage.object_store_requests ?? {},
+    requests: storage.object_store_requests ?? {},
+    successful_requests: storage.object_store_successful_requests ?? {},
+    request_errors: storage.object_store_request_errors ?? {},
+    client_errors: storage.object_store_client_errors ?? {},
+    server_errors: storage.object_store_server_errors ?? {},
+    transport_errors: storage.object_store_transport_errors ?? {},
+    errors: storage.object_store_errors ?? 0,
+    bytes_read: storage.bytes_read ?? 0,
+    bytes_written: storage.bytes_written ?? 0,
+    operation_bytes_read: storage.object_store_operation_bytes_read ?? storage.bytes_read ?? 0,
+    operation_bytes_written: storage.object_store_operation_bytes_written ?? storage.bytes_written ?? 0,
+  };
+}
 
 export type PricingProvider = {
   id: string;
@@ -107,7 +139,6 @@ export type ApplicationWindow = {
   errors: number;
   read_payload_bytes: number;
   write_payload_bytes: number;
-  payload_bytes: number;
   return_latency: Latency | null;
   return_latency_by_operation: Record<string, Latency>;
   api_latency: Record<string, Latency>;

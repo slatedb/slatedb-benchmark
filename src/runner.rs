@@ -1,19 +1,19 @@
 mod session;
 
 use crate::cli::{RunArgs, WorkerArgs};
-use crate::config::{BenchmarkConfig, SuiteConfig, SuiteExecution, VariantConfig, WorkloadKind};
+use crate::config::{BenchmarkConfig, SuiteConfig, VariantConfig, WorkloadKind};
 use crate::database_size::live_database_size_bytes;
 use crate::instrumented_store::{StoreMetrics, StoreSnapshot};
 use crate::model::{
     BenchmarkConfiguration, EncodedHistogram, Environment, Identity, InitialState,
-    ObjectStoreBaseline, ResultRecord, RunManifest, SourceFiles, TimeseriesFile,
+    ObjectStoreBaseline, ResultRecord, SourceFiles, TimeseriesFile,
 };
-use crate::object_store_probe::{delete_prefix, probe, ObjectStoreContext};
+use crate::object_store_probe::{delete_prefix, ObjectStoreContext};
 use crate::system::{
-    inspect_environment, sample_until_stopped, verify_environment, ApplicationCounters,
-    BenchmarkMetricsRecorder, DatabaseSizeSource, SampledTimeseries,
+    inspect_environment, sample_until_stopped, ApplicationWindowRegistry, BenchmarkMetricsRecorder,
+    DatabaseSizeSource, SampledTimeseries,
 };
-use crate::validation::{validate_result, validate_run};
+use crate::validation::validate_result;
 use crate::workloads::{
     execute_variant, extend_with_compaction_phase, populate_dataset, prepare_bulk_load,
     WorkloadOutcome,
@@ -22,7 +22,7 @@ use anyhow::{bail, Context, Result};
 use chrono::Utc;
 use object_store::path::Path;
 use object_store::ObjectStore;
-use serde::Serialize;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::{Digest, Sha256};
 use slatedb::admin::{AdminBuilder, CloneSourceSpec};
 use slatedb::config::{CheckpointOptions, Settings};
@@ -32,27 +32,38 @@ use slatedb::db_cache::{
 };
 use slatedb::{Db, SstBlockSize, VersionedManifest};
 use slatedb_common::metrics::{MetricValue, Metrics, MetricsRecorder};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path as FsPath, PathBuf};
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
-#[derive(Clone)]
-struct GoldenDatabase {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DatabaseCheckpoint {
+    #[serde(
+        serialize_with = "serialize_object_store_path",
+        deserialize_with = "deserialize_object_store_path"
+    )]
     path: Path,
     checkpoint_id: Uuid,
     manifest_id: u64,
-    lsm_digest: String,
+    lsm_digest_sha256: String,
     size_bytes: u64,
 }
 
-struct GoldenManager {
-    store: Arc<dyn ObjectStore>,
-    root: Path,
-    values: HashMap<String, GoldenDatabase>,
+fn serialize_object_store_path<S>(path: &Path, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    serializer.serialize_str(path.as_ref())
+}
+
+fn deserialize_object_store_path<'de, D>(deserializer: D) -> Result<Path, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(Path::from(String::deserialize(deserializer)?))
 }
 
 struct ResultContext<'a> {
@@ -87,7 +98,6 @@ struct CompletedCompactionMeasurement {
 
 impl CompactionMeasurement {
     fn start(
-        outcome: &WorkloadOutcome,
         store_metrics: Arc<StoreMetrics>,
         recorder: Arc<BenchmarkMetricsRecorder>,
         database_path: Path,
@@ -95,14 +105,11 @@ impl CompactionMeasurement {
         let started = Instant::now();
         let start_store = store_metrics.snapshot();
         let start_slate = recorder.snapshot();
-        let counters = Arc::new(ApplicationCounters::default());
-        counters
-            .operations
-            .store(outcome.application.total_operations, Ordering::Relaxed);
+        let windows = Arc::new(ApplicationWindowRegistry::default());
         let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
         let sampler = tokio::spawn(sample_until_stopped(
             started,
-            counters,
+            windows,
             Arc::clone(&store_metrics),
             Arc::clone(&recorder),
             DatabaseSizeSource::TrackedPrefix(database_path),
@@ -149,9 +156,6 @@ impl CompletedCompactionMeasurement {
 }
 
 pub async fn execute(args: RunArgs) -> Result<()> {
-    if args.output.exists() && args.session.is_none() {
-        bail!("output directory {} already exists", args.output.display());
-    }
     fs::create_dir_all(&args.output)
         .with_context(|| format!("creating {}", args.output.display()))?;
     let result = execute_inner(&args).await;
@@ -162,22 +166,8 @@ pub async fn execute(args: RunArgs) -> Result<()> {
 }
 
 async fn execute_inner(args: &RunArgs) -> Result<()> {
-    let started_at = Utc::now();
     let benchmark = BenchmarkConfig::load_from(&args.config_dir)?;
-    let selected = benchmark.select(
-        args.suite.as_deref(),
-        args.workload.as_deref(),
-        args.variant.as_deref(),
-    )?;
-    let mode = selected
-        .first()
-        .context("benchmark selection is empty")?
-        .suite
-        .mode()
-        .to_string();
-    if selected.iter().any(|variant| variant.suite.mode() != mode) {
-        bail!("a benchmark run cannot mix release and non-release suites");
-    }
+    let selected = benchmark.select(Some(&args.suite), args.workload.as_deref(), None)?;
 
     let object_store = ObjectStoreContext::load()?;
     let environment = inspect_environment(
@@ -186,148 +176,13 @@ async fn execute_inner(args: &RunArgs) -> Result<()> {
         &object_store.region,
     );
 
-    if args.session.is_some() {
-        return session::execute(args, &benchmark, selected, &object_store, &environment).await;
-    }
-
-    let mut by_suite = BTreeMap::<String, Vec<VariantConfig>>::new();
-    for variant in selected {
-        by_suite
-            .entry(variant.suite.name.clone())
-            .or_default()
-            .push(variant);
-    }
-    let suite_count = by_suite.len();
-    let mut object_store_baselines = BTreeMap::new();
-    let mut result_paths = Vec::new();
-    for (suite_name, variants) in by_suite {
-        let suite = &variants.first().context("suite selection is empty")?.suite;
-        verify_environment(&environment, !suite.release)?;
-        tracing::info!(
-            suite = suite_name,
-            "probing object store before dataset preparation"
-        );
-        let probe_root = object_store.root.clone().join(suite_name.as_str());
-        let (baseline, baseline_histograms) = probe(
-            Arc::clone(&object_store.raw),
-            &probe_root,
-            &suite.object_store_probe,
-        )
-        .await?;
-        let baseline_path = if suite_count == 1 {
-            args.output.join("object-store.json")
-        } else {
-            args.output.join(format!("object-store-{suite_name}.json"))
-        };
-        write_json(&baseline_path, &baseline)?;
-        let result_context = ResultContext {
-            environment: &environment,
-            baseline: &baseline,
-            baseline_histograms: &baseline_histograms,
-            args,
-        };
-        result_paths
-            .extend(execute_suite(variants, &benchmark, &object_store, &result_context).await?);
-        object_store_baselines.insert(suite_name, baseline);
-    }
-
-    let run = RunManifest {
-        status: "ok".to_string(),
-        started_at: started_at.to_rfc3339(),
-        finished_at: Utc::now().to_rfc3339(),
-        mode,
-        slate_version: env!("BENCHMARK_SLATE_VERSION").to_string(),
-        slate_commit: env!("BENCHMARK_SLATE_COMMIT").to_string(),
-        runner_version: env!("CARGO_PKG_VERSION").to_string(),
-        runner_commit: env!("BENCHMARK_RUNNER_COMMIT").to_string(),
-        lockfile_sha256: env!("BENCHMARK_LOCK_HASH").to_string(),
-        resolved_configuration: serde_json::to_value(&benchmark)?,
-        object_store_baselines,
-        results: result_paths,
-    };
-    validate_run(&run, &args.schema_dir)?;
-    write_json(&args.output.join("run.json"), &run)?;
-    println!(
-        "{{\"status\":\"ok\",\"run\":\"{}\"}}",
-        args.output.join("run.json").display()
-    );
-    Ok(())
-}
-
-async fn execute_suite(
-    selected: Vec<VariantConfig>,
-    benchmark: &BenchmarkConfig,
-    object_store: &ObjectStoreContext,
-    result_context: &ResultContext<'_>,
-) -> Result<Vec<String>> {
-    let suite = selected
-        .first()
-        .context("suite selection is empty")?
-        .suite
-        .clone();
-    let run_root = object_store
-        .root
-        .clone()
-        .join(suite.name.as_str())
-        .join(format!("run-{}", Uuid::new_v4()));
-    let store: Arc<dyn ObjectStore> = object_store.instrumented.clone();
-    let mut golden_manager = GoldenManager {
-        store: Arc::clone(&store),
-        root: run_root.clone(),
-        values: HashMap::new(),
-    };
-
-    let run_result = async {
-        if suite.execution == SuiteExecution::Sequential {
-            return run_sequential_suite(
-                selected,
-                benchmark,
-                &run_root,
-                Arc::clone(&store),
-                object_store.instrumented.metrics(),
-                !object_store.provider.eq_ignore_ascii_case("memory"),
-                result_context,
-            )
-            .await;
-        }
-
-        let mut result_paths = Vec::new();
-        for variant in &selected {
-            let golden = golden_manager.prepare(variant).await?;
-            let clone_path = run_root
-                .clone()
-                .join("clones")
-                .join(variant.workload.name.as_str())
-                .join(format!("{}-{}", variant.variant, Uuid::new_v4()));
-            result_paths.push(
-                execute_isolated_variant(
-                    variant,
-                    clone_path,
-                    &golden,
-                    Arc::clone(&store),
-                    object_store.instrumented.metrics(),
-                    !object_store.provider.eq_ignore_ascii_case("memory"),
-                    result_context,
-                )
-                .await?,
-            );
-        }
-        Ok(result_paths)
-    }
-    .await;
-
-    let cleanup_result = golden_manager.cleanup().await;
-    let run_cleanup = delete_prefix(store, &run_root).await;
-    let result_paths = run_result?;
-    cleanup_result?;
-    run_cleanup?;
-    Ok(result_paths)
+    session::execute(args, &benchmark, selected, &object_store, &environment).await
 }
 
 async fn execute_isolated_variant(
     variant: &VariantConfig,
     clone_path: Path,
-    golden: &GoldenDatabase,
+    golden: &DatabaseCheckpoint,
     store: Arc<dyn ObjectStore>,
     store_metrics: Arc<StoreMetrics>,
     fresh_process: bool,
@@ -351,7 +206,7 @@ async fn execute_isolated_variant(
         )
         .await?;
         let clone_digest = lsm_digest(&db)?;
-        if clone_digest != golden.lsm_digest {
+        if clone_digest != golden.lsm_digest_sha256 {
             bail!("clone {} does not match checkpoint LSM state", clone_path);
         }
         let initial = InitialState {
@@ -367,7 +222,7 @@ async fn execute_isolated_variant(
             execute_variant_in_fresh_process(
                 variant,
                 &clone_path,
-                &golden.lsm_digest,
+                &golden.lsm_digest_sha256,
                 result_context.args,
             )
             .await?
@@ -498,31 +353,6 @@ async fn execute_variant_in_fresh_process(
     Ok(outcome)
 }
 
-impl GoldenManager {
-    async fn prepare(&mut self, variant: &VariantConfig) -> Result<GoldenDatabase> {
-        let key = golden_key(variant)?;
-        if let Some(golden) = self.values.get(&key) {
-            return Ok(golden.clone());
-        }
-        let path = self.root.clone().join("golden").join(key.as_str());
-        let golden = prepare_golden_database(variant, path, Arc::clone(&self.store), &key).await?;
-        self.values.insert(key, golden.clone());
-        Ok(golden)
-    }
-
-    async fn cleanup(&self) -> Result<()> {
-        for golden in self.values.values() {
-            let admin = AdminBuilder::new(golden.path.clone(), Arc::clone(&self.store)).build();
-            admin
-                .delete_checkpoint(golden.checkpoint_id)
-                .await
-                .context("deleting golden checkpoint")?;
-            delete_prefix(Arc::clone(&self.store), &golden.path).await?;
-        }
-        Ok(())
-    }
-}
-
 fn golden_key(variant: &VariantConfig) -> Result<String> {
     let prefix_layout = variant.workload.kind == WorkloadKind::PrefixScan;
     let record_count = if variant.workload.kind == WorkloadKind::SustainedIngest {
@@ -547,7 +377,7 @@ async fn prepare_golden_database(
     path: Path,
     store: Arc<dyn ObjectStore>,
     key: &str,
-) -> Result<GoldenDatabase> {
+) -> Result<DatabaseCheckpoint> {
     let prefix_layout = variant.workload.kind == WorkloadKind::PrefixScan;
     let record_count = if variant.workload.kind == WorkloadKind::SustainedIngest {
         0
@@ -594,11 +424,11 @@ async fn prepare_golden_database(
         .await
         .context("reading golden checkpoint manifest")?
         .context("golden checkpoint manifest does not exist")?;
-    Ok(GoldenDatabase {
+    Ok(DatabaseCheckpoint {
         path: path.clone(),
         checkpoint_id: checkpoint.id,
         manifest_id: checkpoint.manifest_id,
-        lsm_digest: manifest_lsm_digest(&checkpoint_manifest)?,
+        lsm_digest_sha256: manifest_lsm_digest(&checkpoint_manifest)?,
         size_bytes: live_database_size_bytes(&checkpoint_manifest),
     })
 }
@@ -664,9 +494,8 @@ async fn execute_bulk_load_and_compact(
         close_database_after(&bulk_db, bulk_result, "closing bulk-load database").await?;
 
     let recorder = Arc::new(BenchmarkMetricsRecorder::new());
-    let measurement = execution.outcome.as_ref().map(|outcome| {
+    let measurement = execution.outcome.as_ref().map(|_| {
         CompactionMeasurement::start(
-            outcome,
             Arc::clone(&store_metrics),
             Arc::clone(&recorder),
             database_path.clone(),
@@ -707,101 +536,6 @@ async fn execute_bulk_load_and_compact(
         measurement.apply(outcome)?;
     }
     Ok(execution)
-}
-
-async fn run_sequential_suite(
-    selected: Vec<VariantConfig>,
-    benchmark: &BenchmarkConfig,
-    run_root: &Path,
-    store: Arc<dyn ObjectStore>,
-    store_metrics: Arc<StoreMetrics>,
-    fresh_process_variants: bool,
-    result_context: &ResultContext<'_>,
-) -> Result<Vec<String>> {
-    let suite = selected
-        .first()
-        .context("sequential suite selection is empty")?
-        .suite
-        .clone();
-    let bulk_workload = suite
-        .workloads
-        .iter()
-        .find(|workload| workload.kind == WorkloadKind::BulkLoad)
-        .context("sequential suite requires a bulk-load workload")?;
-    let bulk_variant_name = bulk_workload
-        .variants
-        .first()
-        .context("bulk-load workload has no variants")?
-        .name
-        .clone();
-    let mut bulk_variant = benchmark
-        .select(
-            Some(&suite.name),
-            Some(&bulk_workload.name),
-            Some(&bulk_variant_name),
-        )?
-        .pop()
-        .context("bulk-load variant is missing")?;
-    bulk_variant.slate_settings = bulk_load_settings(&bulk_variant.slate_settings);
-    let path = run_root.clone().join("sequential-suite");
-    let selected_bulk = selected
-        .iter()
-        .any(|variant| variant.workload.kind == WorkloadKind::BulkLoad);
-    let suite_settings = benchmark.slate_settings(&suite)?;
-    let BulkLoadExecution {
-        initial: bulk_initial,
-        outcome: mut bulk_outcome,
-    } = execute_bulk_load_and_compact(
-        &bulk_variant,
-        &suite_settings,
-        &path,
-        Arc::clone(&store),
-        Arc::clone(&store_metrics),
-        selected_bulk,
-    )
-    .await?;
-    let compacted_manifest = AdminBuilder::new(path.clone(), Arc::clone(&store))
-        .build()
-        .read_manifest(None)
-        .await
-        .context("reading compacted bulk-load manifest")?
-        .context("compacted bulk-load manifest does not exist")?;
-    let compacted_size = live_database_size_bytes(&compacted_manifest);
-    let mut paths = Vec::new();
-    if let Some(mut outcome) = bulk_outcome.take() {
-        outcome.storage.database_size_bytes = compacted_size;
-        paths.push(write_variant_result(
-            &bulk_variant,
-            outcome,
-            bulk_initial,
-            0,
-            result_context,
-        )?);
-    }
-
-    for variant in selected
-        .iter()
-        .filter(|variant| variant.workload.kind != WorkloadKind::BulkLoad)
-    {
-        let (outcome, initial, initial_size) = execute_rocks_variant(
-            variant,
-            &path,
-            Arc::clone(&store),
-            Arc::clone(&store_metrics),
-            fresh_process_variants,
-            result_context.args,
-        )
-        .await?;
-        paths.push(write_variant_result(
-            variant,
-            outcome,
-            initial,
-            initial_size,
-            result_context,
-        )?);
-    }
-    delete_prefix(store, &path).await?;
-    Ok(paths)
 }
 
 fn bulk_load_settings(suite_settings: &Settings) -> Settings {
@@ -1403,10 +1137,9 @@ mod tests {
             slate_settings: slate_settings.clone(),
         };
         let args = RunArgs {
-            suite: None,
-            session: None,
+            suite: "rocksdb".to_string(),
+            session: "rocks-reopen-test".to_string(),
             workload: None,
-            variant: None,
             output: PathBuf::new(),
             config_dir: PathBuf::from("config"),
             schema_dir: PathBuf::from("schema"),

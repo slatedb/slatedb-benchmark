@@ -5,7 +5,7 @@ import ResultChart from '../../../../components/ResultChart.astro';
 import CostCalculator from '../../../../components/CostCalculator.astro';
 import Base from '../../../../layouts/Base.astro';
 import { buildCharts, chartManifest } from '../../../../lib/charts';
-import { loadPricing, loadResults, routeHref, type BenchmarkResult, type BenchmarkTimeseries } from '../../../../lib/results';
+import { loadPricing, loadResults, objectStoreMetrics, routeHref, type BenchmarkResult, type BenchmarkTimeseries } from '../../../../lib/results';
 
 export async function getStaticPaths() {
   const routes = await loadResults();
@@ -39,50 +39,53 @@ const cacheSummary = [
 const durabilityMode = result.durability.final_flush_drain_ns == null
   ? null
   : result.durability.lag ? 'Async' : 'Sync';
-const {
-  object_store_operations: logicalObjectStoreOperations,
-  object_store_requests: objectStoreRequests,
-  object_store_successful_requests: successfulObjectStoreRequests,
-  object_store_request_errors: objectStoreRequestErrors,
-  object_store_client_errors: objectStoreClientErrors,
-  object_store_server_errors: objectStoreServerErrors,
-  object_store_transport_errors: objectStoreTransportErrors,
-  database_size_bytes,
-  average_database_size_bytes,
-  object_store_errors,
-  bytes_read,
-  bytes_written,
-  object_store_operation_bytes_read: operationBytesRead,
-  object_store_operation_bytes_written: operationBytesWritten,
-  ...storage
-} = result.storage;
+const { database_size_bytes, average_database_size_bytes } = result.storage;
+const objectStoreStorageKeys = new Set([
+  'object_store', 'object_store_operations', 'object_store_requests',
+  'object_store_successful_requests', 'object_store_request_errors',
+  'object_store_client_errors', 'object_store_server_errors',
+  'object_store_transport_errors', 'object_store_errors', 'bytes_read',
+  'bytes_written', 'object_store_operation_bytes_read',
+  'object_store_operation_bytes_written', 'database_size_bytes',
+  'average_database_size_bytes',
+]);
+const storage = Object.fromEntries(
+  Object.entries(result.storage).filter(([key]) => !objectStoreStorageKeys.has(key)),
+);
+const metrics = objectStoreMetrics(result.storage);
 const operationOrder = ['get', 'put', 'list', 'delete', 'head', 'copy', 'create_multipart', 'complete_multipart', 'abort_multipart'];
 const orderOperations = (operations: Record<string, number>) => Object.fromEntries(
   Object.entries(operations).sort(
     ([left], [right]) => operationOrder.indexOf(left) - operationOrder.indexOf(right),
   ),
 );
-const hasWireRequestMetrics = logicalObjectStoreOperations !== undefined;
+const hasWireRequestMetrics = result.storage.object_store !== undefined
+  || result.storage.object_store_operations !== undefined;
 const objectStoreOperations = {
   database_size_bytes,
   average_database_size_bytes,
-  object_store_errors,
-  bytes_read: operationBytesRead ?? bytes_read,
-  bytes_written: operationBytesWritten ?? bytes_written,
-  ...orderOperations(logicalObjectStoreOperations ?? objectStoreRequests),
+  object_store_errors: metrics.errors,
+  bytes_read: metrics.operation_bytes_read,
+  bytes_written: metrics.operation_bytes_written,
+  ...orderOperations(metrics.operations),
 };
 const objectStoreHttp = hasWireRequestMetrics ? {
-  response_body_bytes: bytes_read,
-  request_body_bytes: bytes_written,
-  requests: orderOperations(objectStoreRequests),
-  successful_requests: orderOperations(successfulObjectStoreRequests ?? {}),
-  request_errors: orderOperations(objectStoreRequestErrors ?? {}),
-  client_errors: orderOperations(objectStoreClientErrors ?? {}),
-  server_errors: orderOperations(objectStoreServerErrors ?? {}),
-  transport_errors: orderOperations(objectStoreTransportErrors ?? {}),
+  response_body_bytes: metrics.bytes_read,
+  request_body_bytes: metrics.bytes_written,
+  requests: orderOperations(metrics.requests),
+  successful_requests: orderOperations(metrics.successful_requests),
+  request_errors: orderOperations(metrics.request_errors),
+  client_errors: orderOperations(metrics.client_errors),
+  server_errors: orderOperations(metrics.server_errors),
+  transport_errors: orderOperations(metrics.transport_errors),
 } : null;
+const application = Object.fromEntries(
+  Object.entries(result.application).filter(
+    ([key]) => key !== 'accepted_ops_per_second' && key !== 'completed_ops_per_second',
+  ),
+);
 const tables: Array<[string, Record<string, unknown>]> = [
-  ['Application', result.application], ['Durability', result.durability], ['Resources', result.resources],
+  ['Application', application], ['Durability', result.durability], ['Resources', result.resources],
   ['Storage', storage], ['Object store operations', objectStoreOperations],
 ];
 if (objectStoreHttp) tables.push(['Object store HTTP', objectStoreHttp]);

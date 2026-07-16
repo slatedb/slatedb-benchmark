@@ -1,7 +1,7 @@
 use super::{
     bulk_load_settings, clone_database, execute_bulk_load_and_compact, execute_isolated_variant,
     execute_rocks_variant, golden_key, manifest_lsm_digest, prepare_golden_database, write_json,
-    write_variant_result, GoldenDatabase, ResultContext,
+    write_variant_result, DatabaseCheckpoint, ResultContext,
 };
 use crate::cli::RunArgs;
 use crate::config::{BenchmarkConfig, SuiteConfig, SuiteExecution, VariantConfig, WorkloadKind};
@@ -43,48 +43,12 @@ struct SessionState {
     completed: Vec<CompletedWorkload>,
     sequential_databases: Vec<DatabaseCheckpoint>,
     goldens: BTreeMap<String, DatabaseCheckpoint>,
-    measurement_complete: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct CompletedWorkload {
     name: String,
     results: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct DatabaseCheckpoint {
-    path: String,
-    checkpoint_id: Uuid,
-    manifest_id: u64,
-    lsm_digest_sha256: String,
-    size_bytes: u64,
-}
-
-impl DatabaseCheckpoint {
-    fn path(&self) -> Path {
-        Path::from(self.path.as_str())
-    }
-
-    fn from_golden(golden: &GoldenDatabase) -> Self {
-        Self {
-            path: golden.path.to_string(),
-            checkpoint_id: golden.checkpoint_id,
-            manifest_id: golden.manifest_id,
-            lsm_digest_sha256: golden.lsm_digest.clone(),
-            size_bytes: golden.size_bytes,
-        }
-    }
-
-    fn to_golden(&self) -> GoldenDatabase {
-        GoldenDatabase {
-            path: self.path(),
-            checkpoint_id: self.checkpoint_id,
-            manifest_id: self.manifest_id,
-            lsm_digest: self.lsm_digest_sha256.clone(),
-            size_bytes: self.size_bytes,
-        }
-    }
 }
 
 pub(super) async fn execute(
@@ -94,17 +58,10 @@ pub(super) async fn execute(
     object_store: &ObjectStoreContext,
     environment: &Environment,
 ) -> Result<()> {
-    let session = args.session.as_deref().context("session name is missing")?;
+    let session = args.session.as_str();
     validate_session_name(session)?;
-    let suite_name = args
-        .suite
-        .as_deref()
-        .context("resumable sessions require --suite")?;
+    let suite_name = args.suite.as_str();
     let selected_workload = args.workload.as_deref();
-    ensure!(
-        args.variant.is_none(),
-        "resumable sessions execute complete workloads, not individual variants"
-    );
     if let Some(workload_name) = selected_workload {
         ensure!(
             requested
@@ -152,7 +109,6 @@ pub(super) async fn execute(
                 completed: Vec::new(),
                 sequential_databases: Vec::new(),
                 goldens: BTreeMap::new(),
-                measurement_complete: false,
             };
             save_state(Arc::clone(&object_store.raw), &state_path, &state).await?;
             state
@@ -264,7 +220,6 @@ pub(super) async fn execute(
         if let Some(checkpoint) = sequential_checkpoint {
             state.sequential_databases.push(checkpoint);
         }
-        state.measurement_complete = state.completed.len() == suite.workloads.len();
         write_run_manifest(args, benchmark, suite_name, &state)?;
         validate_output(&args.output)?;
         for result in &results {
@@ -280,7 +235,15 @@ pub(super) async fn execute(
     }
 
     write_run_manifest(args, benchmark, suite_name, &state)?;
-    cleanup_completed_session(&mut state, object_store, &session_root, &state_path).await?;
+    let complete = state.completed.len() == suite.workloads.len();
+    cleanup_completed_session(
+        &mut state,
+        complete,
+        object_store,
+        &session_root,
+        &state_path,
+    )
+    .await?;
     print_success(args);
     Ok(())
 }
@@ -299,7 +262,7 @@ async fn execute_isolated_workload(
     for variant in variants {
         let key = golden_key(variant)?;
         let golden = match state.goldens.get(&key) {
-            Some(checkpoint) => checkpoint.to_golden(),
+            Some(checkpoint) => checkpoint.clone(),
             None => {
                 let path = session_root
                     .clone()
@@ -311,9 +274,7 @@ async fn execute_isolated_workload(
                     .context("removing an abandoned golden database")?;
                 let golden =
                     prepare_golden_database(variant, path, Arc::clone(&store), &key).await?;
-                state
-                    .goldens
-                    .insert(key.clone(), DatabaseCheckpoint::from_golden(&golden));
+                state.goldens.insert(key.clone(), golden.clone());
                 save_state(Arc::clone(&object_store.raw), state_path, state).await?;
                 golden
             }
@@ -374,7 +335,7 @@ async fn execute_sequential_workload(
     clone_database(
         Arc::clone(&store),
         &database_path,
-        &head.path(),
+        &head.path,
         head.checkpoint_id,
     )
     .await?;
@@ -471,7 +432,7 @@ async fn checkpoint_database(
         .context("reading resumable benchmark checkpoint")?
         .context("resumable benchmark checkpoint manifest does not exist")?;
     Ok(DatabaseCheckpoint {
-        path: path.to_string(),
+        path,
         checkpoint_id: checkpoint.id,
         manifest_id: checkpoint.manifest_id,
         lsm_digest_sha256: manifest_lsm_digest(&manifest)?,
@@ -521,13 +482,12 @@ fn write_run_manifest(
 
 async fn cleanup_completed_session(
     state: &mut SessionState,
+    complete: bool,
     object_store: &ObjectStoreContext,
     session_root: &Path,
     state_path: &Path,
 ) -> Result<()> {
-    if state.measurement_complete
-        && (!state.sequential_databases.is_empty() || !state.goldens.is_empty())
-    {
+    if complete && (!state.sequential_databases.is_empty() || !state.goldens.is_empty()) {
         let store: Arc<dyn ObjectStore> = object_store.instrumented.clone();
         delete_prefix(store, &session_root.clone().join("databases"))
             .await
@@ -643,10 +603,7 @@ fn validate_state(
             "session results do not match the configured workload order"
         );
     }
-    ensure!(
-        state.measurement_complete == (state.completed.len() == suite.workloads.len()),
-        "session completion marker is inconsistent"
-    );
+    let complete = state.completed.len() == suite.workloads.len();
     match suite.execution {
         SuiteExecution::Sequential => {
             ensure!(
@@ -654,7 +611,7 @@ fn validate_state(
                 "sequential session contains golden databases"
             );
             ensure!(
-                (state.measurement_complete && state.sequential_databases.is_empty())
+                (complete && state.sequential_databases.is_empty())
                     || state.sequential_databases.len() == state.completed.len(),
                 "sequential checkpoints do not match completed workloads"
             );
@@ -804,7 +761,6 @@ mod tests {
             completed: Vec::new(),
             sequential_databases: Vec::new(),
             goldens: BTreeMap::new(),
-            measurement_complete: false,
         }
     }
 
@@ -889,10 +845,9 @@ mod tests {
         };
         let first_output = tempdir().expect("first output");
         let args = RunArgs {
-            suite: Some("smoke".to_string()),
-            session: Some("suite-session".to_string()),
+            suite: "smoke".to_string(),
+            session: "suite-session".to_string(),
             workload: None,
-            variant: None,
             output: first_output.path().to_path_buf(),
             config_dir: PathBuf::from("config"),
             schema_dir: PathBuf::from("schema"),
@@ -915,7 +870,7 @@ mod tests {
             .expect("load completed state")
             .expect("completed state exists");
         let suite = selected.first().expect("selected variant").suite.clone();
-        assert!(state.measurement_complete);
+        assert_eq!(state.completed.len(), suite.workloads.len());
         assert_eq!(
             state
                 .completed

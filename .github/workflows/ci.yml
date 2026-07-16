@@ -17,8 +17,6 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt -- --check
-      - name: Verify generated release workflow
-        run: cargo run --quiet --locked -- generate-workflow --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test --locked
       - uses: actions/setup-node@v4

@@ -8,6 +8,7 @@ use object_store::{
     PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions, Result as StoreResult,
     UploadPart,
 };
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -89,7 +90,7 @@ pub struct StoreMetrics {
     objects: Mutex<BTreeMap<String, u64>>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct StoreSnapshot {
     pub operations: BTreeMap<String, u64>,
     pub requests: BTreeMap<String, u64>,
@@ -250,6 +251,32 @@ impl StoreSnapshot {
                 .operation_bytes_written
                 .saturating_sub(start.operation_bytes_written),
         }
+    }
+
+    pub fn merge(&mut self, other: Self) {
+        merge_counts(&mut self.operations, other.operations);
+        merge_counts(&mut self.requests, other.requests);
+        merge_counts(&mut self.successful_requests, other.successful_requests);
+        merge_counts(&mut self.request_errors, other.request_errors);
+        merge_counts(&mut self.client_errors, other.client_errors);
+        merge_counts(&mut self.server_errors, other.server_errors);
+        merge_counts(&mut self.transport_errors, other.transport_errors);
+        self.errors = self.errors.saturating_add(other.errors);
+        self.bytes_read = self.bytes_read.saturating_add(other.bytes_read);
+        self.bytes_written = self.bytes_written.saturating_add(other.bytes_written);
+        self.operation_bytes_read = self
+            .operation_bytes_read
+            .saturating_add(other.operation_bytes_read);
+        self.operation_bytes_written = self
+            .operation_bytes_written
+            .saturating_add(other.operation_bytes_written);
+    }
+}
+
+fn merge_counts(target: &mut BTreeMap<String, u64>, source: BTreeMap<String, u64>) {
+    for (operation, count) in source {
+        let current = target.entry(operation).or_default();
+        *current = current.saturating_add(count);
     }
 }
 

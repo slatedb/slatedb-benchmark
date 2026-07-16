@@ -33,7 +33,6 @@ async fn main() -> Result<()> {
             );
             Ok(())
         }
-        Command::GenerateWorkflow(args) => slatedb_benchmark::workflow::generate(args),
         Command::Worker(args) => slatedb_benchmark::runner::execute_worker(args).await,
     }
 }

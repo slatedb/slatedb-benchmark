@@ -9,7 +9,7 @@ use crate::model::{
     ApplicationPerformance, DurabilityPerformance, DurabilityWindow, HistogramsFile, IngestWindow,
     MetricSeriesValue, MetricValueType, ResourceUse, StoragePerformance, TimeseriesFile,
 };
-use crate::system::{self, ApplicationCounters, BenchmarkMetricsRecorder};
+use crate::system::{self, ApplicationWindowRegistry, BenchmarkMetricsRecorder};
 use anyhow::{Context, Result};
 use durability::DurabilityTracker;
 use serde::{Deserialize, Serialize};
@@ -97,13 +97,12 @@ pub async fn execute_variant(
 
     let start_store = store_metrics.snapshot();
     let start_slate = slate_metrics.snapshot();
-    let counters = Arc::new(ApplicationCounters::new());
-    counters.reset();
+    let windows = Arc::new(ApplicationWindowRegistry::new());
     let measured_started = Instant::now();
     let (stop_tx, stop_rx) = watch::channel(false);
     let sampler = tokio::spawn(system::sample_until_stopped(
         measured_started,
-        Arc::clone(&counters),
+        Arc::clone(&windows),
         Arc::clone(&store_metrics),
         Arc::clone(&slate_metrics),
         system::DatabaseSizeSource::LiveDatabase(Arc::clone(&db)),
@@ -119,13 +118,13 @@ pub async fn execute_variant(
         variant,
         configured_duration,
         durability_sender,
-        Some(Arc::clone(&counters)),
+        Some(Arc::clone(&windows)),
         &closed_state,
     )
     .await?;
     let generation_stopped = Instant::now();
     let measurement_elapsed = generation_stopped.saturating_duration_since(measured_started);
-    let final_api_recorder = counters.register_window_recorder();
+    let final_api_recorder = windows.register_window_recorder();
     let (durability, durability_windows) = finish_durability(
         &db,
         &mut stats,
@@ -245,18 +244,7 @@ fn storage_summary(
     StoragePerformance {
         database_size_bytes: 0,
         average_database_size_bytes: 0,
-        object_store_operations: store.operations.clone(),
-        object_store_requests: store.requests.clone(),
-        object_store_successful_requests: store.successful_requests.clone(),
-        object_store_request_errors: store.request_errors.clone(),
-        object_store_client_errors: store.client_errors.clone(),
-        object_store_server_errors: store.server_errors.clone(),
-        object_store_transport_errors: store.transport_errors.clone(),
-        object_store_errors: store.errors,
-        bytes_read: store.bytes_read,
-        bytes_written: store.bytes_written,
-        object_store_operation_bytes_read: store.operation_bytes_read,
-        object_store_operation_bytes_written: store.operation_bytes_written,
+        object_store: store.clone(),
         compaction_throughput_bytes_per_second: counters.compaction_throughput(elapsed),
         write_amplification: counters.write_amplification(),
         backpressure_ns,
@@ -292,48 +280,7 @@ pub fn extend_with_compaction_phase(
 ) -> Result<()> {
     let phase = storage_counters(start_metrics, end_metrics);
     outcome.storage_counters.merge(phase);
-    merge_counts(
-        &mut outcome.storage.object_store_operations,
-        store.operations,
-    );
-    merge_counts(&mut outcome.storage.object_store_requests, store.requests);
-    merge_counts(
-        &mut outcome.storage.object_store_successful_requests,
-        store.successful_requests,
-    );
-    merge_counts(
-        &mut outcome.storage.object_store_request_errors,
-        store.request_errors,
-    );
-    merge_counts(
-        &mut outcome.storage.object_store_client_errors,
-        store.client_errors,
-    );
-    merge_counts(
-        &mut outcome.storage.object_store_server_errors,
-        store.server_errors,
-    );
-    merge_counts(
-        &mut outcome.storage.object_store_transport_errors,
-        store.transport_errors,
-    );
-    outcome.storage.object_store_errors = outcome
-        .storage
-        .object_store_errors
-        .saturating_add(store.errors);
-    outcome.storage.bytes_read = outcome.storage.bytes_read.saturating_add(store.bytes_read);
-    outcome.storage.bytes_written = outcome
-        .storage
-        .bytes_written
-        .saturating_add(store.bytes_written);
-    outcome.storage.object_store_operation_bytes_read = outcome
-        .storage
-        .object_store_operation_bytes_read
-        .saturating_add(store.operation_bytes_read);
-    outcome.storage.object_store_operation_bytes_written = outcome
-        .storage
-        .object_store_operation_bytes_written
-        .saturating_add(store.operation_bytes_written);
+    outcome.storage.object_store.merge(store);
 
     let phase_ns = system::duration_ns(elapsed);
     let base = outcome.elapsed_ns;
@@ -356,16 +303,6 @@ pub fn extend_with_compaction_phase(
     Ok(())
 }
 
-fn merge_counts(
-    target: &mut std::collections::BTreeMap<String, u64>,
-    source: std::collections::BTreeMap<String, u64>,
-) {
-    for (operation, count) in source {
-        let current = target.entry(operation).or_default();
-        *current = current.saturating_add(count);
-    }
-}
-
 fn ingest_windows(timeseries: &TimeseriesFile) -> Vec<IngestWindow> {
     const WINDOW_NS: u64 = 300_000_000_000;
     let samples = &timeseries.samples;
@@ -374,12 +311,20 @@ fn ingest_windows(timeseries: &TimeseriesFile) -> Vec<IngestWindow> {
     }
     let mut windows = Vec::new();
     let mut start_offset = 0_u64;
-    let mut start_operations = 0_u64;
     for (sample_index, sample) in samples.iter().enumerate().skip(1) {
         if sample.offset_ns.saturating_sub(start_offset) >= WINDOW_NS
             || sample.offset_ns == samples[samples.len() - 1].offset_ns
         {
-            let operations = sample.operations.saturating_sub(start_operations);
+            let operations = timeseries
+                .application_windows
+                .iter()
+                .filter(|window| {
+                    window.start_offset_ns >= start_offset
+                        && window.start_offset_ns.saturating_add(window.duration_ns)
+                            <= sample.offset_ns
+                })
+                .map(|window| window.completed_operations)
+                .fold(0_u64, u64::saturating_add);
             let seconds = sample.offset_ns.saturating_sub(start_offset) as f64 / 1e9;
             let start_index = samples
                 .iter()
@@ -426,7 +371,6 @@ fn ingest_windows(timeseries: &TimeseriesFile) -> Vec<IngestWindow> {
                 ),
             });
             start_offset = sample.offset_ns;
-            start_operations = sample.operations;
         }
     }
     windows

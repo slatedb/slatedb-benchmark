@@ -1,3 +1,4 @@
+use crate::instrumented_store::StoreSnapshot;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -93,8 +94,6 @@ pub struct BenchmarkConfiguration {
 pub struct ApplicationPerformance {
     pub total_operations: u64,
     pub successful_operations: u64,
-    pub accepted_ops_per_second: f64,
-    pub completed_ops_per_second: f64,
     pub payload_mib_per_second: f64,
     pub errors: u64,
     pub return_latency: LatencySummary,
@@ -138,34 +137,9 @@ pub struct StoragePerformance {
     pub database_size_bytes: u64,
     /// Time-weighted average of the live LSM size during measurement.
     pub average_database_size_bytes: u64,
-    /// Logical calls made through the `ObjectStore` trait.
+    // Older persisted session artifacts stored these counters as flat fields.
     #[serde(default)]
-    pub object_store_operations: BTreeMap<String, u64>,
-    /// HTTP attempts after client-side coalescing, batching, and pagination.
-    pub object_store_requests: BTreeMap<String, u64>,
-    /// HTTP attempts that received a 2xx response.
-    #[serde(default)]
-    pub object_store_successful_requests: BTreeMap<String, u64>,
-    #[serde(default)]
-    pub object_store_request_errors: BTreeMap<String, u64>,
-    #[serde(default)]
-    pub object_store_client_errors: BTreeMap<String, u64>,
-    #[serde(default)]
-    pub object_store_server_errors: BTreeMap<String, u64>,
-    #[serde(default)]
-    pub object_store_transport_errors: BTreeMap<String, u64>,
-    /// Logical `ObjectStore` calls that ultimately failed after retries.
-    pub object_store_errors: u64,
-    /// HTTP response-body bytes consumed across all attempts.
-    pub bytes_read: u64,
-    /// HTTP request-body bytes attempted across all attempts.
-    pub bytes_written: u64,
-    /// Bytes returned by logical read operations, excluding coalesced gaps.
-    #[serde(default)]
-    pub object_store_operation_bytes_read: u64,
-    /// Payload bytes submitted by logical write operations, excluding retries.
-    #[serde(default)]
-    pub object_store_operation_bytes_written: u64,
+    pub object_store: StoreSnapshot,
     pub compaction_throughput_bytes_per_second: Option<f64>,
     pub write_amplification: Option<f64>,
     pub backpressure_ns: u64,
@@ -239,7 +213,6 @@ pub struct ApplicationWindow {
     pub errors: u64,
     pub read_payload_bytes: u64,
     pub write_payload_bytes: u64,
-    pub payload_bytes: u64,
     pub return_latency: Option<LatencySummary>,
     pub return_latency_by_operation: BTreeMap<String, LatencySummary>,
     pub api_latency: BTreeMap<String, LatencySummary>,
@@ -257,8 +230,6 @@ pub struct DurabilityWindow {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TimeseriesSample {
     pub offset_ns: u64,
-    pub operations: u64,
-    pub errors: u64,
     pub cpu_percent: f64,
     pub rss_bytes: u64,
     pub network_bytes_sent: u64,
@@ -269,25 +240,9 @@ pub struct TimeseriesSample {
     pub disk_write_operations: u64,
     /// Estimated compressed bytes of unique SSTs in the live LSM.
     pub database_size_bytes: u64,
+    // Accept older persisted time series while resumed sessions are upgraded.
     #[serde(default)]
-    pub object_store_operations: BTreeMap<String, u64>,
-    pub object_store_requests: BTreeMap<String, u64>,
-    #[serde(default)]
-    pub object_store_successful_requests: BTreeMap<String, u64>,
-    #[serde(default)]
-    pub object_store_request_errors: BTreeMap<String, u64>,
-    #[serde(default)]
-    pub object_store_client_errors: BTreeMap<String, u64>,
-    #[serde(default)]
-    pub object_store_server_errors: BTreeMap<String, u64>,
-    #[serde(default)]
-    pub object_store_transport_errors: BTreeMap<String, u64>,
-    pub object_store_bytes_read: u64,
-    pub object_store_bytes_written: u64,
-    #[serde(default)]
-    pub object_store_operation_bytes_read: u64,
-    #[serde(default)]
-    pub object_store_operation_bytes_written: u64,
+    pub object_store: StoreSnapshot,
     #[serde(skip)]
     pub slatedb_metrics: Vec<MetricSnapshot>,
 }

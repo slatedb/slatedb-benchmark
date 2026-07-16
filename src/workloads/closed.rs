@@ -5,7 +5,7 @@ use super::util::{
     ValueGenerator,
 };
 use crate::config::{VariantConfig, WorkloadKind};
-use crate::system::{measure_backpressure, ApplicationCounters};
+use crate::system::{measure_backpressure, ApplicationWindowRegistry};
 use anyhow::{bail, Context, Result};
 use futures::future::join_all;
 use rand::rngs::StdRng;
@@ -39,11 +39,11 @@ pub async fn run_closed_phase(
     variant: &VariantConfig,
     duration: Duration,
     durability: Option<DurabilitySender>,
-    counters: Option<Arc<ApplicationCounters>>,
+    windows: Option<Arc<ApplicationWindowRegistry>>,
     state: &ClosedLoopState,
 ) -> Result<WorkerStats> {
     if variant.workload.kind == WorkloadKind::BulkLoad {
-        return run_bulk_load(db, variant, durability, counters).await;
+        return run_bulk_load(db, variant, durability, windows).await;
     }
     if matches!(
         variant.workload.kind,
@@ -51,7 +51,7 @@ pub async fn run_closed_phase(
             | WorkloadKind::ForwardRangeWhileWriting
             | WorkloadKind::ReverseRangeWhileWriting
     ) {
-        return run_with_capped_writer(db, variant, duration, durability, counters, state).await;
+        return run_with_capped_writer(db, variant, duration, durability, windows, state).await;
     }
 
     let clients = variant.clients;
@@ -61,11 +61,11 @@ pub async fn run_closed_phase(
         let db = Arc::clone(&db);
         let variant = variant.clone();
         let durability = durability.clone();
-        let counters = counters.clone();
+        let windows = windows.clone();
         let state = state.clone();
-        tasks.spawn(async move {
-            worker_loop(db, variant, deadline, durability, counters, state).await
-        });
+        tasks.spawn(
+            async move { worker_loop(db, variant, deadline, durability, windows, state).await },
+        );
     }
     merge_tasks(tasks).await
 }
@@ -75,7 +75,7 @@ async fn worker_loop(
     variant: VariantConfig,
     deadline: Instant,
     durability: Option<DurabilitySender>,
-    counters: Option<Arc<ApplicationCounters>>,
+    windows: Option<Arc<ApplicationWindowRegistry>>,
     state: ClosedLoopState,
 ) -> Result<WorkerStats> {
     let mut rng = StdRng::from_os_rng();
@@ -93,9 +93,9 @@ async fn worker_loop(
     };
     let mut values = ValueGenerator::new(variant.value_compression_ratio());
     let mut stats = WorkerStats::with_window_recorder(
-        counters
+        windows
             .as_ref()
-            .map(|counters| counters.register_window_recorder()),
+            .map(|windows| windows.register_window_recorder()),
     );
     let operation_context = OperationContext {
         db: &db,
@@ -130,21 +130,12 @@ async fn worker_loop(
                         tracker.accepted(handle.seqnum(), returned_at);
                     }
                 }
-                if let Some(counters) = &counters {
-                    counters.operations.fetch_add(1, Ordering::Relaxed);
-                }
             }
             Err(OperationError::TransactionConflict) => {
                 stats.record_transaction_conflict(completion.latency);
-                if let Some(counters) = &counters {
-                    counters.operations.fetch_add(1, Ordering::Relaxed);
-                }
             }
             Err(OperationError::Other(error)) => {
                 stats.record_error(operation_name(variant.workload.kind), completion.latency);
-                if let Some(counters) = &counters {
-                    counters.errors.fetch_add(1, Ordering::Relaxed);
-                }
                 tracing::debug!(%error, "benchmark operation failed");
             }
         }
@@ -598,7 +589,7 @@ async fn run_bulk_load(
     db: Arc<Db>,
     variant: &VariantConfig,
     durability: Option<DurabilitySender>,
-    counters: Option<Arc<ApplicationCounters>>,
+    windows: Option<Arc<ApplicationWindowRegistry>>,
 ) -> Result<WorkerStats> {
     const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 
@@ -617,9 +608,9 @@ async fn run_bulk_load(
     };
     let put_options = PutOptions::default();
     let mut stats = WorkerStats::with_window_recorder(
-        counters
+        windows
             .as_ref()
-            .map(|counters| counters.register_window_recorder()),
+            .map(|windows| windows.register_window_recorder()),
     );
     let load_started = Instant::now();
     let mut last_reported_at = load_started;
@@ -711,15 +702,9 @@ async fn run_bulk_load(
                 if let Some(tracker) = &durability {
                     tracker.accepted(handle.seqnum(), returned_at);
                 }
-                if let Some(counters) = &counters {
-                    counters.operations.fetch_add(1, Ordering::Relaxed);
-                }
             }
             Err(error) => {
                 stats.record_error("insert", started.elapsed());
-                if let Some(counters) = &counters {
-                    counters.errors.fetch_add(1, Ordering::Relaxed);
-                }
                 tracing::debug!(%error, "bulk-load write failed");
             }
         }
@@ -749,7 +734,7 @@ async fn run_with_capped_writer(
     variant: &VariantConfig,
     duration: Duration,
     durability: Option<DurabilitySender>,
-    counters: Option<Arc<ApplicationCounters>>,
+    windows: Option<Arc<ApplicationWindowRegistry>>,
     state: &ClosedLoopState,
 ) -> Result<WorkerStats> {
     let clients = variant.clients;
@@ -766,16 +751,16 @@ async fn run_with_capped_writer(
         let mut reader_variant = variant.clone();
         reader_variant.workload.kind = read_kind;
         reader_variant.workload.await_durable = false;
-        let counters = counters.clone();
+        let windows = windows.clone();
         let state = state.clone();
         tasks.spawn(async move {
-            worker_loop(db, reader_variant, deadline, None, counters, state).await
+            worker_loop(db, reader_variant, deadline, None, windows, state).await
         });
     }
     let writer_db = db;
     let writer_variant = variant.clone();
     tasks.spawn(async move {
-        capped_writer(writer_db, writer_variant, deadline, durability, counters).await
+        capped_writer(writer_db, writer_variant, deadline, durability, windows).await
     });
     merge_tasks(tasks).await
 }
@@ -785,7 +770,7 @@ async fn capped_writer(
     variant: VariantConfig,
     deadline: Instant,
     durability: Option<DurabilitySender>,
-    counters: Option<Arc<ApplicationCounters>>,
+    windows: Option<Arc<ApplicationWindowRegistry>>,
 ) -> Result<WorkerStats> {
     let bytes_per_second = 2 * 1024 * 1024_u64;
     let ops_per_second = (bytes_per_second / variant.value_bytes() as u64).max(1);
@@ -800,9 +785,9 @@ async fn capped_writer(
     let mut rng = StdRng::from_os_rng();
     let mut values = ValueGenerator::new(variant.value_compression_ratio());
     let mut stats = WorkerStats::with_window_recorder(
-        counters
+        windows
             .as_ref()
-            .map(|counters| counters.register_window_recorder()),
+            .map(|windows| windows.register_window_recorder()),
     );
     while Instant::now() < deadline {
         ticker.tick().await;
@@ -831,15 +816,9 @@ async fn capped_writer(
                 if let Some(tracker) = &durability {
                     tracker.accepted(handle.seqnum(), returned_at);
                 }
-                if let Some(counters) = &counters {
-                    counters.operations.fetch_add(1, Ordering::Relaxed);
-                }
             }
             Err(error) => {
                 stats.record_background_error("writer-update", started.elapsed());
-                if let Some(counters) = &counters {
-                    counters.errors.fetch_add(1, Ordering::Relaxed);
-                }
                 tracing::debug!(%error, "capped writer failed");
             }
         }

@@ -1,0 +1,95 @@
+name: Benchmark suite
+
+on:
+  workflow_call:
+    inputs:
+      suite:
+        required: true
+        type: string
+      slate_version:
+        required: true
+        type: string
+
+jobs:
+  benchmark:
+    permissions:
+      actions: read
+      contents: read
+    runs-on: warp-ubuntu-latest-x64-16x
+    timeout-minutes: 1440
+    environment: benchmark
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Download runner binary
+        uses: actions/download-artifact@v4
+        with:
+          name: benchmark-runner
+          path: bin
+      - name: Prepare runner binary
+        run: chmod +x bin/slatedb-benchmark
+      - name: Run ${{ inputs.suite }} suite
+        env:
+          CLOUD_PROVIDER: aws
+          AWS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
+          AWS_REGION: auto
+          AWS_ENDPOINT_URL_S3: https://t3.storage.dev
+          AWS_ENDPOINT_URL_IAM: https://iam.storage.dev
+          SLATEDB_BENCH_BUCKET: ${{ vars.TIGRIS_BUCKET_PREFIX }}-${{ inputs.suite }}
+          SLATEDB_BENCH_PREFIX: release/${{ inputs.slate_version }}
+          SLATEDB_BENCH_REGION: fra
+          SLATEDB_BENCH_RUNNER_TYPE: warp-ubuntu-latest-x64-16x
+        run: |
+          bin/slatedb-benchmark run \
+            --suite "${{ inputs.suite }}" \
+            --session "github-${{ github.run_id }}-${{ inputs.suite }}" \
+            --output ".runs/${{ inputs.suite }}"
+      - name: Validate ${{ inputs.suite }} suite
+        run: bin/slatedb-benchmark validate --output ".runs/${{ inputs.suite }}"
+      - name: Preserve suite artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-${{ inputs.slate_version }}-${{ inputs.suite }}
+          path: .runs/${{ inputs.suite }}
+          if-no-files-found: ignore
+          overwrite: true
+
+  publish:
+    name: Publish ${{ inputs.suite }}
+    needs: benchmark
+    permissions:
+      actions: write
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out current main for publication
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Download suite artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: benchmark-${{ inputs.slate_version }}-${{ inputs.suite }}
+          path: .runs/${{ inputs.suite }}
+      - name: Publish ${{ inputs.suite }} suite
+        run: |
+          ./scripts/publish-results.sh \
+            ".runs/${{ inputs.suite }}" \
+            "${{ inputs.slate_version }}" \
+            "${{ inputs.suite }}" \
+            .
+      - name: Deploy ${{ inputs.suite }} suite
+        uses: actions/github-script@v9
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: "pages.yml",
+              ref: "main",
+            });

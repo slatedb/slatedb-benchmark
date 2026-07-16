@@ -251,8 +251,6 @@ impl WorkerStats {
         ApplicationPerformance {
             total_operations: self.total,
             successful_operations: self.successful,
-            accepted_ops_per_second: self.successful as f64 / seconds,
-            completed_ops_per_second: self.total as f64 / seconds,
             payload_mib_per_second: Payload::read_write(
                 self.read_payload_bytes,
                 self.write_payload_bytes,
@@ -304,7 +302,6 @@ mod tests {
 
         assert_eq!(application.total_operations, 1);
         assert_eq!(application.successful_operations, 0);
-        assert_eq!(application.completed_ops_per_second, 1.0);
     }
 
     #[test]

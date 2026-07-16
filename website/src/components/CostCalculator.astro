@@ -1,5 +1,5 @@
 ---
-import type { BenchmarkResult, PricingTable } from '../lib/results';
+import { objectStoreMetrics, type BenchmarkResult, type PricingTable } from '../lib/results';
 
 interface Props {
   result: BenchmarkResult;
@@ -7,10 +7,10 @@ interface Props {
 }
 
 const { result, pricing } = Astro.props;
-const hasWireRequestMetrics = result.storage.object_store_operations !== undefined;
-const requests = hasWireRequestMetrics
-  ? (result.storage.object_store_successful_requests ?? {})
-  : {};
+const metrics = objectStoreMetrics(result.storage);
+const hasWireRequestMetrics = result.storage.object_store !== undefined
+  || result.storage.object_store_operations !== undefined;
+const requests = hasWireRequestMetrics ? metrics.successful_requests : {};
 const basis = {
   elapsed_ns: result.elapsed_ns,
   database_size_bytes: result.storage.database_size_bytes,
