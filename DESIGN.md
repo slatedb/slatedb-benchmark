@@ -79,30 +79,28 @@ goldens/<golden-id>/
   full-compaction/result.json
 
 sessions/<session>/
-  identity.json
-  tasks/
-    <workload>/commit.json
+  <workload>/result.json
 ```
 
-Each preparation result contains its website metrics, resolved configuration,
-source commits, and checkpoint reference. The result is also the completion
-marker and is created last:
+Preparation results contain checkpoint references and golden dataset metadata.
+They contain no benchmark metric tables. Workload results contain their metrics,
+resolved configuration, source commits, and benchmark environment.
+
+Every result is also its task's completion signal and is created last:
 
 ```text
-run preparation phase
-  -> validate the database and result
-  -> finish checkpoint writes
+run task
+  -> validate its database and result
+  -> finish database writes
   -> create result.json
 ```
 
 The workflow creates `result.json` with an object-store create precondition. A
-valid existing result skips the phase. A missing result reruns it, while an
-invalid result fails and requires cleanup. The operator chooses a new golden ID
-when the SlateDB commit or preparation configuration changes.
-
-Benchmark sessions retain an identity file and one commit marker per workload.
-GitHub concurrency groups prevent two jobs from writing the same golden phase
-or session task.
+valid existing result skips the task. A missing result reruns it, while an
+invalid result fails and requires cleanup. GitHub concurrency groups prevent
+two jobs from writing the same golden phase or session task. The operator
+chooses a new golden ID when the SlateDB commit or preparation configuration
+changes.
 
 Golden checkpoints remain immutable until explicit deletion. Each workload
 clone uses a session- and task-specific prefix and owns its new manifests and
@@ -230,9 +228,9 @@ results/<version>/
 ```
 
 `run.json` records the golden ID, preparation and benchmark runner commits,
-resolved configuration, matrix concurrency, and result checksums. Each
-`result.json` contains the environment, initial database identity, and the
-summaries defined in
+resolved configuration, matrix concurrency, and result checksums. Preparation
+results describe the golden data and checkpoints. Workload results contain the
+environment, initial database identity, and summaries defined in
 [`BENCHMARKS.md`](BENCHMARKS.md).
 
 The worker reads each result through strict Serde models and runs one semantic
@@ -241,10 +239,10 @@ coverage, database identity, and the invariants in
 [`BENCHMARKS.md`](BENCHMARKS.md). JSON schemas remain the published contract;
 the runner does not repeat validation through a schema engine.
 
-Successful tasks publish summaries and discard histograms and one-second
-buckets. Failed tasks may include raw diagnostic files in their GitHub
-artifact. Published files contain no credentials, signed URLs, cache paths, or
-session tokens.
+Successful workloads publish summaries and discard histograms and one-second
+buckets. Failed tasks may include raw diagnostic files in their GitHub artifact.
+Published files contain no credentials, signed URLs, cache paths, or session
+tokens.
 
 ## Smoke tests and fixtures
 
@@ -297,7 +295,8 @@ GitHub Pages. It has no database service or charting code.
 /<version>/workload/<name>/
 ```
 
-Pages display the tables defined in [`BENCHMARKS.md`](BENCHMARKS.md), omit
+Preparation pages display golden dataset and checkpoint information. Workload
+pages display the tables defined in [`BENCHMARKS.md`](BENCHMARKS.md), omit
 inapplicable rows, and keep measured zeroes visible. Result files and source
 commits remain linked from each page.
 

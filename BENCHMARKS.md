@@ -158,9 +158,10 @@ API tables retain the names `transaction.get`, `transaction.put`, and
 The website shows seven tables and no charts: application operations,
 application throughput, application latency, object-store requests,
 object-store throughput, process statistics, and machine statistics.
-Dataset-preparation results and workload pages use the same tables. The website
-omits rows with no calls and keeps zero values in rows that have calls. Values
-in the examples are illustrative.
+Workload pages use these tables. Preparation pages show checkpoint references
+and golden dataset metadata instead. The website omits rows with no calls and
+keeps zero values in rows that have calls. Values in the examples are
+illustrative.
 
 The runner counts operations and samples machine counters once per second. Rate
 percentiles use complete one-second windows. The runner excludes partial
