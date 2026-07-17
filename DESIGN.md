@@ -14,8 +14,8 @@ are workloads. Each task has one published configuration.
 The target layout is:
 
 ```text
-config/slatedb.suite.toml       Dataset, task, timing, and cache configuration
-config/slatedb.settings.toml    SlateDB engine settings
+config/suite.toml               Dataset, task, timing, and cache configuration
+config/settings.toml            SlateDB engine settings
 src/                            Runner, workloads, metrics, and validation
 schema/                         JSON schemas for published files
 results/<version>/              Published release results
@@ -23,9 +23,10 @@ website/                        Static Astro website
 scripts/                        Smoke, fixture, and publication commands
 ```
 
-The TOML files are the executable form of `BENCHMARKS.md`. Configuration tests
-pin the release values documented there. A pull request that changes a release
-parameter must update the TOML, its test, and `BENCHMARKS.md` together.
+The TOML files are the executable form of `BENCHMARKS.md`. One test loads the
+full-scale configuration and compares its resolved form with a checked-in
+snapshot. A pull request that changes a release parameter must update the TOML,
+the snapshot, and `BENCHMARKS.md` together.
 
 The runner records the selected SlateDB commit, runner commit, lockfile hash,
 resolved configuration, and benchmark environment in each result. The website
@@ -33,7 +34,11 @@ reads checked-in result files during its build. It has no database service.
 
 ## Configuration
 
-`config/slatedb.suite.toml` declares:
+The runner loads `config/suite.toml` and `config/settings.toml` by fixed paths.
+It does not scan the configuration directory or infer suite names from
+filenames.
+
+`config/suite.toml` declares:
 
 - the canonical dataset
 - preparation order and workload order
@@ -50,7 +55,7 @@ The runner constructs SlateDB settings in this order:
 
 ```text
 SlateDB Settings::default()
-  -> config/slatedb.settings.toml
+  -> config/settings.toml
   -> bulk-load overrides
 ```
 
