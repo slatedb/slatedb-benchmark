@@ -10,6 +10,7 @@ defines the code and GitHub workflows that implement that contract.
 ```text
 config/suite.toml       Executable benchmark contract
 config/settings.toml    SlateDB settings
+.actrc                  Local runner and artifact configuration
 src/                    Runner, workloads, metrics, and validation
 schema/                 Published JSON schemas
 results/<version>/      Published results
@@ -31,9 +32,9 @@ SlateDB Settings::default()
 ### Process model
 
 One worker process runs one preparation phase or workload. A worker owns the
-SlateDB instance, client tasks, recorders, and local caches. GitHub Actions runs
-workloads on separate machines; local smoke and fixture runs execute them one
-at a time. Only worker samples enter task results.
+SlateDB instance, client tasks, recorders, and local caches. GitHub runs each
+workload on a separate WarpBuild machine. `act` runs the same jobs in local
+Docker containers. Only worker samples enter task results.
 
 Each worker creates new block, metadata, and local object-store caches. Golden
 workloads open separate shallow clones of the golden checkpoint. The
@@ -162,8 +163,8 @@ checkpoints remain available for later benchmark runs.
 
 ## CLI
 
-CI and local scripts use the same binary. Preparation runs the two phases in
-order:
+Workflow jobs and direct debugging use the same binary. Preparation jobs invoke
+the two phases explicitly:
 
 ```console
 $ ./target/release/slatedb-benchmark run \
@@ -177,16 +178,7 @@ $ ./target/release/slatedb-benchmark run \
     --output .runs/full-compaction
 ```
 
-A benchmark run reuses that golden ID:
-
-```console
-$ ./target/release/slatedb-benchmark run \
-    --golden slatedb-v0.14.1-001 \
-    --session github-123456 \
-    --output .runs/benchmark
-```
-
-One matrix job selects one workload:
+A matrix job invokes one workload:
 
 ```console
 $ ./target/release/slatedb-benchmark run \
@@ -196,24 +188,10 @@ $ ./target/release/slatedb-benchmark run \
     --output .runs/balanced
 ```
 
-Selecting a task does not create missing dependencies. Bulk load creates the
-golden identity, full compaction requires the bulk-load marker, and a golden
-workload requires the full-compaction marker. Omitting `--task` runs workloads
-sequentially.
-
-Smoke and fixture scripts may omit `--golden`. The runner then uses a temporary
-session prefix and runs preparation before the workloads. `--scale` applies the
-rules in [`BENCHMARKS.md`](BENCHMARKS.md).
-
-Manual runs read standard AWS credentials plus:
-
-```sh
-export AWS_REGION=auto
-export AWS_ENDPOINT_URL_S3=https://t3.storage.dev
-export AWS_ENDPOINT_URL_IAM=https://iam.storage.dev
-export SLATEDB_BENCH_BUCKET=slatedb-benchmarks
-export SLATEDB_BENCH_PREFIX="manual/$USER"
-```
+`--task` is required. Bulk load creates the golden identity, full compaction
+requires the bulk-load marker, and a golden workload requires the
+full-compaction marker. The workflow passes `--scale` from its dispatch input;
+the scaling rules remain in [`BENCHMARKS.md`](BENCHMARKS.md).
 
 Logs go to stderr. Stdout contains one machine-readable status record. Failure
 returns a nonzero status and prints no success record.
@@ -223,6 +201,9 @@ returns a nonzero status and prints no success record.
 Preparation and measurement use separate `workflow_dispatch` workflows:
 
 ```text
+prepare-golden inputs: slatedb_ref, golden_id, mode, scale
+benchmark inputs:      golden_id, mode, scale
+
 prepare-golden.yml (golden A)
   setup -> build -> bulk-load -> full-compaction
 
@@ -232,11 +213,20 @@ benchmark.yml (golden A, github.run_id)
                                       +-> clean up session data
 ```
 
+`scale` is a workflow input, not an environment variable. `mode` controls the
+last step:
+
+```text
+published -> require scale 1 -> publish results
+smoke     -> allow scaling   -> validate artifacts
+fixtures  -> allow scaling   -> retain artifacts for the local website
+```
+
 ### `prepare-golden.yml`
 
-Inputs are a SlateDB tag or commit and a golden ID. A new ID records the
-current runner commit and resolved SlateDB commit. An existing ID must match
-the request and uses the runner commit stored in `identity.json`.
+A new golden ID records the current runner commit and resolved SlateDB commit.
+An existing ID must match the request and uses the runner commit stored in
+`identity.json`.
 
 The bulk-load and full-compaction jobs check their markers before doing work:
 
@@ -271,10 +261,11 @@ new workflow dispatch -> new session -> measure every workload
 rerun same dispatch    -> same session -> restore committed workloads
 ```
 
-The publisher downloads the preparation artifact and all workload artifacts,
-builds `run.json`, replaces `results/<version>/`, and pushes `main`. The Pages
-workflow deploys after that commit. Successful cleanup removes the benchmark
-session's clones and candidates. Failed runs keep them for a retry.
+In `published` mode, the publisher downloads all artifacts, builds `run.json`,
+replaces `results/<version>/`, and pushes `main`. Pages deploys after that
+commit. Other modes stop after artifact validation. Successful cleanup removes
+the benchmark session's clones and candidates. Failed runs keep them for a
+retry.
 
 Tigris credentials are scoped to steps that read or write benchmark data.
 Repository write access belongs only to the publisher, which receives no
@@ -313,15 +304,44 @@ session tokens.
 
 ## Smoke tests and fixtures
 
-```console
-$ scripts/smoke.sh
-$ scripts/fixtures.sh
+`act` runs the GitHub workflows locally. The repository `.actrc` supplies the
+WarpBuild label mapping and artifact server:
+
+```text
+-P warp-ubuntu-latest-x64-16x=catthehacker/ubuntu:act-latest
+--container-architecture=linux/amd64
+--artifact-server-path=.runs/act-artifacts
+--env-file=.act.env
+--secret-file=.act.secrets
 ```
 
-Both scripts run the real suite at a small scale. Smoke validates the result
-bundle without publishing or building the website. Fixtures write scaled
-results for local website development. Neither script generates synthetic
-results.
+A smoke run executes both workflows against the same persistent object-store
+prefix. The two act files are gitignored.
+
+```console
+$ act workflow_dispatch \
+    -W .github/workflows/prepare-golden.yml \
+    --input slatedb_ref=v0.14.1 \
+    --input golden_id=local-smoke \
+    --input mode=smoke \
+    --input scale=1%
+
+$ act workflow_dispatch \
+    -W .github/workflows/benchmark.yml \
+    --input golden_id=local-smoke \
+    --input mode=smoke \
+    --input scale=1%
+```
+
+`scripts/smoke.sh` wraps those commands. `scripts/fixtures.sh` changes the mode
+to `fixtures` and copies the result artifact into the website fixture directory.
+The scripts contain no task lists or dependency logic.
+
+The preparation handoff uses the golden prefix because `act` cannot download
+artifacts from another workflow run. Local runs validate the runner and result
+bundle, not GitHub controls or performance. `act` does not enforce
+[several GitHub features](https://nektosact.com/not_supported.html), including
+concurrency groups, job timeouts, and permissions.
 
 ## Website
 
