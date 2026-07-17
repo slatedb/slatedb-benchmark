@@ -366,4 +366,4 @@ commits remain linked from each page.
 
 The site uses the SlateDB header, colors, and fonts: Marcellus for the wordmark,
 Inter for body text, and JetBrains Mono for numeric tables. The intended custom
-domain is `benchmarks.slatedb.io`.
+domain is `benchmark.slatedb.io`.
