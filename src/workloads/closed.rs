@@ -5,7 +5,10 @@ use super::util::{
     KeySelector, ValueGenerator, YcsbLatestSelector,
 };
 use crate::config::{KeyDistribution, VariantConfig, WorkloadKind};
-use crate::system::{duration_ns, measure_backpressure, ApplicationWindowRegistry};
+use crate::instrumented_store::StoreMetrics;
+use crate::system::{
+    duration_ns, measure_backpressure, ApplicationWindowRegistry, BenchmarkMetricsRecorder,
+};
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use futures::future::join_all;
@@ -19,6 +22,7 @@ use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 
 fn key_for_suite(suite: &str, id: u64, size: usize) -> bytes::Bytes {
@@ -963,139 +967,362 @@ async fn merge_tasks(mut tasks: JoinSet<Result<WorkerStats>>) -> Result<WorkerSt
     Ok(merged)
 }
 
-pub async fn populate_dataset(
-    db: Arc<Db>,
+const DATASET_BATCH_RECORDS: u64 = 1_024;
+const DATASET_BATCH_PIPELINE_DEPTH: usize = 16;
+
+pub(crate) struct DatasetLoadMetrics {
+    store: Arc<StoreMetrics>,
+    slate: Arc<BenchmarkMetricsRecorder>,
+}
+
+impl DatasetLoadMetrics {
+    pub(crate) fn new(store: Arc<StoreMetrics>, slate: Arc<BenchmarkMetricsRecorder>) -> Self {
+        Self { store, slate }
+    }
+}
+
+pub(crate) struct DatasetLoadSpec {
+    suite: String,
+    record_count: u64,
+    key_bytes: usize,
+    value_bytes: usize,
+    value_compression_ratio: f64,
+    prefix_layout: bool,
+}
+
+impl DatasetLoadSpec {
+    pub(crate) fn new(
+        suite: &str,
+        record_count: u64,
+        key_bytes: usize,
+        value_bytes: usize,
+        value_compression_ratio: f64,
+        prefix_layout: bool,
+    ) -> Self {
+        Self {
+            suite: suite.to_string(),
+            record_count,
+            key_bytes,
+            value_bytes,
+            value_compression_ratio,
+            prefix_layout,
+        }
+    }
+}
+
+struct DatasetBatch {
+    start: u64,
+    end: u64,
+    batch: WriteBatch,
+}
+
+struct DatasetLoadProgress {
+    metrics: DatasetLoadMetrics,
+    started_at: Instant,
+    last_reported_at: Instant,
+    last_reported_records: u64,
+    last_reported_backpressure_ns: u64,
+    initial_physical_upload_bytes: u64,
+    last_reported_physical_upload_bytes: u64,
+    initial_l0_flush_bytes: u64,
+    last_reported_l0_flush_bytes: u64,
+}
+
+impl DatasetLoadProgress {
+    fn new(metrics: DatasetLoadMetrics) -> Self {
+        let now = Instant::now();
+        let physical_upload_bytes = metrics.store.snapshot().bytes_written;
+        let l0_flush_bytes =
+            super::counter_value(&metrics.slate.snapshot(), slatedb::db_stats::L0_FLUSH_BYTES);
+        Self {
+            metrics,
+            started_at: now,
+            last_reported_at: now,
+            last_reported_records: 0,
+            last_reported_backpressure_ns: 0,
+            initial_physical_upload_bytes: physical_upload_bytes,
+            last_reported_physical_upload_bytes: physical_upload_bytes,
+            initial_l0_flush_bytes: l0_flush_bytes,
+            last_reported_l0_flush_bytes: l0_flush_bytes,
+        }
+    }
+
+    fn report(
+        &mut self,
+        suite: &str,
+        phase: &str,
+        records_completed: u64,
+        total_records: u64,
+        backpressure_ns: u64,
+        logical_bytes_per_record: f64,
+    ) {
+        let now = Instant::now();
+        let interval = now.saturating_duration_since(self.last_reported_at);
+        let elapsed = now.saturating_duration_since(self.started_at);
+        let physical_upload_bytes = self.metrics.store.snapshot().bytes_written;
+        let l0_flush_bytes = super::counter_value(
+            &self.metrics.slate.snapshot(),
+            slatedb::db_stats::L0_FLUSH_BYTES,
+        );
+        let recent_records = records_completed.saturating_sub(self.last_reported_records);
+        let recent_puts_per_second =
+            recent_records as f64 / interval.as_secs_f64().max(f64::EPSILON);
+        let average_puts_per_second =
+            records_completed as f64 / elapsed.as_secs_f64().max(f64::EPSILON);
+        let recent_backpressure_ns =
+            backpressure_ns.saturating_sub(self.last_reported_backpressure_ns);
+        let backpressure_percent =
+            (recent_backpressure_ns as f64 / 1e9 / interval.as_secs_f64().max(f64::EPSILON)
+                * 100.0)
+                .min(100.0);
+        let physical_upload_mib_per_second = bytes_per_second_as_mib(
+            physical_upload_bytes.saturating_sub(self.last_reported_physical_upload_bytes),
+            interval,
+        );
+        let l0_flush_mib_per_second = bytes_per_second_as_mib(
+            l0_flush_bytes.saturating_sub(self.last_reported_l0_flush_bytes),
+            interval,
+        );
+        let progress_percent = if total_records == 0 {
+            100.0
+        } else {
+            records_completed as f64 / total_records as f64 * 100.0
+        };
+        let eta_seconds = if records_completed >= total_records {
+            0.0
+        } else if recent_puts_per_second > 0.0 {
+            total_records.saturating_sub(records_completed) as f64 / recent_puts_per_second
+        } else {
+            -1.0
+        };
+        tracing::info!(
+            suite,
+            phase,
+            records_completed,
+            successful_records = records_completed,
+            total_records,
+            errors = 0_u64,
+            progress_percent = truncate_log_float(progress_percent),
+            recent_puts_per_second = truncate_log_float(recent_puts_per_second),
+            average_puts_per_second = truncate_log_float(average_puts_per_second),
+            logical_mib_per_second = truncate_log_float(
+                recent_puts_per_second * logical_bytes_per_record / (1024.0 * 1024.0)
+            ),
+            physical_upload_mib_per_second = truncate_log_float(physical_upload_mib_per_second),
+            l0_flush_mib_per_second = truncate_log_float(l0_flush_mib_per_second),
+            backpressure_percent = truncate_log_float(backpressure_percent),
+            elapsed_seconds = truncate_log_float(elapsed.as_secs_f64()),
+            eta_seconds = truncate_log_float(eta_seconds),
+            "golden dataset preparation progress"
+        );
+        self.last_reported_at = now;
+        self.last_reported_records = records_completed;
+        self.last_reported_backpressure_ns = backpressure_ns;
+        self.last_reported_physical_upload_bytes = physical_upload_bytes;
+        self.last_reported_l0_flush_bytes = l0_flush_bytes;
+    }
+
+    fn finish(
+        &self,
+        suite: &str,
+        records_completed: u64,
+        total_records: u64,
+        backpressure_ns: u64,
+        logical_bytes_per_record: f64,
+    ) {
+        let elapsed = self.started_at.elapsed();
+        let average_puts_per_second =
+            records_completed as f64 / elapsed.as_secs_f64().max(f64::EPSILON);
+        let physical_upload_bytes = self.metrics.store.snapshot().bytes_written;
+        let l0_flush_bytes = super::counter_value(
+            &self.metrics.slate.snapshot(),
+            slatedb::db_stats::L0_FLUSH_BYTES,
+        );
+        tracing::info!(
+            suite,
+            records_completed,
+            successful_records = records_completed,
+            total_records,
+            errors = 0_u64,
+            progress_percent = truncate_log_float(100.0),
+            average_puts_per_second = truncate_log_float(average_puts_per_second),
+            logical_mib_per_second = truncate_log_float(
+                average_puts_per_second * logical_bytes_per_record / (1024.0 * 1024.0)
+            ),
+            average_physical_upload_mib_per_second = truncate_log_float(bytes_per_second_as_mib(
+                physical_upload_bytes.saturating_sub(self.initial_physical_upload_bytes),
+                elapsed,
+            )),
+            average_l0_flush_mib_per_second = truncate_log_float(bytes_per_second_as_mib(
+                l0_flush_bytes.saturating_sub(self.initial_l0_flush_bytes),
+                elapsed,
+            )),
+            backpressure_percent = truncate_log_float(
+                (backpressure_ns as f64 / 1e9 / elapsed.as_secs_f64().max(f64::EPSILON) * 100.0)
+                    .min(100.0)
+            ),
+            elapsed_seconds = truncate_log_float(elapsed.as_secs_f64()),
+            "golden dataset preparation complete"
+        );
+    }
+}
+
+fn bytes_per_second_as_mib(bytes: u64, elapsed: Duration) -> f64 {
+    bytes as f64 / elapsed.as_secs_f64().max(f64::EPSILON) / (1024.0 * 1024.0)
+}
+
+fn spawn_dataset_batch_producer(
     suite: &str,
     record_count: u64,
     key_bytes: usize,
     value_bytes: usize,
     value_compression_ratio: f64,
     prefix_layout: bool,
+) -> (
+    mpsc::Receiver<DatasetBatch>,
+    tokio::task::JoinHandle<Result<()>>,
+) {
+    let (sender, receiver) = mpsc::channel(DATASET_BATCH_PIPELINE_DEPTH);
+    let suite = suite.to_string();
+    let producer = tokio::task::spawn_blocking(move || -> Result<()> {
+        let mut rng = StdRng::from_os_rng();
+        let mut values = ValueGenerator::new(value_compression_ratio);
+        let put_options = PutOptions::default();
+        let mut start = 0_u64;
+        while start < record_count {
+            let end = start
+                .saturating_add(DATASET_BATCH_RECORDS)
+                .min(record_count);
+            let mut batch = WriteBatch::new();
+            for id in start..end {
+                let key = if prefix_layout {
+                    prefix_key(id / 10, id % 10)
+                } else {
+                    key_for_suite(&suite, id, key_bytes)
+                };
+                batch.put_bytes_with_options(
+                    key,
+                    values.generate(value_bytes, &mut rng),
+                    &put_options,
+                );
+            }
+            if sender
+                .blocking_send(DatasetBatch { start, end, batch })
+                .is_err()
+            {
+                return Ok(());
+            }
+            start = end;
+        }
+        Ok(())
+    });
+    (receiver, producer)
+}
+
+pub(crate) async fn populate_dataset(
+    db: Arc<Db>,
+    spec: DatasetLoadSpec,
+    metrics: DatasetLoadMetrics,
 ) -> Result<()> {
     const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
-    // Golden-database creation is unmeasured setup, so batch independent records
-    // to avoid making one asynchronous database call per record.
-    const BATCH_RECORDS: u64 = 1_024;
-
-    let mut rng = StdRng::from_os_rng();
-    let mut values = ValueGenerator::new(value_compression_ratio);
+    let suite = spec.suite;
     let options = WriteOptions {
         await_durable: false,
         ..Default::default()
     };
-    let put_options = PutOptions::default();
-    let load_started = Instant::now();
-    let mut last_reported_at = load_started;
-    let mut last_reported_records = 0_u64;
-    let mut last_reported_backpressure_ns = 0_u64;
+    let mut progress = DatasetLoadProgress::new(metrics);
     let mut backpressure_ns = 0_u64;
-    let logical_bytes_per_record = key_bytes.saturating_add(value_bytes) as f64;
+    let logical_bytes_per_record = spec.key_bytes.saturating_add(spec.value_bytes) as f64;
     let mut heartbeat = tokio::time::interval(HEARTBEAT_INTERVAL);
     heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     heartbeat.tick().await;
+    tracing::info!(
+        suite = suite.as_str(),
+        prepared_batch_queue_depth = DATASET_BATCH_PIPELINE_DEPTH,
+        records_per_batch = DATASET_BATCH_RECORDS,
+        "starting pipelined golden dataset load"
+    );
+    let (mut batches, producer) = spawn_dataset_batch_producer(
+        &suite,
+        spec.record_count,
+        spec.key_bytes,
+        spec.value_bytes,
+        spec.value_compression_ratio,
+        spec.prefix_layout,
+    );
 
     let mut loaded_records = 0_u64;
-    while loaded_records < record_count {
-        let batch_end = loaded_records
-            .saturating_add(BATCH_RECORDS)
-            .min(record_count);
-        let mut batch = WriteBatch::new();
-        for id in loaded_records..batch_end {
-            let key = if prefix_layout {
-                prefix_key(id / 10, id % 10)
-            } else {
-                key_for_suite(suite, id, key_bytes)
-            };
-            batch.put_bytes_with_options(key, values.generate(value_bytes, &mut rng), &put_options);
-        }
-        let mut write = Box::pin(measure_backpressure(db.write_with_options(batch, &options)));
+    while let Some(dataset_batch) = batches.recv().await {
+        let mut write = Box::pin(measure_backpressure(
+            db.write_with_options(dataset_batch.batch, &options),
+        ));
         let (result, backpressure) = loop {
             tokio::select! {
                 result = &mut write => break result,
                 _ = heartbeat.tick() => {
-                    let now = Instant::now();
-                    let interval = now.saturating_duration_since(last_reported_at);
-                    let elapsed = now.saturating_duration_since(load_started);
-                    let recent_records = loaded_records.saturating_sub(last_reported_records);
-                    let recent_puts_per_second =
-                        recent_records as f64 / interval.as_secs_f64().max(f64::EPSILON);
-                    let average_puts_per_second =
-                        loaded_records as f64 / elapsed.as_secs_f64().max(f64::EPSILON);
-                    let recent_backpressure_ns =
-                        backpressure_ns.saturating_sub(last_reported_backpressure_ns);
-                    let backpressure_percent = (recent_backpressure_ns as f64 / 1e9
-                        / interval.as_secs_f64().max(f64::EPSILON)
-                        * 100.0)
-                        .min(100.0);
-                    let progress_percent = if record_count == 0 {
-                        100.0
-                    } else {
-                        loaded_records as f64 / record_count as f64 * 100.0
-                    };
-                    let eta_seconds = if recent_puts_per_second > 0.0 {
-                        record_count.saturating_sub(loaded_records) as f64
-                            / recent_puts_per_second
-                    } else {
-                        -1.0
-                    };
-                    tracing::info!(
-                        suite,
-                        records_completed = loaded_records,
-                        successful_records = loaded_records,
-                        total_records = record_count,
-                        errors = 0_u64,
-                        progress_percent = truncate_log_float(progress_percent),
-                        recent_puts_per_second = truncate_log_float(recent_puts_per_second),
-                        average_puts_per_second = truncate_log_float(average_puts_per_second),
-                        logical_mib_per_second = truncate_log_float(
-                            recent_puts_per_second * logical_bytes_per_record / (1024.0 * 1024.0)
-                        ),
-                        backpressure_percent = truncate_log_float(backpressure_percent),
-                        elapsed_seconds = truncate_log_float(elapsed.as_secs_f64()),
-                        eta_seconds = truncate_log_float(eta_seconds),
-                        "golden dataset preparation progress"
+                    progress.report(
+                        &suite,
+                        "insert",
+                        loaded_records,
+                        spec.record_count,
+                        backpressure_ns,
+                        logical_bytes_per_record,
                     );
-                    last_reported_at = now;
-                    last_reported_records = loaded_records;
-                    last_reported_backpressure_ns = backpressure_ns;
                 }
             }
         };
-        result.with_context(|| format!("loading records {loaded_records}..{batch_end}"))?;
+        result.with_context(|| {
+            format!(
+                "loading records {}..{}",
+                dataset_batch.start, dataset_batch.end
+            )
+        })?;
         backpressure_ns = backpressure_ns.saturating_add(duration_ns(backpressure));
-        loaded_records = batch_end;
+        loaded_records = dataset_batch.end;
     }
-    let elapsed = load_started.elapsed();
-    let average_puts_per_second = loaded_records as f64 / elapsed.as_secs_f64().max(f64::EPSILON);
-    tracing::info!(
-        suite,
-        records_completed = loaded_records,
-        successful_records = loaded_records,
-        total_records = record_count,
-        errors = 0_u64,
-        progress_percent = truncate_log_float(100.0),
-        average_puts_per_second = truncate_log_float(average_puts_per_second),
-        logical_mib_per_second = truncate_log_float(
-            average_puts_per_second * logical_bytes_per_record / (1024.0 * 1024.0)
-        ),
-        backpressure_percent = truncate_log_float(
-            (backpressure_ns as f64 / 1e9 / elapsed.as_secs_f64().max(f64::EPSILON) * 100.0)
-                .min(100.0)
-        ),
-        elapsed_seconds = truncate_log_float(elapsed.as_secs_f64()),
-        "golden dataset insert phase complete"
+    producer
+        .await
+        .context("joining golden dataset batch producer")??;
+
+    let mut flush = Box::pin(db.flush());
+    loop {
+        tokio::select! {
+            result = &mut flush => {
+                result.context("flushing loaded dataset")?;
+                break;
+            }
+            _ = heartbeat.tick() => {
+                progress.report(
+                    &suite,
+                    "flush",
+                    loaded_records,
+                    spec.record_count,
+                    backpressure_ns,
+                    logical_bytes_per_record,
+                );
+            }
+        }
+    }
+    progress.finish(
+        &suite,
+        loaded_records,
+        spec.record_count,
+        backpressure_ns,
+        logical_bytes_per_record,
     );
-    db.flush().await.context("flushing loaded dataset")?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        capped_writer, key_for_suite, point_payload_bytes, populate_dataset, run_bulk_load,
-        truncate_log_float, ClosedLoopState,
+        bytes_per_second_as_mib, capped_writer, key_for_suite, point_payload_bytes,
+        populate_dataset, run_bulk_load, truncate_log_float, ClosedLoopState, DatasetLoadMetrics,
+        DatasetLoadSpec, DATASET_BATCH_PIPELINE_DEPTH, DATASET_BATCH_RECORDS,
     };
     use crate::config::BenchmarkConfig;
+    use crate::instrumented_store::InstrumentedStore;
+    use crate::system::BenchmarkMetricsRecorder;
     use anyhow::Result;
     use object_store::memory::InMemory;
     use slatedb::config::Settings;
@@ -1189,15 +1416,31 @@ mod tests {
 
     #[tokio::test]
     async fn populate_dataset_writes_across_batch_boundaries() -> Result<()> {
+        let record_count = DATASET_BATCH_RECORDS
+            * u64::try_from(DATASET_BATCH_PIPELINE_DEPTH + 1).expect("pipeline depth fits u64")
+            + 1;
+        let store = Arc::new(InstrumentedStore::new(Arc::new(InMemory::new())));
+        let recorder = Arc::new(BenchmarkMetricsRecorder::new());
         let db = Arc::new(
-            Db::builder("populate-dataset-batch-test", Arc::new(InMemory::new()))
+            Db::builder("populate-dataset-batch-test", store.clone())
+                .with_metrics_recorder(recorder.clone())
                 .build()
                 .await?,
         );
 
-        populate_dataset(Arc::clone(&db), "ycsb", 1_025, 16, 64, 1.0, false).await?;
+        populate_dataset(
+            Arc::clone(&db),
+            DatasetLoadSpec::new("ycsb", record_count, 16, 64, 1.0, false),
+            DatasetLoadMetrics::new(store.metrics(), recorder),
+        )
+        .await?;
 
-        for id in [0, 1_023, 1_024] {
+        for id in [
+            0,
+            DATASET_BATCH_RECORDS - 1,
+            DATASET_BATCH_RECORDS,
+            record_count - 1,
+        ] {
             let value = db
                 .get(key_for_suite("ycsb", id, 16))
                 .await?
@@ -1206,6 +1449,14 @@ mod tests {
         }
         db.close().await?;
         Ok(())
+    }
+
+    #[test]
+    fn byte_rate_uses_binary_mebibytes() {
+        assert_eq!(
+            bytes_per_second_as_mib(2 * 1024 * 1024, Duration::from_secs(2)),
+            1.0
+        );
     }
 
     #[tokio::test]

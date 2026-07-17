@@ -287,6 +287,7 @@ async fn execute_isolated_workload(
                     variant,
                     path,
                     Arc::clone(&store),
+                    object_store.instrumented.metrics(),
                     Arc::clone(&object_store.control),
                     &key,
                 )

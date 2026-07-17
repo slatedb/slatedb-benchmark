@@ -15,7 +15,7 @@ use crate::system::{
 };
 use crate::workloads::{
     execute_variant, extend_with_compaction_phase, populate_dataset, prepare_bulk_load,
-    WorkloadOutcome,
+    DatasetLoadMetrics, DatasetLoadSpec, WorkloadOutcome,
 };
 use anyhow::{bail, Context, Result};
 use bytes::Bytes;
@@ -373,6 +373,7 @@ async fn prepare_golden_database(
     variant: &VariantConfig,
     path: Path,
     store: Arc<dyn ObjectStore>,
+    store_metrics: Arc<StoreMetrics>,
     control_store: Arc<dyn ObjectStore>,
     key: &str,
 ) -> Result<DatabaseCheckpoint> {
@@ -399,12 +400,15 @@ async fn prepare_golden_database(
     .await?;
     let load_result = populate_dataset(
         Arc::clone(&db),
-        &variant.suite.name,
-        record_count,
-        variant.key_bytes(),
-        variant.value_bytes(),
-        variant.value_compression_ratio(),
-        prefix_layout,
+        DatasetLoadSpec::new(
+            &variant.suite.name,
+            record_count,
+            variant.key_bytes(),
+            variant.value_bytes(),
+            variant.value_compression_ratio(),
+            prefix_layout,
+        ),
+        DatasetLoadMetrics::new(store_metrics, Arc::clone(&recorder)),
     )
     .await;
     close_database_after(&db, load_result, "closing golden load database").await?;
@@ -1058,7 +1062,7 @@ mod tests {
     use super::{
         average_database_bytes, bulk_load_settings, close_database_after, compact_database_fully,
         enabled_features, execute_rocks_variant, golden_load_settings, lsm_digest,
-        object_store_cache_directory, open_database,
+        object_store_cache_directory, open_database, DatasetLoadMetrics, DatasetLoadSpec,
     };
     use crate::cli::RunArgs;
     use crate::config::{
@@ -1412,10 +1416,15 @@ mod tests {
             Arc::clone(&store),
             &suite,
             &slate_settings,
-            recorder,
+            Arc::clone(&recorder),
         )
         .await?;
-        populate_dataset(Arc::clone(&db), "slatedb", 8, 16, 64, 1.0, false).await?;
+        populate_dataset(
+            Arc::clone(&db),
+            DatasetLoadSpec::new("slatedb", 8, 16, 64, 1.0, false),
+            DatasetLoadMetrics::new(instrumented.metrics(), recorder),
+        )
+        .await?;
         db.close().await?;
 
         let (first, before_overwrite, initial_overwrite_size) = execute_rocks_variant(

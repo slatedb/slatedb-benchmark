@@ -29,7 +29,10 @@ flushers, 256 MiB L0 SSTs, and up to 4 GiB of unflushed data. After loading, the
 runner closes the database, reopens it with the published suite settings,
 performs a full compaction, and only then creates the golden checkpoint. Thus
 the temporary loading settings improve setup throughput without changing the
-database shape used for measurement.
+database shape used for measurement. A dedicated producer keeps up to 16
+prepared 1,024-record batches queued so key and value generation overlaps the
+ordered database writes. Progress logs report logical record throughput,
+physical HTTP upload throughput, and SlateDB L0 flush throughput separately.
 
 Compaction has no runner-level wall-clock deadline. The runner fails immediately
 when SlateDB reports a failed compaction, but otherwise waits for the work to

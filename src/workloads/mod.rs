@@ -20,7 +20,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
 
-pub use closed::populate_dataset;
+pub(crate) use closed::{populate_dataset, DatasetLoadMetrics, DatasetLoadSpec};
 
 pub async fn prepare_bulk_load(db: Arc<Db>, variant: &VariantConfig) -> Result<()> {
     closed::run_bulk_load(db, variant, None, None).await?;
