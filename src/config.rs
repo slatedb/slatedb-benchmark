@@ -14,11 +14,6 @@ const MIN_MEASUREMENT_MS: u64 = 5_000;
 const MIN_BLOCK_CACHE_BYTES: u64 = 8 * 1024 * 1024;
 const MIN_METADATA_CACHE_BYTES: u64 = 2 * 1024 * 1024;
 const MIN_OBJECT_STORE_CACHE_BYTES: u64 = 16 * 1024 * 1024;
-const MIN_PROBE_OPERATIONS: u64 = 8;
-const MIN_PROBE_OBJECT_BYTES: usize = 1024 * 1024;
-const MIN_PROBE_CONCURRENCY: usize = 2;
-const MIN_PROBE_WARMUP_MS: u64 = 20;
-const MIN_PROBE_MEASUREMENT_MS: u64 = 80;
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 #[serde(transparent)]
@@ -91,25 +86,6 @@ pub struct BenchmarkConfig {
     config_dir: PathBuf,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ProbeConfig {
-    pub latency_operations: u64,
-    pub latency_object_bytes: usize,
-    pub throughput_object_bytes: usize,
-    pub throughput_concurrency: usize,
-    #[serde(
-        rename(deserialize = "throughput_warmup"),
-        deserialize_with = "deserialize_duration_ms"
-    )]
-    pub throughput_warmup_ms: u64,
-    #[serde(
-        rename(deserialize = "throughput_measurement"),
-        deserialize_with = "deserialize_duration_ms"
-    )]
-    pub throughput_measurement_ms: u64,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SuiteExecution {
@@ -124,7 +100,6 @@ pub struct SuiteConfig {
     pub name: String,
     pub release: bool,
     pub execution: SuiteExecution,
-    pub object_store_probe: ProbeConfig,
     #[serde(
         rename(deserialize = "compaction_quiet"),
         deserialize_with = "deserialize_duration_ms"
@@ -355,27 +330,6 @@ impl BenchmarkConfig {
             suite.warmup_ms = scaled_u64(suite.warmup_ms, MIN_WARMUP_MS, self.scale);
             suite.measurement_ms = scaled_u64(suite.measurement_ms, MIN_MEASUREMENT_MS, self.scale);
 
-            let probe = &mut suite.object_store_probe;
-            probe.latency_operations =
-                scaled_u64(probe.latency_operations, MIN_PROBE_OPERATIONS, self.scale);
-            probe.throughput_object_bytes = scaled_usize(
-                probe.throughput_object_bytes,
-                MIN_PROBE_OBJECT_BYTES,
-                self.scale,
-            );
-            probe.throughput_concurrency = scaled_usize(
-                probe.throughput_concurrency,
-                MIN_PROBE_CONCURRENCY,
-                self.scale,
-            );
-            probe.throughput_warmup_ms =
-                scaled_u64(probe.throughput_warmup_ms, MIN_PROBE_WARMUP_MS, self.scale);
-            probe.throughput_measurement_ms = scaled_u64(
-                probe.throughput_measurement_ms,
-                MIN_PROBE_MEASUREMENT_MS,
-                self.scale,
-            );
-
             for workload in &mut suite.workloads {
                 let record_count = workload.record_count.unwrap_or(original_record_count);
                 workload.record_count =
@@ -425,7 +379,6 @@ impl BenchmarkConfig {
                     suite.name
                 );
             }
-            validate_probe(suite)?;
             self.slate_settings(suite)
                 .with_context(|| format!("loading SlateDB settings for {}", suite.name))?;
 
@@ -636,15 +589,6 @@ fn scaled_u64(value: u64, minimum: u64, scale: BenchmarkScale) -> u64 {
         .min(value)
 }
 
-fn scaled_usize(value: usize, minimum: usize, scale: BenchmarkScale) -> usize {
-    if value == 0 {
-        return 0;
-    }
-    ((value as f64 * scale.factor()).round() as usize)
-        .max(minimum.min(value))
-        .min(value)
-}
-
 fn load_suite(suite_path: &Path) -> Result<SuiteConfig> {
     let file_name = suite_path
         .file_name()
@@ -693,22 +637,6 @@ fn parse_duration_ms(value: &str) -> std::result::Result<u64, String> {
     let duration = humantime::parse_duration(value)
         .map_err(|error| format!("invalid duration {value:?}: {error}"))?;
     u64::try_from(duration.as_millis()).map_err(|_| format!("duration {value:?} is too large"))
-}
-
-fn validate_probe(suite: &SuiteConfig) -> Result<()> {
-    let probe = &suite.object_store_probe;
-    if probe.latency_operations == 0
-        || probe.latency_object_bytes == 0
-        || probe.throughput_object_bytes == 0
-        || probe.throughput_concurrency == 0
-        || probe.throughput_measurement_ms == 0
-    {
-        bail!(
-            "object-store probe settings for suite {} must be positive",
-            suite.name
-        );
-    }
-    Ok(())
 }
 
 fn validate_sequential_suite(suite: &SuiteConfig) -> Result<()> {
@@ -771,7 +699,6 @@ mod tests {
 
         assert_eq!(suite.measurement_ms, 90 * 60 * 1_000);
         assert_eq!(suite.compaction_timeout_ms, 2 * 60 * 60 * 1_000);
-        assert_eq!(suite.object_store_probe.throughput_warmup_ms, 5_000);
         assert_eq!(suite.workloads[0].measurement_ms, Some(0));
 
         let ycsb = benchmark
@@ -856,14 +783,6 @@ mod tests {
         assert_eq!(rocksdb.block_cache_bytes, Some(8 * 1024 * 1024));
         assert_eq!(rocksdb.metadata_cache_bytes, Some(2 * 1024 * 1024));
         assert_eq!(rocksdb.object_store_cache_bytes, Some(16 * 1024 * 1024));
-        assert_eq!(rocksdb.object_store_probe.latency_operations, 8);
-        assert_eq!(
-            rocksdb.object_store_probe.throughput_object_bytes,
-            1024 * 1024
-        );
-        assert_eq!(rocksdb.object_store_probe.throughput_concurrency, 2);
-        assert_eq!(rocksdb.object_store_probe.throughput_warmup_ms, 20);
-        assert_eq!(rocksdb.object_store_probe.throughput_measurement_ms, 80);
         assert_eq!(rocksdb.workloads[0].record_count, Some(90_000));
         assert_eq!(rocksdb.workloads[0].measurement_ms, Some(0));
         assert!(rocksdb

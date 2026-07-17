@@ -29,6 +29,87 @@ jobs:
           path: bin
       - name: Prepare runner binary
         run: chmod +x bin/slatedb-benchmark
+      - name: Install system profiling tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v traceroute >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y traceroute
+          fi
+          if ! command -v aws >/dev/null 2>&1; then
+            sudo snap install aws-cli --classic
+          fi
+      - name: Record system and object-store performance
+        shell: bash
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
+          AWS_REGION: auto
+          AWS_ENDPOINT_URL_S3: https://t3.storage.dev
+          BENCHMARK_BUCKET: ${{ vars.TIGRIS_BUCKET_PREFIX }}-${{ inputs.suite }}
+          BENCHMARK_SUITE: ${{ inputs.suite }}
+        run: |
+          set -euo pipefail
+
+          upload_file="/tmp/slatedb-benchmark-profile-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${BENCHMARK_SUITE}"
+          download_file="${upload_file}-download"
+          object_key="system-profile/${GITHUB_RUN_ID}/${GITHUB_RUN_ATTEMPT}/${BENCHMARK_SUITE}/1gib"
+          object_uri="s3://${BENCHMARK_BUCKET}/${object_key}"
+          remote_created=false
+
+          cleanup() {
+            rm -f "${upload_file}" "${download_file}"
+            if [[ "${remote_created}" == true ]]; then
+              aws s3 rm --endpoint-url "${AWS_ENDPOINT_URL_S3}" --only-show-errors "${object_uri}" || true
+            fi
+          }
+          trap cleanup EXIT
+
+          echo "=== CPU ==="
+          lscpu
+          echo
+          echo "=== Memory ==="
+          free -h
+          echo
+          echo "=== Disk devices ==="
+          lsblk -o NAME,MODEL,SIZE,TYPE,FSTYPE,MOUNTPOINTS
+          echo
+          echo "=== Disk space ==="
+          df -h
+          echo
+          echo "=== Workspace directory ==="
+          du -sh "${GITHUB_WORKSPACE}"
+          echo
+          echo "=== Network route to Tigris ==="
+          traceroute -m 15 -w 2 -q 1 t3.storage.dev || true
+          echo
+          echo "=== Generate 1 GiB file ==="
+          dd if=/dev/urandom of="${upload_file}" bs=16M count=64 iflag=fullblock status=progress
+          echo
+          echo "=== Upload 1 GiB file ==="
+          remote_created=true
+          time aws s3 cp \
+            --endpoint-url "${AWS_ENDPOINT_URL_S3}" \
+            --only-show-errors \
+            "${upload_file}" \
+            "${object_uri}"
+          rm -f "${upload_file}"
+          echo
+          echo "=== Download 1 GiB file ==="
+          time aws s3 cp \
+            --endpoint-url "${AWS_ENDPOINT_URL_S3}" \
+            --only-show-errors \
+            "${object_uri}" \
+            "${download_file}"
+          test "$(stat -c '%s' "${download_file}")" -eq 1073741824
+          echo
+          echo "=== Delete 1 GiB object ==="
+          time aws s3 rm \
+            --endpoint-url "${AWS_ENDPOINT_URL_S3}" \
+            --only-show-errors \
+            "${object_uri}"
+          remote_created=false
       - name: Run ${{ inputs.suite }} suite
         env:
           CLOUD_PROVIDER: aws

@@ -18,7 +18,6 @@ pub struct RunManifest {
     pub runner_commit: String,
     pub lockfile_sha256: String,
     pub resolved_configuration: Value,
-    pub object_store_baselines: BTreeMap<String, ObjectStoreBaseline>,
     pub results: Vec<String>,
 }
 
@@ -28,7 +27,6 @@ pub struct ResultRecord {
     pub identity: Identity,
     pub elapsed_ns: u64,
     pub environment: Environment,
-    pub object_store_baseline: ObjectStoreBaseline,
     pub configuration: BenchmarkConfiguration,
     pub application: ApplicationPerformance,
     pub durability: DurabilityPerformance,
@@ -67,16 +65,6 @@ pub struct Environment {
     pub object_store: String,
     pub endpoint: String,
     pub region: String,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ObjectStoreBaseline {
-    pub measured_at: String,
-    pub put_latency: LatencySummary,
-    pub get_latency: LatencySummary,
-    pub upload_mib_per_second: f64,
-    pub download_mib_per_second: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -4,12 +4,11 @@
   "title": "SlateDB benchmark result",
   "type": "object",
   "additionalProperties": false,
-  "required": ["identity", "elapsed_ns", "environment", "object_store_baseline", "configuration", "application", "durability", "resources", "storage", "initial_state", "source_files"],
+  "required": ["identity", "elapsed_ns", "environment", "configuration", "application", "durability", "resources", "storage", "initial_state", "source_files"],
   "properties": {
     "identity": { "$ref": "#/$defs/identity" },
     "elapsed_ns": { "type": "integer", "minimum": 0 },
     "environment": { "$ref": "#/$defs/environment" },
-    "object_store_baseline": { "$ref": "#/$defs/baseline" },
     "configuration": { "$ref": "#/$defs/configuration" },
     "application": { "$ref": "#/$defs/application" },
     "durability": { "$ref": "#/$defs/durability" },
@@ -64,15 +63,6 @@
         "cpu_cores": { "type": "integer", "minimum": 1 }, "ram_bytes": { "type": "integer", "minimum": 1 }, "local_disk": { "type": "string" },
         "os": { "type": "string" }, "kernel": { "type": "string" }, "object_store": { "type": "string" },
         "endpoint": { "type": "string" }, "region": { "type": "string" }
-      }
-    },
-    "baseline": {
-      "type": "object", "additionalProperties": false,
-      "required": ["measured_at", "put_latency", "get_latency", "upload_mib_per_second", "download_mib_per_second"],
-      "properties": {
-        "measured_at": { "type": "string", "format": "date-time" }, "put_latency": { "$ref": "#/$defs/latency" },
-        "get_latency": { "$ref": "#/$defs/latency" }, "upload_mib_per_second": { "type": "number", "minimum": 0 },
-        "download_mib_per_second": { "type": "number", "minimum": 0 }
       }
     },
     "configuration": {

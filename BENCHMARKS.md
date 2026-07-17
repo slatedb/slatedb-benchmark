@@ -15,8 +15,8 @@ SlateDB settings. Smoke and local website fixture generation run these same
 release suites with the runner's `--scale` overlay; there is no separate reduced
 catalog.
 
-Scale reduces data volume, phase durations, cache capacities, and object-store
-probe work while preserving workload semantics such as client counts, record
+Scale reduces data volume, phase durations, and cache capacities while
+preserving workload semantics such as client counts, record
 shape, operation mix, durability, and ordering. Scaled outputs are marked as
 smoke results and cannot be published as release benchmarks.
 
@@ -31,9 +31,6 @@ apply.
 - Identity: SlateDB version and commit, timestamp, suite, and workload
 - Environment: runner type, CPU model and core count, RAM, local disk, OS and
   kernel, object store, endpoint, and region
-- Object-store baseline: direct upload and download MiB/s and p50, p95, p99,
-  p99.9, and maximum request latency from the runner to the benchmark bucket,
-  measured outside SlateDB
 - Configuration: scale, client count, duration, record count, key and value sizes,
   target value compression ratio, cache sizes, SlateDB settings, build profile,
   and enabled features

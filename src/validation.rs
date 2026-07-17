@@ -35,9 +35,6 @@ pub(crate) fn validate_run(run: &RunManifest) -> Result<()> {
     validate_scale(run.scale, &run.mode)?;
     validate_timestamp(&run.started_at, "run start")?;
     validate_timestamp(&run.finished_at, "run finish")?;
-    if run.object_store_baselines.is_empty() {
-        bail!("run contains no object-store baselines");
-    }
     if run.results.is_empty() {
         bail!("run contains no results");
     }
@@ -119,10 +116,6 @@ fn validate_contract_values(
     validate_mode(&result.identity.mode)?;
     validate_scale(result.configuration.scale, &result.identity.mode)?;
     validate_timestamp(&result.identity.timestamp, "result timestamp")?;
-    validate_timestamp(
-        &result.object_store_baseline.measured_at,
-        "object-store baseline timestamp",
-    )?;
     if result.identity.suite.is_empty()
         || result.identity.workload.is_empty()
         || result.identity.variant.is_empty()
@@ -145,14 +138,6 @@ fn validate_contract_values(
         bail!("result configuration has an invalid value compression ratio");
     }
     for (name, value) in [
-        (
-            "object-store upload throughput",
-            result.object_store_baseline.upload_mib_per_second,
-        ),
-        (
-            "object-store download throughput",
-            result.object_store_baseline.download_mib_per_second,
-        ),
         (
             "application payload throughput",
             result.application.payload_mib_per_second,
@@ -267,16 +252,6 @@ fn validate_invariants(
         bail!("return latency summary does not match encoded histogram count");
     }
     validate_histogram_summary(histograms, "return", &result.application.return_latency)?;
-    validate_histogram_summary(
-        histograms,
-        "object_store/put",
-        &result.object_store_baseline.put_latency,
-    )?;
-    validate_histogram_summary(
-        histograms,
-        "object_store/get",
-        &result.object_store_baseline.get_latency,
-    )?;
     for (operation, summary) in &result.application.return_latency_by_operation {
         validate_histogram_summary(histograms, &format!("return/{operation}"), summary)?;
     }

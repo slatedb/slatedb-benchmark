@@ -5,10 +5,10 @@ use crate::config::{BenchmarkConfig, SuiteConfig, VariantConfig, WorkloadKind};
 use crate::database_size::live_database_size_bytes;
 use crate::instrumented_store::{StoreMetrics, StoreSnapshot};
 use crate::model::{
-    BenchmarkConfiguration, EncodedHistogram, Environment, Identity, InitialState,
-    ObjectStoreBaseline, ResultRecord, SourceFiles, TimeseriesFile,
+    BenchmarkConfiguration, Environment, Identity, InitialState, ResultRecord, SourceFiles,
+    TimeseriesFile,
 };
-use crate::object_store_probe::{delete_prefix, ObjectStoreContext};
+use crate::object_store::{delete_prefix, ObjectStoreContext};
 use crate::system::{
     inspect_environment, sample_until_stopped, ApplicationWindowRegistry, BenchmarkMetricsRecorder,
     SampledTimeseries,
@@ -33,7 +33,6 @@ use slatedb::db_cache::{
 };
 use slatedb::{Db, SstBlockSize, VersionedManifest};
 use slatedb_common::metrics::{Metrics, MetricsRecorder};
-use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
@@ -70,8 +69,6 @@ where
 
 struct ResultContext<'a> {
     environment: &'a Environment,
-    baseline: &'a ObjectStoreBaseline,
-    baseline_histograms: &'a BTreeMap<String, EncodedHistogram>,
     args: &'a RunArgs,
 }
 
@@ -618,10 +615,6 @@ fn write_variant_result(
         .join(&variant.variant);
     let directory = context.args.output.join(&relative_directory);
     fs::create_dir_all(&directory)?;
-    let mut histograms = outcome.histograms.clone();
-    histograms
-        .histograms
-        .extend(context.baseline_histograms.clone());
     let average_database_bytes = average_database_bytes(
         &outcome.timeseries,
         outcome.elapsed_ns,
@@ -644,7 +637,6 @@ fn write_variant_result(
         },
         elapsed_ns: outcome.elapsed_ns,
         environment: context.environment.clone(),
-        object_store_baseline: context.baseline.clone(),
         configuration: BenchmarkConfiguration {
             scale: variant.scale.factor(),
             clients: variant.clients,
@@ -682,7 +674,7 @@ fn write_variant_result(
         },
     };
     write_json(&directory.join("result.json"), &result)?;
-    write_json(&directory.join("histograms.json"), &histograms)?;
+    write_json(&directory.join("histograms.json"), &outcome.histograms)?;
     write_compact_json(&directory.join("timeseries.json"), &outcome.timeseries)?;
     Ok(relative_directory.join("result.json").display().to_string())
 }
@@ -1056,8 +1048,8 @@ mod tests {
     };
     use crate::cli::RunArgs;
     use crate::config::{
-        BenchmarkConfig, ProbeConfig, SuiteConfig, SuiteExecution, VariantConfig,
-        VariantDefinition, WorkloadConfig, WorkloadKind,
+        BenchmarkConfig, SuiteConfig, SuiteExecution, VariantConfig, VariantDefinition,
+        WorkloadConfig, WorkloadKind,
     };
     use crate::instrumented_store::InstrumentedStore;
     use crate::model::{TimeseriesFile, TimeseriesSample};
@@ -1343,14 +1335,6 @@ mod tests {
             name: "rocksdb".to_string(),
             release: false,
             execution: SuiteExecution::Sequential,
-            object_store_probe: ProbeConfig {
-                latency_operations: 1,
-                latency_object_bytes: 1,
-                throughput_object_bytes: 1,
-                throughput_concurrency: 1,
-                throughput_warmup_ms: 0,
-                throughput_measurement_ms: 1,
-            },
             compaction_quiet_ms: 10,
             compaction_timeout_ms: 1_000,
             record_count: 8,

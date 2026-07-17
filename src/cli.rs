@@ -40,7 +40,7 @@ pub struct RunArgs {
     pub output: PathBuf,
     #[arg(long, default_value = "config")]
     pub config_dir: PathBuf,
-    /// Fraction or percentage of configured data, time, caches, and probe work to execute.
+    /// Fraction or percentage of configured data, time, and caches to execute.
     #[arg(long, default_value = "1")]
     pub scale: BenchmarkScale,
 }

@@ -69,7 +69,7 @@ ratio is part of golden database identity and every result's resolved
 configuration.
 
 Dataset sizes, operation mixes, timings, durability behavior, cache capacities,
-SST block size, object-store probe parameters, release eligibility, workloads,
+SST block size, release eligibility, workloads,
 variants, and execution model live in `suite.toml`. Block and metadata caches
 are attached as `DbBuilder` components; SlateDB's metadata cache includes SST
 indexes, filters, and statistics. The runner applies the object-store cache
@@ -79,8 +79,8 @@ nanoseconds in result records.
 
 `run --scale` applies a runtime overlay after the release configuration is
 loaded. It accepts a factor such as `0.01` or a percentage such as `1%`.
-Scaling reduces record counts, warmup and measurement time, cache capacities,
-and object-store probe work with lower bounds that keep each workload valid.
+Scaling reduces record counts, warmup and measurement time, and cache capacities
+with lower bounds that keep each workload valid.
 It does not change clients, key or value sizes, operation mixes, durability,
 compression, SST block size, workload order, or compaction quiet periods and
 timeouts. Effective values and the requested scale are recorded in results.
@@ -133,16 +133,17 @@ artifact on a fresh runner, copies it into a checkout of `main`, commits it, and
 pushes it.
 
 Benchmark jobs have read-only repository permissions. Tigris credentials and
-object-store settings are scoped to the runner step and are absent from every
-other step. Publisher jobs have repository and workflow write permissions but
+object-store settings are scoped to the pre-suite profile and runner steps and
+are absent from every other step. Publisher jobs have repository and workflow write permissions but
 do not receive the benchmark environment, Tigris credentials, or a Node.js
 runtime. Non-publishing checkouts do not persist their GitHub credentials.
 
 The workflow builds the runner in release mode on the configured WarpBuild
-host. It verifies the runner type, CPU count, memory, and object-store endpoint
-before starting. Workloads execute serially inside one suite invocation, so
+host. Before the suite starts, the workflow logs the host and object-store
+profile described below. The runner then verifies its runner type, CPU count,
+memory, and object-store endpoint. Workloads execute serially inside one suite invocation, so
 only one measurement runs at a time within a benchmark job; parallel benchmark
-jobs do not share a bucket. Dataset preparation, object-store probes, and
+jobs do not share a bucket. The pre-suite profile, dataset preparation, and
 cleanup never overlap a measurement window within the suite. A failed suite
 does not cancel the other benchmark jobs.
 
@@ -206,22 +207,19 @@ Tests that require an empty or custom dataset create their own golden database.
 A cold read starts with empty local caches; the runner cannot clear caches
 managed inside Tigris.
 
-### Object-store baseline
+### Host and object-store profile
 
-At the start of each selected suite, before its dataset preparation or
-workload execution, the runner probes the Tigris bucket and endpoint through
-the object-store client without opening SlateDB. Probe parameters belong to
-the suite, so the probe runs exactly once per suite. A resumed session reuses
-its persisted baseline rather than probing again. The release latency probe
-performs 2,000
-sequential PUTs and GETs of 8 KiB objects and records their histograms and
-required percentiles.
+Before each release suite attempt, the workflow logs CPU, memory, block-device,
+filesystem, and workspace information. It also runs a bounded traceroute to
+the Tigris endpoint, generates 1 GiB of random data, and times one upload and
+one download through the AWS CLI. The downloaded file is size-checked, and a
+trap removes both local files and the uniquely named remote object if any
+command fails.
 
-The throughput probe uploads and downloads 64 MiB incompressible objects at
-concurrency 32. Each direction has a 5-second warmup and 30-second measurement.
-The runner records direct upload and download MiB/s. Every workload result
-references this baseline. The probes use a separate prefix and delete their
-objects before dataset preparation begins.
+This profile is diagnostic workflow output, not a workload measurement or part
+of the published JSON contract. It therefore does not add synthetic traffic to
+each workload's object-store metrics and is intentionally independent of
+`run --scale`.
 
 ### Load models
 
@@ -335,15 +333,13 @@ $ ./target/release/slatedb-benchmark run \
     --output .runs/ycsb-scaled
 ```
 
-The runner probes the object store only when it creates a session. It writes
-progress to stderr and one JSON status line to stdout. The output tree is shown
-below. An existing output directory is accepted only when its session marker
-matches.
+The runner writes progress to stderr and one JSON status line to stdout. The
+output tree is shown below. An existing output directory is accepted only when
+its session marker matches.
 
 ```text
 .runs/ycsb-a/
   run.json
-  object-store.json
   results/<version>/ycsb/ycsb-a/clients-64/
     result.json
     histograms.json
@@ -351,7 +347,7 @@ matches.
 ```
 
 `run.json` records the selected work, source commits, resolved configuration,
-per-suite object-store baselines, and result paths. The runner exits nonzero on
+and result paths. The runner exits nonzero on
 configuration, execution, or validation failure and does not write a success
 line. Manual results use the published schema but remain under `.runs/`; only
 the release workflow copies validated results into `results/` and publishes
@@ -359,8 +355,8 @@ them.
 
 ## Metrics and results
 
-The runner uses HDR histograms for return latency, SlateDB API latency,
-durability lag, and direct object-store latency. Histograms use microsecond resolution and retain three
+The runner uses HDR histograms for return latency, SlateDB API latency, and
+durability lag. Histograms use microsecond resolution and retain three
 significant digits. Each workload worker records into a private shard. The
 one-second sampler swaps those shards, merges their completed histograms, and
 emits application windows without a global per-operation lock. Those same
@@ -460,8 +456,8 @@ billing differs by provider. Historical results without wire-level metrics do
 not project request charges. Storage uses the final database size at the
 provider's monthly rate. The estimate assumes that the final
 footprint stays constant rather than extrapolating database growth. It excludes
-dataset preparation, warmup, cloning, the direct object-store
-probe, compute, free tiers, discounts, and taxes. Compute and the bucket are
+dataset preparation, warmup, cloning, the pre-suite system profile, compute,
+free tiers, discounts, and taxes. Compute and the bucket are
 assumed to share a region, so the cost section does not add transfer charges.
 The request total is also broken down by operation with each operation's
 projected monthly count, per-thousand rate, and monthly cost.
@@ -493,8 +489,8 @@ and p99 latency-over-time chart. A `flush()` chart appears only when at least
 two calls were measured. Asynchronous write workloads also expose durability
 latency.
 The rail and results collapse to one column on smaller screens. A table below
-the charts exposes all percentiles, durability, resource, storage, and
-object-store baseline fields. Raw object-store counts appear in their own
+the charts exposes all percentiles, durability, resource, and storage fields.
+Raw object-store counts appear in their own
 operations subsection. A provider-selectable cost calculator follows the
 measurements, and each page links to its raw result files, price table, and
 source commits. Structured measurement values are flattened into ordinary

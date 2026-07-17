@@ -8,8 +8,8 @@ use crate::config::{
     BenchmarkConfig, BenchmarkScale, SuiteConfig, SuiteExecution, VariantConfig, WorkloadKind,
 };
 use crate::database_size::live_database_size_bytes;
-use crate::model::{EncodedHistogram, Environment, InitialState, ObjectStoreBaseline, RunManifest};
-use crate::object_store_probe::{delete_prefix, probe, ObjectStoreContext};
+use crate::model::{Environment, InitialState, RunManifest};
+use crate::object_store::{delete_prefix, ObjectStoreContext};
 use crate::validation::{validate_result_bundle, validate_run};
 use anyhow::{bail, ensure, Context, Result};
 use chrono::Utc;
@@ -43,8 +43,6 @@ struct SessionState {
     scale: BenchmarkScale,
     configuration_sha256: String,
     environment: Environment,
-    object_store_baseline: ObjectStoreBaseline,
-    baseline_histograms: BTreeMap<String, EncodedHistogram>,
     completed: Vec<CompletedWorkload>,
     sequential_databases: Vec<DatabaseCheckpoint>,
     goldens: BTreeMap<String, DatabaseCheckpoint>,
@@ -101,12 +99,6 @@ pub(super) async fn execute(
         }
         None => {
             tracing::info!(session, suite = suite_name, "creating benchmark session");
-            let (object_store_baseline, baseline_histograms) = probe(
-                Arc::clone(&object_store.raw),
-                &session_root.clone().join("probe"),
-                &suite.object_store_probe,
-            )
-            .await?;
             let state = SessionState {
                 session: session.to_string(),
                 suite: suite_name.to_string(),
@@ -118,8 +110,6 @@ pub(super) async fn execute(
                 scale: benchmark.scale,
                 configuration_sha256,
                 environment: environment.clone(),
-                object_store_baseline,
-                baseline_histograms,
                 completed: Vec::new(),
                 sequential_databases: Vec::new(),
                 goldens: BTreeMap::new(),
@@ -136,10 +126,6 @@ pub(super) async fn execute(
         &state.completed,
     )
     .await?;
-    write_json(
-        &args.output.join("object-store.json"),
-        &state.object_store_baseline,
-    )?;
 
     for workload in &suite.workloads {
         let workload_name = workload.name.as_str();
@@ -180,14 +166,7 @@ pub(super) async fn execute(
         );
         clear_local_workload_output(&args.output, suite_name, workload_name)?;
 
-        let baseline = state.object_store_baseline.clone();
-        let baseline_histograms = state.baseline_histograms.clone();
-        let result_context = ResultContext {
-            environment,
-            baseline: &baseline,
-            baseline_histograms: &baseline_histograms,
-            args,
-        };
+        let result_context = ResultContext { environment, args };
         let store: Arc<dyn ObjectStore> = object_store.instrumented.clone();
         let stage_root = session_root
             .clone()
@@ -492,10 +471,6 @@ fn write_run_manifest(
         runner_commit: state.runner_commit.clone(),
         lockfile_sha256: state.lockfile_sha256.clone(),
         resolved_configuration: serde_json::to_value(benchmark)?,
-        object_store_baselines: BTreeMap::from([(
-            suite_name.to_string(),
-            state.object_store_baseline.clone(),
-        )]),
         results: state
             .completed
             .iter()
@@ -761,7 +736,7 @@ mod tests {
         persist_result, save_state, CompletedWorkload, SessionState, RESULT_FILES,
     };
     use crate::config::BenchmarkScale;
-    use crate::model::{Environment, ObjectStoreBaseline};
+    use crate::model::Environment;
     use crate::runner::clone_database;
     use bytes::Bytes;
     use object_store::memory::InMemory;
@@ -785,8 +760,6 @@ mod tests {
             scale: BenchmarkScale::FULL,
             configuration_sha256: "test".to_string(),
             environment: Environment::default(),
-            object_store_baseline: ObjectStoreBaseline::default(),
-            baseline_histograms: BTreeMap::new(),
             completed: Vec::new(),
             sequential_databases: Vec::new(),
             goldens: BTreeMap::new(),

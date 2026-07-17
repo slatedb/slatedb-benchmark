@@ -16,12 +16,6 @@ export type BenchmarkResult = {
   };
   elapsed_ns: number;
   environment: Record<string, string | number>;
-  object_store_baseline: {
-    upload_mib_per_second: number;
-    download_mib_per_second: number;
-    put_latency: Latency;
-    get_latency: Latency;
-  };
   configuration: Record<string, unknown> & {
     scale?: number;
     clients: number;
