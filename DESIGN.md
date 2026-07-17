@@ -46,6 +46,7 @@ reset recorders and take counter baselines
 run measurement
 stop clients
 drain measured writes to the durable frontier
+stop recorders
 write and validate the result
 ```
 
@@ -59,6 +60,16 @@ durable frontier    -> durable latency for completed writes
 S3 request attempt  -> HTTP method and request/response body bytes
 Linux sample        -> process and host counters
 ```
+
+The recorders remain active through the durability drain. Published totals,
+rate buckets, latency histograms, and resource samples include that interval.
+Rate averages use the full interval from the counter baseline through the end
+of the drain.
+
+The `scan` API row records each iterator `next()` call separately, including a
+call that returns the end of the iterator. Latency ends when that call returns.
+Iterator creation and the total time to consume a scan are not recorded as
+`scan` latency.
 
 API rates, object-store rates, and resource statistics use one-second buckets.
 API and durability latencies use HDR histograms with microsecond precision and
