@@ -227,13 +227,13 @@ pub struct ApplicationWindowRecorder {
     inner: Arc<Mutex<ApplicationWindowShard>>,
 }
 
-struct SuccessfulOperation<'a> {
-    operation: &'a str,
-    latency: Duration,
-    read_payload_bytes: u64,
-    write_payload_bytes: u64,
-    read_hits: u64,
-    read_misses: u64,
+pub(crate) struct SuccessfulOperation<'a> {
+    pub(crate) operation: &'a str,
+    pub(crate) latency: Duration,
+    pub(crate) read_payload_bytes: u64,
+    pub(crate) write_payload_bytes: u64,
+    pub(crate) read_hits: u64,
+    pub(crate) read_misses: u64,
 }
 
 impl ApplicationWindowRecorder {
@@ -264,30 +264,26 @@ impl ApplicationWindowRecorder {
         );
     }
 
-    pub fn record_success_n(
-        &self,
-        operation: &str,
-        latency: Duration,
-        read_payload_bytes: u64,
-        write_payload_bytes: u64,
-        read_hits: u64,
-        read_misses: u64,
-        count: u64,
-    ) {
+    pub(crate) fn record_success_n(&self, operation: SuccessfulOperation<'_>, count: u64) {
         self.update(|window| {
             window.completed_operations = window.completed_operations.saturating_add(count);
             window.successful_operations = window.successful_operations.saturating_add(count);
-            window.read_payload_bytes =
-                window.read_payload_bytes.saturating_add(read_payload_bytes);
+            window.read_payload_bytes = window
+                .read_payload_bytes
+                .saturating_add(operation.read_payload_bytes);
             window.write_payload_bytes = window
                 .write_payload_bytes
-                .saturating_add(write_payload_bytes);
-            window.read_hits = window.read_hits.saturating_add(read_hits);
-            window.read_misses = window.read_misses.saturating_add(read_misses);
-            window.histograms.record_n("return", latency, count);
+                .saturating_add(operation.write_payload_bytes);
+            window.read_hits = window.read_hits.saturating_add(operation.read_hits);
+            window.read_misses = window.read_misses.saturating_add(operation.read_misses);
             window
                 .histograms
-                .record_n(format!("return/{operation}"), latency, count);
+                .record_n("return", operation.latency, count);
+            window.histograms.record_n(
+                format!("return/{}", operation.operation),
+                operation.latency,
+                count,
+            );
         });
     }
 
@@ -951,7 +947,7 @@ fn finite_or_zero(value: f64) -> f64 {
 mod tests {
     use super::{
         append_timeseries, compact_timeseries, is_tigris_endpoint, measure_backpressure,
-        ApplicationWindowRegistry, BenchmarkMetricsRecorder,
+        ApplicationWindowRegistry, BenchmarkMetricsRecorder, SuccessfulOperation,
     };
     use crate::model::{
         MetricSnapshot, MetricValue, MetricValueType, TimeseriesFile, TimeseriesSample,
@@ -1011,12 +1007,14 @@ mod tests {
         let windows = ApplicationWindowRegistry::new();
         let worker = windows.register_window_recorder();
         worker.record_success_n(
-            "insert",
-            Duration::from_millis(2),
-            0,
-            420 * 1_024,
-            0,
-            0,
+            SuccessfulOperation {
+                operation: "insert",
+                latency: Duration::from_millis(2),
+                read_payload_bytes: 0,
+                write_payload_bytes: 420 * 1_024,
+                read_hits: 0,
+                read_misses: 0,
+            },
             1_024,
         );
         worker.record_error_n("insert", Duration::from_millis(3), 26);

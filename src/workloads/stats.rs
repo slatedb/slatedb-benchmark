@@ -1,6 +1,6 @@
 use crate::histogram::HistogramSet;
 use crate::model::ApplicationPerformance;
-use crate::system::{duration_ns, ApplicationWindowRecorder};
+use crate::system::{duration_ns, ApplicationWindowRecorder, SuccessfulOperation};
 use anyhow::Result;
 use std::future::Future;
 use std::time::{Duration, Instant};
@@ -123,12 +123,14 @@ impl WorkerStats {
         self.read_misses = self.read_misses.saturating_add(payload.read_misses);
         if let Some(recorder) = &self.window_recorder {
             recorder.record_success_n(
-                operation,
-                latency,
-                payload.read_bytes,
-                payload.write_bytes,
-                payload.read_hits,
-                payload.read_misses,
+                SuccessfulOperation {
+                    operation,
+                    latency,
+                    read_payload_bytes: payload.read_bytes,
+                    write_payload_bytes: payload.write_bytes,
+                    read_hits: payload.read_hits,
+                    read_misses: payload.read_misses,
+                },
                 count,
             );
         } else {
