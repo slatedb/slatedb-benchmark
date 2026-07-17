@@ -808,12 +808,10 @@ async fn compact_database_fully(
     suite: &SuiteConfig,
 ) -> Result<()> {
     let admin = AdminBuilder::new(database_path, store).build();
-    let timeout = Duration::from_millis(suite.compaction_timeout_ms);
     let quiet = Duration::from_millis(suite.compaction_quiet_ms);
-    let started = Instant::now();
 
     loop {
-        wait_for_compactor_quiet(&admin, started, timeout, quiet).await?;
+        wait_for_compactor_quiet(&admin, quiet).await?;
         let state = admin
             .read_compactor_state_view()
             .await
@@ -827,20 +825,14 @@ async fn compact_database_fully(
             .submit_compaction(spec)
             .await
             .context("submitting full-database compaction")?;
-        wait_for_submitted_compaction(&admin, &compaction, started, timeout).await?;
+        wait_for_submitted_compaction(&admin, &compaction).await?;
     }
 }
 
-async fn wait_for_compactor_quiet(
-    admin: &Admin,
-    started: Instant,
-    timeout: Duration,
-    quiet: Duration,
-) -> Result<()> {
+async fn wait_for_compactor_quiet(admin: &Admin, quiet: Duration) -> Result<()> {
     let mut stable_since = Instant::now();
     let mut last_state = None;
     loop {
-        ensure_compaction_within_timeout(started, timeout)?;
         let state = admin
             .read_compactor_state_view()
             .await
@@ -880,15 +872,9 @@ async fn wait_for_compactor_quiet(
     }
 }
 
-async fn wait_for_submitted_compaction(
-    admin: &Admin,
-    submitted: &Compaction,
-    started: Instant,
-    timeout: Duration,
-) -> Result<()> {
+async fn wait_for_submitted_compaction(admin: &Admin, submitted: &Compaction) -> Result<()> {
     let compaction_id = submitted.id();
     loop {
-        ensure_compaction_within_timeout(started, timeout)?;
         let compaction = admin
             .read_compaction(compaction_id, None)
             .await
@@ -904,13 +890,6 @@ async fn wait_for_submitted_compaction(
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-}
-
-fn ensure_compaction_within_timeout(started: Instant, timeout: Duration) -> Result<()> {
-    if started.elapsed() > timeout {
-        bail!("timed out performing full-database compaction");
-    }
-    Ok(())
 }
 
 fn next_full_compaction_spec(manifest: &VersionedManifest) -> Result<Option<CompactionSpec>> {
@@ -1282,7 +1261,6 @@ mod tests {
             .expect("rocksdb suite")
             .clone();
         suite.compaction_quiet_ms = 20;
-        suite.compaction_timeout_ms = 10_000;
 
         let mut settings = Settings {
             flush_interval: None,
@@ -1393,7 +1371,6 @@ mod tests {
             release: false,
             execution: SuiteExecution::Sequential,
             compaction_quiet_ms: 10,
-            compaction_timeout_ms: 1_000,
             record_count: 8,
             key_bytes: 16,
             value_bytes: 64,

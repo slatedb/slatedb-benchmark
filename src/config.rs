@@ -105,11 +105,6 @@ pub struct SuiteConfig {
         deserialize_with = "deserialize_duration_ms"
     )]
     pub compaction_quiet_ms: u64,
-    #[serde(
-        rename(deserialize = "compaction_timeout"),
-        deserialize_with = "deserialize_duration_ms"
-    )]
-    pub compaction_timeout_ms: u64,
     pub record_count: u64,
     pub key_bytes: usize,
     pub value_bytes: usize,
@@ -373,11 +368,8 @@ impl BenchmarkConfig {
                     suite.name
                 );
             }
-            if suite.compaction_quiet_ms == 0 || suite.compaction_timeout_ms == 0 {
-                bail!(
-                    "suite {} has a zero compaction quiet period or timeout",
-                    suite.name
-                );
+            if suite.compaction_quiet_ms == 0 {
+                bail!("suite {} has a zero compaction quiet period", suite.name);
             }
             self.slate_settings(suite)
                 .with_context(|| format!("loading SlateDB settings for {}", suite.name))?;
@@ -698,21 +690,8 @@ mod tests {
             .expect("rocksdb suite");
 
         assert_eq!(suite.measurement_ms, 90 * 60 * 1_000);
-        assert_eq!(suite.compaction_timeout_ms, 2 * 60 * 60 * 1_000);
+        assert_eq!(suite.compaction_quiet_ms, 15 * 1_000);
         assert_eq!(suite.workloads[0].measurement_ms, Some(0));
-
-        let ycsb = benchmark
-            .suites
-            .iter()
-            .find(|suite| suite.name == "ycsb")
-            .expect("ycsb suite");
-        let slatedb = benchmark
-            .suites
-            .iter()
-            .find(|suite| suite.name == "slatedb")
-            .expect("slatedb suite");
-        assert_eq!(ycsb.compaction_timeout_ms, 60 * 60 * 1_000);
-        assert_eq!(ycsb.compaction_timeout_ms, slatedb.compaction_timeout_ms);
 
         let resolved = serde_json::to_value(suite).expect("resolved configuration");
         assert!(resolved.get("measurement_ms").is_some());

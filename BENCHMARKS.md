@@ -31,6 +31,10 @@ performs a full compaction, and only then creates the golden checkpoint. Thus
 the temporary loading settings improve setup throughput without changing the
 database shape used for measurement.
 
+Compaction has no runner-level wall-clock deadline. The runner fails immediately
+when SlateDB reports a failed compaction, but otherwise waits for the work to
+finish; the benchmark job's 24-hour timeout remains the hard upper bound.
+
 ## Standard results
 
 Every workload emits the same result record. Use `null` for fields that do not
