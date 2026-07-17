@@ -242,7 +242,7 @@ calculates every column from complete one-second samples.
 
 | Metric | avg | p50 | p95 | p99 | p99.9 | min | max |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| CPU (cores) | 6.8 | 6.7 | 9.1 | 10.8 | 12.4 | 2.3 | 12.4 |
+| CPU utilization (cores) | 6.8 | 6.7 | 9.1 | 10.8 | 12.4 | 2.3 | 12.4 |
 | RSS (GiB) | 7.1 | 7.2 | 7.7 | 7.8 | 7.9 | 5.9 | 7.9 |
 
 ### Machine statistics
