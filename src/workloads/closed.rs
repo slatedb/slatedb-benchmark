@@ -966,26 +966,35 @@ pub async fn populate_dataset(
     value_compression_ratio: f64,
     prefix_layout: bool,
 ) -> Result<()> {
+    // Golden-database creation is unmeasured setup, so batch independent records
+    // to avoid making one asynchronous database call per record.
+    const BATCH_RECORDS: u64 = 1_024;
+
     let mut rng = StdRng::from_os_rng();
     let mut values = ValueGenerator::new(value_compression_ratio);
     let options = WriteOptions {
         await_durable: false,
         ..Default::default()
     };
-    for id in 0..record_count {
-        let key = if prefix_layout {
-            prefix_key(id / 10, id % 10)
-        } else {
-            key_for_suite(suite, id, key_bytes)
-        };
-        db.put_with_options(
-            key,
-            values.generate(value_bytes, &mut rng),
-            &PutOptions::default(),
-            &options,
-        )
-        .await
-        .with_context(|| format!("loading record {id}"))?;
+    let put_options = PutOptions::default();
+    let mut loaded_records = 0_u64;
+    while loaded_records < record_count {
+        let batch_end = loaded_records
+            .saturating_add(BATCH_RECORDS)
+            .min(record_count);
+        let mut batch = WriteBatch::new();
+        for id in loaded_records..batch_end {
+            let key = if prefix_layout {
+                prefix_key(id / 10, id % 10)
+            } else {
+                key_for_suite(suite, id, key_bytes)
+            };
+            batch.put_bytes_with_options(key, values.generate(value_bytes, &mut rng), &put_options);
+        }
+        db.write_with_options(batch, &options)
+            .await
+            .with_context(|| format!("loading records {loaded_records}..{batch_end}"))?;
+        loaded_records = batch_end;
     }
     db.flush().await.context("flushing loaded dataset")?;
     Ok(())
@@ -993,7 +1002,10 @@ pub async fn populate_dataset(
 
 #[cfg(test)]
 mod tests {
-    use super::{capped_writer, point_payload_bytes, run_bulk_load, ClosedLoopState};
+    use super::{
+        capped_writer, key_for_suite, point_payload_bytes, populate_dataset, run_bulk_load,
+        ClosedLoopState,
+    };
     use crate::config::BenchmarkConfig;
     use anyhow::Result;
     use object_store::memory::InMemory;
@@ -1075,6 +1087,27 @@ mod tests {
                 .len(),
             3
         );
+        db.close().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn populate_dataset_writes_across_batch_boundaries() -> Result<()> {
+        let db = Arc::new(
+            Db::builder("populate-dataset-batch-test", Arc::new(InMemory::new()))
+                .build()
+                .await?,
+        );
+
+        populate_dataset(Arc::clone(&db), "ycsb", 1_025, 16, 64, 1.0, false).await?;
+
+        for id in [0, 1_023, 1_024] {
+            let value = db
+                .get(key_for_suite("ycsb", id, 16))
+                .await?
+                .expect("populated record");
+            assert_eq!(value.len(), 64);
+        }
         db.close().await?;
         Ok(())
     }
