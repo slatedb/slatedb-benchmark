@@ -164,6 +164,15 @@ pub(super) async fn execute(
             next.name,
             workload_name
         );
+        tracing::info!(
+            session,
+            suite = suite_name,
+            workload = workload_name,
+            workload_number = state.completed.len() + 1,
+            workload_count = suite.workloads.len(),
+            variant_count = workload_variants.len(),
+            "starting benchmark workload"
+        );
         clear_local_workload_output(&args.output, suite_name, workload_name)?;
 
         let result_context = ResultContext { environment, args };
@@ -226,6 +235,14 @@ pub(super) async fn execute(
             .await?;
         }
         save_state(Arc::clone(&object_store.raw), &state_path, &state).await?;
+        tracing::info!(
+            session,
+            suite = suite_name,
+            workload = workload_name,
+            workload_number = state.completed.len(),
+            workload_count = suite.workloads.len(),
+            "completed benchmark workload"
+        );
     }
 
     write_run_manifest(args, benchmark, suite_name, &state)?;

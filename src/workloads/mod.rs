@@ -82,6 +82,12 @@ pub async fn execute_variant(
 ) -> Result<WorkloadOutcome> {
     let closed_state = closed::ClosedLoopState::new(variant.record_count());
     let warmup = Duration::from_millis(variant.warmup_ms());
+    tracing::info!(
+        suite = variant.suite.name,
+        workload = variant.workload.name,
+        variant = variant.variant,
+        "starting benchmark variant"
+    );
     if !warmup.is_zero() {
         tracing::info!(
             suite = variant.suite.name,
@@ -169,6 +175,14 @@ pub async fn execute_variant(
     storage.database_size_bytes = 0;
     let resources = system::summarize_resources(&timeseries.samples);
     let application = stats.application(measurement_elapsed);
+    tracing::info!(
+        suite = variant.suite.name,
+        workload = variant.workload.name,
+        variant = variant.variant,
+        elapsed_seconds = total_elapsed.as_secs_f64(),
+        operations = application.total_operations,
+        "completed benchmark variant measurement"
+    );
     Ok(WorkloadOutcome {
         application,
         durability,
