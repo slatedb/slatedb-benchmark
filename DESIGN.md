@@ -65,33 +65,15 @@ It rejects duplicate task names, unknown operations, invalid probabilities,
 missing required durations, and preparation dependencies that cannot be
 satisfied.
 
-## Task graph
+## Task dependencies
 
 Release execution has a sequential preparation stage followed by a workload
 matrix:
 
 ```text
-bulk-load
-    |
-    v
-uncompacted checkpoint
-    |
-    v
-full-compaction
-    |
-    v
-golden checkpoint
-    |
-    +-> workload job: idle
-    +-> workload job: point-read-uniform
-    +-> workload job: point-read-skewed
-    +-> workload job: point-read-missing
-    +-> workload job: read-heavy
-    +-> workload job: balanced
-    +-> workload job: update-heavy
-    +-> workload job: range-scan
-    +-> workload job: transaction-contention
-    +-> workload job: sustained-ingest (empty database)
+bulk-load -> uncompacted checkpoint -> full-compaction -> golden checkpoint
+                                                        -> golden workloads
+empty database -> sustained-ingest
 ```
 
 The preparation job runs `bulk-load` and `full-compaction` on one WarpBuild
@@ -235,29 +217,19 @@ measurement interval, and average rates divide those totals by its duration.
 
 ## Application metrics
 
-The API wrapper records each SlateDB call under its API name. Transaction calls
-retain `transaction.get`, `transaction.put`, and `transaction.commit`. Each API
-has operation counts, logical bytes, and a latency histogram. Calls with no
-observations do not produce rows.
-
-Logical byte accounting follows `BENCHMARKS.md`:
-
-- `get` counts its request key and returned value
-- `put` and `write` count their keys and values
-- `delete` counts its key
-- `scan` counts all returned keys and values
-- calls without logical payload record zero bytes
+The API wrapper records operation counts, logical bytes, and a latency histogram
+for each API name. It applies the naming and logical-byte rules in
+`BENCHMARKS.md`. Calls with no observations do not produce rows.
 
 The runner stores counts and logical bytes in one-second buckets. An API that
 appears at least once has zero values for complete windows in which it made no
-calls. The summary builder calculates total, average rate, p50, p95, p99,
-p99.9, minimum, and maximum from those buckets.
+calls. The shared summary builder derives the published operation and throughput
+columns defined in `BENCHMARKS.md`.
 
 Latency timers cover invocation through return for an individual API call. The
 runner records nanoseconds and builds HDR histograms with microsecond precision
-and three significant digits. Each latency summary contains the mean, p50,
-p95, p99, p99.9, minimum, and maximum. The website converts values to
-milliseconds.
+and three significant digits. The summary builder derives the latency columns
+defined in `BENCHMARKS.md`, and the website converts them to milliseconds.
 
 Operation failures increment internal error counters. They remain available in
 failed CI diagnostics, but the website model does not publish an outcome
@@ -283,18 +255,16 @@ checks that each accepted measured write reached the frontier once.
 
 The runner instruments the HTTP transport used by the S3 client. The recorder
 sits at the request-attempt boundary, so a retry produces another request. It
-groups counts by HTTP method: `GET`, `PUT`, `HEAD`, `DELETE`, `POST`, and any
-method emitted by the client.
+groups counts by HTTP method.
 
 The transport recorder counts request-body bytes sent and response-body bytes
-consumed for each attempt. The throughput row for a method combines both body
-directions. A method with requests and zero body bytes remains in the request
-table and has no throughput row.
+consumed for each attempt. It combines both directions when it calculates body
+throughput for a method.
 
-One-second method buckets feed the same total, average, percentile, minimum,
-and maximum calculation used for application rates. The website does not show
-object-store latency. Transport status and retry details remain in diagnostic
-data for failed runs.
+One-second method buckets feed the shared summary builder, which derives the
+request and throughput columns defined in `BENCHMARKS.md`. The website does not
+show object-store latency. Transport status and retry details remain in
+diagnostic data for failed runs.
 
 ## Process and machine metrics
 
@@ -311,8 +281,8 @@ counter deltas. Disk results include byte rates and operation rates. The
 machine table reuses the process RSS samples required by `BENCHMARKS.md`; the
 runner does not collect a second RSS series.
 
-The summary builder calculates average, p50, p95, p99, p99.9, minimum, and
-maximum for each process and machine series.
+The shared summary builder derives the process and machine columns defined in
+`BENCHMARKS.md`.
 
 ## Results
 
@@ -333,7 +303,8 @@ The publisher creates `run.json` after every workload job succeeds. Workload
 jobs do not update it. The file contains release identity, resolved
 configuration, matrix concurrency, and the path and checksum of each committed
 result. `result.json` contains the environment, initial database identity, and
-seven website table summaries. Inapplicable sections are absent.
+the website summaries defined in `BENCHMARKS.md`. Inapplicable sections are
+absent.
 
 Histograms and one-second buckets remain in worker memory until validation
 finishes. A successful task publishes their summaries in `result.json` and
@@ -528,15 +499,7 @@ Routes separate preparation results from workload results:
 ```
 
 Each result page displays configuration and environment context followed by
-the seven tables from `BENCHMARKS.md`:
-
-1. Application operations
-2. Application throughput
-3. Application latency
-4. Object-store requests
-5. Object-store throughput
-6. Process statistics
-7. Machine statistics
+the tables defined in `BENCHMARKS.md`, in the order specified there.
 
 The page omits inapplicable rows and sections. A measured zero remains visible.
 Preparation pages use the same table components as workload pages. Links expose
