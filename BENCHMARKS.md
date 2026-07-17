@@ -15,10 +15,12 @@ results.
 
 Release runs use a WarpBuild `warp-ubuntu-latest-x64-16x` runner in Hetzner's
 Frankfurt, Germany data center. Tigris uses its Frankfurt (`fra`) region. Each
-workload has one published configuration. The release does not vary clients,
-values, caches, machines, object stores, or SlateDB settings within a workload.
+preparation phase and workload has one published configuration. The release
+does not vary clients, values, caches, machines, object stores, or SlateDB
+settings within a preparation phase or workload.
 
-The suite uses these SlateDB settings unless a workload says otherwise:
+The suite uses these SlateDB settings unless a preparation phase or workload
+says otherwise:
 
 - 100 ms flush interval
 - 4 GiB block cache
@@ -29,21 +31,43 @@ The suite uses these SlateDB settings unless a workload says otherwise:
 
 The canonical dataset contains 300,000,000 records with 20-byte keys and
 400-byte values. This is about 117.3 GiB of logical key-value data. Generated
-values have a target compression ratio of 1.0. The benchmark records the live
-LSM size after full compaction as the golden dataset size.
+values have a target compression ratio of 1.0.
 
 Keys contain an 8-byte big-endian unsigned record ID followed by 12 ASCII `0`
 bytes. This matches the `db_bench` key format, preserves numeric ordering, and
 keeps the encoding stable as the keyspace grows. The bulk loader writes each ID
 once, and all later workloads use the same mapping.
 
-## Database setup
+## Dataset preparation
 
 `bulk-load` runs first. It loads the canonical dataset with background
 compaction disabled, flushes the writes, and saves an uncompacted checkpoint.
 `full-compaction` clones that checkpoint, compacts the database, and saves the
-golden checkpoint. The remaining steady-state workloads clone the golden
-checkpoint and do not inherit another workload's writes.
+golden checkpoint. These are tool phases, not workloads. The tool records their
+results separately.
+
+### Bulk load
+
+The loader inserts all 300,000,000 records once. It prepares keys and values in
+parallel, submits ordered batches through SlateDB's write API, and does not
+wait for each batch to become durable. It disables background compaction for
+the load, flushes the database, and saves the uncompacted checkpoint.
+
+Progress logs include completed records, recent and average records per second,
+logical MiB/s, physical HTTP upload MiB/s, L0 flush MiB/s, backpressure,
+elapsed time, and ETA.
+
+### Full compaction
+
+The tool clones the uncompacted checkpoint and opens it with the published
+SlateDB settings. It records the input manifest, triggers a full compaction,
+and waits for SlateDB to report idle. This phase has no warmup or client
+operations. Its output becomes the golden checkpoint. The compaction wait has
+no runner-level deadline. The GitHub job's 24-hour timeout remains the outer
+limit.
+
+The measured steady-state workloads clone the golden checkpoint and do not
+inherit another workload's writes.
 
 Each clone starts with an empty local object-store cache. Warmup may fill it.
 PUT caching and startup preloading stay disabled.
@@ -65,17 +89,14 @@ the API return until the frontier covers that sequence. Tracking continues
 through the post-measurement flush, and the runner records the final drain time.
 The suite has no per-operation synchronous-write workload.
 
-Every workload fails if SlateDB reports a compaction failure while it runs.
-Except for `full-compaction`, a workload stops after measurement and any
-durability drain. It does not wait for ordinary background compaction to become
-idle.
+Every preparation phase and workload fails if SlateDB reports a compaction
+failure while it runs. A workload stops after measurement and any durability
+drain. It does not wait for ordinary background compaction to become idle.
 
 ## Workloads
 
 | Workload | Initial state | Operations | Key selection |
 | --- | --- | --- | --- |
-| `bulk-load` | Empty | 100% insert | Every ID once |
-| `full-compaction` | Uncompacted | Full compaction | None |
 | `idle` | Golden | No client operations | None |
 | `point-read-uniform` | Golden | 100% point read | Uniform |
 | `point-read-skewed` | Golden | 100% point read | Zipfian |
@@ -90,33 +111,6 @@ idle.
 Zipfian workloads use an exponent of 0.99 over the fixed 300,000,000-record
 domain. Inserts never expand that domain, and completed operations never remap
 its ranks.
-
-### Bulk load
-
-The loader inserts all 300,000,000 records once. It prepares keys and values in
-parallel, submits ordered batches through SlateDB's write API, and does not
-wait for each batch to become durable. It disables background compaction for
-the load, flushes the database, and saves the uncompacted checkpoint.
-
-The headline load rate covers the insert phase. The result records final flush
-time separately. Progress logs include completed records, recent and average
-records per second, logical MiB/s, physical HTTP upload MiB/s, L0 flush MiB/s,
-backpressure, elapsed time, and ETA.
-
-### Full compaction
-
-Clone the uncompacted checkpoint and open it with the published SlateDB
-settings. Record the input manifest, trigger a full compaction, and wait for
-SlateDB to report idle. This workload has no warmup or client operations. Its
-output becomes the golden checkpoint. The compaction wait has no runner-level
-deadline. The GitHub job's 24-hour timeout remains the outer limit.
-
-Report elapsed time, input and output SST bytes, input and output SST counts,
-compactor read and write MiB/s, object-store requests and transferred bytes,
-CPU, peak RSS, network activity, peak transient storage, and final live
-database size. The result includes object-store cost for the full compaction
-and cost per 100 GiB of input. The website does not extrapolate this workload
-as continuous monthly traffic.
 
 ### Idle
 
@@ -144,62 +138,144 @@ keyspace. `read-heavy` and `balanced` use the same update behavior.
 
 Each scan starts at a uniformly selected ID and returns up to 10 records in
 ascending key order. A start position in the last nine records can return fewer
-than 10. The runner reports operations per second, records per second, and the
-bytes in all returned keys and values.
+than 10.
 
 ### Sustained ingest
 
 Sixty-four clients insert unique keys into an empty database for 60 minutes,
-with no warmup. The runner reports 5-minute windows for insert rate, logical and
-physical throughput, compaction backlog, backpressure, write amplification,
-live database size, and object-store requests. A final flush drains all accepted
-writes and completes the durability record.
+with no warmup. A final flush drains all accepted writes and completes the
+durability record.
 
 ### Transaction contention
 
 Each client runs serializable snapshot transactions against 10,000 existing
 records. A transaction shuffles five reads and five updates, then commits. The
-result reports transaction latency, commit latency, commits, conflicts, aborts,
-and their rates. API metrics retain the names `transaction.get`,
-`transaction.put`, and `transaction.commit`.
+API tables retain the names `transaction.get`, `transaction.put`, and
+`transaction.commit`.
 
-## Accounting
+## Metrics
 
-Payload bytes include the key and value for each successful point read or write.
-Scans include every returned key and value. Misses have zero payload.
+The website shows seven tables and no charts: application operations,
+application throughput, application latency, object-store requests,
+object-store throughput, process statistics, and machine statistics.
+Dataset-preparation results and workload pages use the same tables. The website
+omits rows with no calls and keeps zero values in rows that have calls. Values
+in the examples are illustrative.
 
-One-second application windows record completed and successful operations,
-logical read and write bytes, return latency by operation, and SlateDB API
-latency. Workloads with asynchronous writes also produce one-second durability
-windows through the final drain.
+The runner counts operations and samples machine counters once per second. Rate
+percentiles use complete one-second windows. The runner excludes partial
+windows at the start and end of measurement. Average operations per second is
+the total divided by the measurement duration. Latency statistics use
+individual calls and milliseconds.
 
-Each result bundle contains:
+### Application operations
 
-- Identity and configuration, including the resolved workload definition,
-  source commits, scale, caches, and SlateDB settings
-- Application throughput, payload throughput, hits, misses, errors, and p50,
-  p95, p99, p99.9, and maximum latency
-- Durability lag, durable operations per second, final drain time, and sequence
-  reconciliation
-- CPU, peak RSS, network activity, and local disk activity
-- Live and average database size, compaction throughput, write amplification,
-  backpressure, and compaction backlog
-- Logical object-store operations, physical HTTP requests, transferred bytes,
-  retries, and errors
-- The website's request and storage cost estimate. `full-compaction` reports
-  one-run cost instead of a continuous monthly rate.
+Each row identifies a SlateDB API call such as `get`, `put`, `delete`, `scan`,
+`write`, or `flush`. Transaction calls retain the names `transaction.get`,
+`transaction.put`, and `transaction.commit`. All columns except `total` use
+calls per second.
+
+| API | total | avg/s | p50/s | p95/s | p99/s | p99.9/s | min/s | max/s |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `get` | 45.5M | 50.6K | 50.5K | 52.1K | 53.2K | 54.0K | 47.1K | 54.0K |
+| `put` | 45.6M | 50.6K | 50.5K | 52.2K | 53.3K | 54.1K | 47.2K | 54.1K |
+
+### Application throughput
+
+Application throughput measures logical data passed to or returned from
+SlateDB. A `get` counts the request key and returned value. A `put` or `write`
+counts its keys and values, while a `delete` counts its key. A `scan` counts all
+returned keys and values. Calls such as `flush` transfer no logical data and do
+not appear in this table. The `total` column uses GiB; the remaining columns use
+MiB/s.
+
+| API | total | avg | p50 | p95 | p99 | p99.9 | min | max |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `get` | 17.8 | 20.3 | 20.2 | 20.9 | 21.3 | 21.6 | 18.9 | 21.6 |
+| `put` | 17.8 | 20.3 | 20.2 | 20.9 | 21.4 | 21.7 | 18.9 | 21.7 |
+
+### Application latency
+
+Each row uses the same API name as the operations table. The `durable` row is
+not an API call. For each accepted write, its timer starts when the write call
+returns and ends when SlateDB's durable frontier reaches the write's sequence
+number. The row combines durability latency for every write API used by the
+preparation phase or workload. All values use milliseconds.
+
+| API | avg | p50 | p95 | p99 | p99.9 | min | max |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `get` | 0.82 | 0.62 | 1.98 | 5.10 | 19.42 | 0.08 | 406.7 |
+| `put` | 0.41 | 0.24 | 1.04 | 3.62 | 13.91 | 0.05 | 298.6 |
+| `durable` | 54.8 | 48.3 | 99.2 | 132.8 | 241.7 | 1.2 | 1,932.4 |
+
+### Object-store requests
+
+Rows use physical HTTP methods such as `GET`, `PUT`, `HEAD`, `DELETE`, and
+`POST`. Each retry counts as another operation, so request totals match the
+traffic sent to the object store. All columns except `total` use operations per
+second.
+
+| Method | total | avg/s | p50/s | p95/s | p99/s | p99.9/s | min/s | max/s |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `GET` | 2,840,100 | 3,155.7 | 3,141 | 3,388 | 3,510 | 3,622 | 2,801 | 3,622 |
+| `PUT` | 84,200 | 93.6 | 92 | 108 | 116 | 124 | 71 | 124 |
+| `HEAD` | 18,400 | 20.4 | 20 | 25 | 28 | 31 | 13 | 31 |
+
+### Object-store throughput
+
+Object-store throughput measures physical HTTP body bytes. Each method's row
+combines request and response bodies. Methods that transfer no body remain in
+the requests table and do not appear here. The `total` column uses GiB; the
+remaining columns use MiB/s.
+
+| Method | total | avg | p50 | p95 | p99 | p99.9 | min | max |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `GET` | 167.0 | 190.0 | 184 | 238 | 270 | 310 | 110 | 310 |
+| `PUT` | 83.5 | 95.0 | 92 | 121 | 139 | 158 | 54 | 158 |
+
+### Process statistics
+
+Process statistics cover the benchmark process, including SlateDB, its
+embedded compactor, the async runtime, and the object-store client. CPU uses
+cores, where `1.0` means one fully occupied vCPU. RSS uses GiB. The runner
+calculates every column from complete one-second samples.
+
+| Metric | avg | p50 | p95 | p99 | p99.9 | min | max |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| CPU (cores) | 6.8 | 6.7 | 9.1 | 10.8 | 12.4 | 2.3 | 12.4 |
+| RSS (GiB) | 7.1 | 7.2 | 7.7 | 7.8 | 7.9 | 5.9 | 7.9 |
+
+### Machine statistics
+
+CPU, network, and disk statistics cover the whole runner. RSS covers the
+benchmark process, including SlateDB and its embedded compactor. The runner
+calculates each column from complete one-second samples.
+
+| Metric | avg | p50 | p95 | p99 | p99.9 | min | max |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| CPU (%) | 46.2 | 45.8 | 63.1 | 74.4 | 88.7 | 21.0 | 88.7 |
+| RSS (GiB) | 7.1 | 7.2 | 7.7 | 7.8 | 7.8 | 5.9 | 7.8 |
+| Network receive (MiB/s) | 46.4 | 45.9 | 61.2 | 70.5 | 82.1 | 18.4 | 82.1 |
+| Network send (MiB/s) | 21.5 | 21.2 | 29.8 | 34.6 | 41.0 | 8.2 | 41.0 |
+| Disk read (MiB/s) | 14.9 | 14.2 | 22.4 | 27.1 | 34.8 | 3.1 | 34.8 |
+| Disk write (MiB/s) | 10.7 | 10.3 | 16.1 | 19.5 | 24.2 | 2.8 | 24.2 |
+| Disk read ops/s | 478 | 462 | 655 | 738 | 811 | 190 | 811 |
+| Disk write ops/s | 320 | 311 | 446 | 502 | 558 | 124 | 558 |
+
+Result bundles record the resolved preparation or workload definition, source
+commits, scale, caches, and SlateDB settings.
 
 ## Validation
 
 The publisher rejects results with operation errors. The runner keeps the failed
-bundle for diagnosis and leaves that workload incomplete in the session, so a
-retry measures it again.
+bundle for diagnosis and leaves that preparation phase or workload incomplete
+in the session, so a retry measures it again.
 
-The runner also checks these workload invariants:
+The runner also checks these preparation and workload invariants:
 
-- Bulk load creates the configured number of unique records and saves the
+- `bulk-load` creates the configured number of unique records and saves the
   expected uncompacted manifest.
-- Full compaction starts from that manifest and completes without queued work.
+- `full-compaction` starts from that manifest and completes without queued work.
 - Golden workloads start from the saved manifest digest.
 - Idle records no client operations or logical payload.
 - Hit-only reads and updates of the canonical dataset do not miss.
@@ -209,22 +285,17 @@ The runner also checks these workload invariants:
 - Sustained-ingest keys do not collide.
 - Transaction outcomes reconcile with attempted transactions.
 
-The session stores completed workload bundles and both database checkpoints in
-the object store. A retry restores them instead of rerunning completed work.
+The session stores completed preparation and workload bundles with both database
+checkpoints in the object store. A retry restores them instead of rerunning
+completed work.
 
 ## Scaling
 
 Smoke tests and website fixtures run the release suite with `--scale`; they do
 not use a separate mock catalog. Scale reduces records, durations, and cache
 capacities. It preserves operation mixes, clients, key and value sizes,
-durability, workload order, and initial state. Scaled results use smoke mode and
-cannot be published as release benchmarks.
-
-## Historical results
-
-Existing `ycsb`, `rocksdb`, and legacy `slatedb` results stay published. They
-use different workload definitions and should not be compared with the unified
-suite. New releases publish only the unified `slatedb` suite.
+durability, preparation and workload order, and initial state. Scaled results
+use smoke mode and cannot be published as release benchmarks.
 
 ## Out of scope
 
