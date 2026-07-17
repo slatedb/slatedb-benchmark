@@ -179,76 +179,106 @@ returns a nonzero status and prints no success record.
 
 ## GitHub workflows
 
-Preparation and measurement use separate `workflow_dispatch` workflows:
+GitHub exposes two manual workflows. `golden.yml` creates reusable
+golden data. `benchmark.yml` measures workloads against it. Neither workflow
+starts the other.
 
-```text
-prepare-golden inputs: slatedb_ref, golden_id, mode, scale
-benchmark inputs:      golden_id, mode, scale
+### Inputs
 
-prepare-golden.yml (golden A)
-  setup -> build -> bulk-load -> full-compaction
+`golden.yml` accepts:
 
-benchmark.yml (golden A, github.run_id)
-  validate golden -> build -> workload matrix -> publish -> Pages
-                                      |
-                                      +-> clean up session data
+| Input | Required | Example |
+| --- | --- | --- |
+| `slatedb_ref` | Yes | `v0.14.1` |
+| `golden_id` | Yes | `slatedb-v0.14.1-001` |
+| `scale` | Yes | `1.0` |
+
+`benchmark.yml` accepts:
+
+| Input | Required | Example |
+| --- | --- | --- |
+| `golden_id` | Yes | `slatedb-v0.14.1-001` |
+| `publish` | Yes | `true` |
+| `scale` | Yes | `1.0` |
+
+`scale` is decimal. `1.0` runs the published size; `0.01` runs one percent.
+
+A published run starts with these commands:
+
+```console
+$ gh workflow run golden.yml \
+    -f slatedb_ref=v0.14.1 \
+    -f golden_id=slatedb-v0.14.1-001 \
+    -f scale=1.0
+
+$ gh workflow run benchmark.yml \
+    -f golden_id=slatedb-v0.14.1-001 \
+    -f publish=true \
+    -f scale=1.0
 ```
 
-`scale` is a decimal workflow input, where `1.0` is full scale and `0.01` is
-one percent. `mode` controls the last step:
+### `golden.yml`
 
-```text
-published -> require scale 1.0 -> publish results
-smoke     -> allow scaling   -> validate artifacts
-fixtures  -> allow scaling   -> retain artifacts for the local website
-```
+| Job | Work |
+| --- | --- |
+| `build` | Resolve SlateDB and build the runner |
+| `bulk-load` | Restore or create the uncompacted checkpoint |
+| `full-compaction` | Restore or create the golden checkpoint |
 
-### `prepare-golden.yml`
+Full compaction waits for the bulk-load job. Both jobs use the `result.json`
+recovery rule defined above. A repeat dispatch skips phases with valid results.
+Before rerunning a phase without a result, the workflow deletes that phase's
+database prefix. Retrying full compaction preserves the bulk-load checkpoint
+and replaces only the incomplete compacted clone.
 
-The caller uses a new golden ID when the SlateDB commit or preparation
-configuration changes. Each job checks its result before doing work:
-
-```text
-valid result.json -> skip phase
-missing result    -> run phase
-invalid result    -> fail
-```
-
-The full-compaction job depends on bulk load. Its 24-hour GitHub job timeout is
-the only compaction deadline. A later dispatch with the same golden ID finishes
-an interrupted preparation without repeating a committed phase. Preparation
-does not trigger the benchmark workflow or delete either checkpoint.
+The full-compaction job has a 24-hour GitHub timeout and no shorter runner
+deadline. The workflow leaves both checkpoints in Tigris. Use a new golden ID
+after changing the SlateDB commit or preparation configuration.
 
 ### `benchmark.yml`
 
-The input is a completed golden ID. A validation job reads both preparation
-results and uploads them as an artifact for the current workflow run.
+| Job | Work |
+| --- | --- |
+| `validate-golden` | Verify and upload both preparation results |
+| `build` | Build the current runner against the recorded SlateDB commit |
+| `workloads` | Run the workload matrix |
+| `publish` | Commit results when the `publish` input is `true` |
+| `cleanup` | Delete benchmark session data after outputs are collected |
 
-The build uses the current benchmark runner and the SlateDB commit recorded in
-the full-compaction result. The workload matrix uses one WarpBuild machine per
-task and `max-parallel: 4`. Each job gets a session- and task-specific
-object-store prefix.
-
-All matrix jobs share Tigris. `run.json` records `max-parallel` because changing
-object-store concurrency can affect application latency.
-
-The session name comes from `github.run_id`:
+The workload matrix uses one WarpBuild machine per task and
+`max-parallel: 4`. All workload jobs share Tigris, so `run.json` records that
+limit. Each workload writes to
+`sessions/<github.run_id>/<workload>/result.json`.
 
 ```text
-new workflow dispatch -> new session -> measure every workload
-rerun same dispatch    -> same session -> restore committed workloads
+new dispatch -> new github.run_id -> run every workload
+rerun         -> same github.run_id -> skip completed workloads
 ```
 
-In `published` mode, the publisher downloads all artifacts, builds `run.json`,
-replaces `results/<version>/`, and pushes `main`. Pages deploys after that
-commit. Other modes stop after artifact validation. Successful cleanup removes
-the benchmark session's clones and candidates. Failed runs keep them for a
-retry.
+The `publish` input controls the final job:
 
-Tigris credentials are scoped to steps that read or write benchmark data.
-Repository write access belongs only to the publisher, which receives no
-Tigris credentials. Website installation uses `npm ci --ignore-scripts` and
-receives neither credential.
+| `publish` | Scale | Result |
+| --- | --- | --- |
+| `true` | Must be `1.0` | Commit results and deploy Pages |
+| `false` | May be smaller | Validate artifacts only |
+
+Failed runs retain their session data. Cleanup never deletes golden data.
+
+### Credentials
+
+| Jobs | Repository | Tigris |
+| --- | --- | --- |
+| `build` | Read | None |
+| Preparation jobs | Read | Read and write |
+| `validate-golden` | Read | Read |
+| `workloads` | Read | Read and write |
+| `publish` | Write | None |
+| `cleanup` | None | Read and write |
+| Pages | Read | None |
+
+Tigris credentials exist only on steps that need them. The publisher uses a
+fresh checkout. Website installation runs `npm ci --ignore-scripts` without
+benchmark credentials.
 
 ## Results and validation
 
@@ -297,22 +327,21 @@ prefix. The two act files are gitignored.
 
 ```console
 $ act workflow_dispatch \
-    -W .github/workflows/prepare-golden.yml \
+    -W .github/workflows/golden.yml \
     --input slatedb_ref=v0.14.1 \
     --input golden_id=local-smoke \
-    --input mode=smoke \
     --input scale=0.01
 
 $ act workflow_dispatch \
     -W .github/workflows/benchmark.yml \
     --input golden_id=local-smoke \
-    --input mode=smoke \
+    --input publish=false \
     --input scale=0.01
 ```
 
-`scripts/smoke.sh` wraps those commands. `scripts/fixtures.sh` changes the mode
-to `fixtures` and copies the result artifact into the website fixture directory.
-The scripts contain no task lists or dependency logic.
+Both local scripts run these commands. `scripts/smoke.sh` discards the output;
+`scripts/fixtures.sh` copies it into the website fixture directory. The scripts
+contain no task lists or dependency logic.
 
 The preparation handoff uses the golden prefix because `act` cannot download
 artifacts from another workflow run. Local runs validate the runner and result
