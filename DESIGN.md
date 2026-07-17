@@ -109,35 +109,70 @@ checkpoints remain available for later benchmark runs.
 
 ## CLI
 
-Workflow jobs and direct debugging use the same binary. Preparation jobs invoke
-the two phases explicitly:
-
 ```console
-$ ./target/release/slatedb-benchmark run \
+$ slatedb-benchmark --help
+Run SlateDB benchmarks
+
+Usage: slatedb-benchmark <COMMAND>
+
+Commands:
+  run       Run one preparation phase or workload
+  help      Print help for a command
+
+Options:
+  -h, --help     Print help
+  -V, --version  Print the runner and SlateDB versions
+
+$ slatedb-benchmark run --help
+Run one preparation phase or workload
+
+Usage: slatedb-benchmark run [OPTIONS] --task <TASK> --golden <GOLDEN_ID>
+       --output <PATH>
+
+Options:
+      --task <TASK>
+          Preparation task or workload from BENCHMARKS.md
+
+      --golden <GOLDEN_ID>
+          Golden data name, for example slatedb-v0.14.1-001
+
+      --session <SESSION>
+          Benchmark session name; required for workload tasks
+
+      --scale <FACTOR>
+          Decimal scale factor greater than 0 and at most 1.0
+          [default: 1.0]
+
+      --output <PATH>
+          Local result and diagnostic directory
+
+  -h, --help
+          Print help
+
+Examples:
+  slatedb-benchmark run \
     --task bulk-load \
     --golden slatedb-v0.14.1-001 \
+    --scale 1.0 \
     --output .runs/bulk-load
 
-$ ./target/release/slatedb-benchmark run \
+  slatedb-benchmark run \
     --task full-compaction \
     --golden slatedb-v0.14.1-001 \
+    --scale 1.0 \
     --output .runs/full-compaction
-```
 
-A matrix job invokes one workload:
-
-```console
-$ ./target/release/slatedb-benchmark run \
+  slatedb-benchmark run \
     --task balanced \
     --golden slatedb-v0.14.1-001 \
     --session github-123456 \
+    --scale 1.0 \
     --output .runs/balanced
 ```
 
-`--task` is required. Full compaction requires `bulk-load/result.json`, and a
-golden workload requires `full-compaction/result.json`. The workflow passes
-`--scale` from its dispatch input; the scaling rules remain in
-[`BENCHMARKS.md`](BENCHMARKS.md).
+Full compaction requires `bulk-load/result.json`. A golden workload requires
+`full-compaction/result.json`. The workflow passes its `scale` input to
+`--scale`; the scaling rules remain in [`BENCHMARKS.md`](BENCHMARKS.md).
 
 Logs go to stderr. Stdout contains one machine-readable status record. Failure
 returns a nonzero status and prints no success record.
