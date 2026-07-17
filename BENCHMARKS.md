@@ -29,8 +29,8 @@ The suite uses these SlateDB settings unless a workload says otherwise:
 
 The canonical dataset contains 300,000,000 records with 20-byte keys and
 400-byte values. This is about 117.3 GiB of logical key-value data. Generated
-values have a target compression ratio of 1.0. After full compaction, the live
-LSM must contain at least 100 GiB of SST data.
+values have a target compression ratio of 1.0. The benchmark records the live
+LSM size after full compaction as the golden dataset size.
 
 Keys contain an 8-byte big-endian unsigned record ID followed by 12 ASCII `0`
 bytes. This matches the `db_bench` key format, preserves numeric ordering, and
@@ -59,13 +59,16 @@ warmup and a 15-minute measurement unless its definition below overrides those
 durations. The runner flushes warmup writes before measurement.
 
 Writes use `await_durable = false`. Return latency ends when SlateDB accepts the
-operation. Durability lag ends when SlateDB reports the operation durable. The
-runner flushes after measurement and records the drain time. The suite has no
-per-operation synchronous-write workload.
+operation. The runner records each accepted write's sequence number and tracks
+SlateDB's durable frontier independently. It measures durability latency from
+the API return until the frontier covers that sequence. Tracking continues
+through the post-measurement flush, and the runner records the final drain time.
+The suite has no per-operation synchronous-write workload.
 
-The runner waits for compaction until SlateDB reports idle or reports a failed
-compaction. It imposes no compaction deadline. The GitHub job's 24-hour timeout
-remains the outer limit.
+Every workload fails if SlateDB reports a compaction failure while it runs.
+Except for `full-compaction`, a workload stops after measurement and any
+durability drain. It does not wait for ordinary background compaction to become
+idle.
 
 ## Workloads
 
@@ -105,7 +108,8 @@ backpressure, elapsed time, and ETA.
 Clone the uncompacted checkpoint and open it with the published SlateDB
 settings. Record the input manifest, trigger a full compaction, and wait for
 SlateDB to report idle. This workload has no warmup or client operations. Its
-output becomes the golden checkpoint.
+output becomes the golden checkpoint. The compaction wait has no runner-level
+deadline. The GitHub job's 24-hour timeout remains the outer limit.
 
 Report elapsed time, input and output SST bytes, input and output SST counts,
 compactor read and write MiB/s, object-store requests and transferred bytes,
@@ -195,8 +199,7 @@ The runner also checks these workload invariants:
 
 - Bulk load creates the configured number of unique records and saves the
   expected uncompacted manifest.
-- Full compaction starts from that manifest, completes without queued work, and
-  produces a live LSM of at least 100 GiB.
+- Full compaction starts from that manifest and completes without queued work.
 - Golden workloads start from the saved manifest digest.
 - Idle records no client operations or logical payload.
 - Hit-only reads and updates of the canonical dataset do not miss.
