@@ -8,23 +8,13 @@ defines the code and GitHub workflows that implement that contract.
 ## Files and configuration
 
 ```text
-config/suite.toml       Executable benchmark contract
 config/settings.toml    SlateDB settings
 .actrc                  Local runner and artifact configuration
-src/                    Runner, workloads, metrics, and validation
+src/                    Fixed config, runner, workloads, metrics, validation
 schema/                 Published JSON schemas
 results/<version>/      Published results
 website/                Static Astro website
 scripts/                Smoke, fixture, and publication commands
-```
-
-The runner loads the two TOML files by fixed path. It does not discover suites
-or infer names from filenames. It builds SlateDB settings in this order:
-
-```text
-SlateDB Settings::default()
-  -> config/settings.toml
-  -> bulk-load overrides
 ```
 
 ## Runner
@@ -85,10 +75,8 @@ Preparation data and benchmark sessions have different lifetimes:
 
 ```text
 goldens/<golden-id>/
-  identity.json
-  tasks/
-    bulk-load/commit.json
-    full-compaction/commit.json
+  bulk-load/result.json
+  full-compaction/result.json
 
 sessions/<session>/
   identity.json
@@ -96,65 +84,25 @@ sessions/<session>/
     <workload>/commit.json
 ```
 
-A golden identity resembles:
-
-```json
-{
-  "golden_id": "slatedb-v0.14.1-001",
-  "slatedb_commit": "0123456789abcdef",
-  "runner_commit": "fedcba9876543210",
-  "lockfile_sha256": "sha256:...",
-  "preparation_sha256": "sha256:...",
-  "scale": 1.0,
-  "environment": {
-    "region": "fra",
-    "bucket": "slatedb-benchmarks",
-    "endpoint": "https://t3.storage.dev"
-  }
-}
-```
-
-The preparation fingerprint covers the fields that determine the database
-contents and initial LSM state. A benchmark run rejects a different SlateDB
-commit, scale, dataset definition, SlateDB settings, region, bucket, or
-endpoint. It may use newer workload code and a newer benchmark runner.
-
-The session identity binds the golden ID and manifest digest to the current
-runner, lockfile, workload configuration, and benchmark environment. Jobs
-reject a mismatch before opening SlateDB.
-
-A preparation marker includes the validated result and checkpoint identity:
-
-```json
-{
-  "task": "full-compaction",
-  "result": {
-    "path": "goldens/slatedb-v0.14.1-001/results/full-compaction.json",
-    "sha256": "sha256:..."
-  },
-  "input_manifest_sha256": "sha256:...",
-  "checkpoint": {
-    "id": "01J...",
-    "manifest_id": 42,
-    "manifest_sha256": "sha256:..."
-  }
-}
-```
-
-Every phase and workload commits in the same order:
+Each preparation result contains its website metrics, resolved configuration,
+source commits, and checkpoint reference. The result is also the completion
+marker and is created last:
 
 ```text
-run task
-  -> write candidate result and database data
-  -> read and validate the candidate
-  -> upload the final result
-  -> create commit.json
+run preparation phase
+  -> validate the database and result
+  -> finish checkpoint writes
+  -> create result.json
 ```
 
-`commit.json` is the commit point and uses an object-store create precondition.
-A retry skips a task with a valid marker. Candidate data without a marker may
-be replaced. GitHub concurrency groups prevent two jobs from writing the same
-golden phase or session task.
+The workflow creates `result.json` with an object-store create precondition. A
+valid existing result skips the phase. A missing result reruns it, while an
+invalid result fails and requires cleanup. The operator chooses a new golden ID
+when the SlateDB commit or preparation configuration changes.
+
+Benchmark sessions retain an identity file and one commit marker per workload.
+GitHub concurrency groups prevent two jobs from writing the same golden phase
+or session task.
 
 Golden checkpoints remain immutable until explicit deletion. Each workload
 clone uses a session- and task-specific prefix and owns its new manifests and
@@ -188,10 +136,10 @@ $ ./target/release/slatedb-benchmark run \
     --output .runs/balanced
 ```
 
-`--task` is required. Bulk load creates the golden identity, full compaction
-requires the bulk-load marker, and a golden workload requires the
-full-compaction marker. The workflow passes `--scale` from its dispatch input;
-the scaling rules remain in [`BENCHMARKS.md`](BENCHMARKS.md).
+`--task` is required. Full compaction requires `bulk-load/result.json`, and a
+golden workload requires `full-compaction/result.json`. The workflow passes
+`--scale` from its dispatch input; the scaling rules remain in
+[`BENCHMARKS.md`](BENCHMARKS.md).
 
 Logs go to stderr. Stdout contains one machine-readable status record. Failure
 returns a nonzero status and prints no success record.
@@ -213,26 +161,24 @@ benchmark.yml (golden A, github.run_id)
                                       +-> clean up session data
 ```
 
-`scale` is a workflow input, not an environment variable. `mode` controls the
-last step:
+`scale` is a decimal workflow input, where `1.0` is full scale and `0.01` is
+one percent. `mode` controls the last step:
 
 ```text
-published -> require scale 1 -> publish results
+published -> require scale 1.0 -> publish results
 smoke     -> allow scaling   -> validate artifacts
 fixtures  -> allow scaling   -> retain artifacts for the local website
 ```
 
 ### `prepare-golden.yml`
 
-A new golden ID records the current runner commit and resolved SlateDB commit.
-An existing ID must match the request and uses the runner commit stored in
-`identity.json`.
-
-The bulk-load and full-compaction jobs check their markers before doing work:
+The caller uses a new golden ID when the SlateDB commit or preparation
+configuration changes. Each job checks its result before doing work:
 
 ```text
-bulk-load marker exists?       restore result : run and commit bulk load
-full-compaction marker exists? restore result : run and commit compaction
+valid result.json -> skip phase
+missing result    -> run phase
+invalid result    -> fail
 ```
 
 The full-compaction job depends on bulk load. Its 24-hour GitHub job timeout is
@@ -242,14 +188,13 @@ does not trigger the benchmark workflow or delete either checkpoint.
 
 ### `benchmark.yml`
 
-The input is a completed golden ID. A validation job reads the golden identity
-and both preparation markers, checks compatibility, and uploads the two
-preparation results as an artifact for the current workflow run.
+The input is a completed golden ID. A validation job reads both preparation
+results and uploads them as an artifact for the current workflow run.
 
-The build uses the current benchmark runner and the SlateDB commit stored in
-the golden identity. The workload matrix uses one WarpBuild machine per task
-and `max-parallel: 4`. Each job gets a session- and task-specific object-store
-prefix.
+The build uses the current benchmark runner and the SlateDB commit recorded in
+the full-compaction result. The workload matrix uses one WarpBuild machine per
+task and `max-parallel: 4`. Each job gets a session- and task-specific
+object-store prefix.
 
 All matrix jobs share Tigris. `run.json` records `max-parallel` because changing
 object-store concurrency can affect application latency.
@@ -284,18 +229,17 @@ results/<version>/
     <name>/result.json
 ```
 
-`run.json` records the golden ID and fingerprint, preparation and benchmark
-runner commits, resolved configuration, matrix concurrency, and result
-checksums. Each `result.json` contains the environment, initial database
-identity, and the summaries defined in
+`run.json` records the golden ID, preparation and benchmark runner commits,
+resolved configuration, matrix concurrency, and result checksums. Each
+`result.json` contains the environment, initial database identity, and the
+summaries defined in
 [`BENCHMARKS.md`](BENCHMARKS.md).
 
-The worker writes a candidate result, reads it through strict Serde models, and
-runs one semantic validation pass before creating the task marker. That pass
-checks internal counts, samples, durability coverage, database identity, and
-the invariants in [`BENCHMARKS.md`](BENCHMARKS.md). JSON schemas remain the
-published contract; the runner does not repeat validation through a schema
-engine.
+The worker reads each result through strict Serde models and runs one semantic
+validation pass. That pass checks internal counts, samples, durability
+coverage, database identity, and the invariants in
+[`BENCHMARKS.md`](BENCHMARKS.md). JSON schemas remain the published contract;
+the runner does not repeat validation through a schema engine.
 
 Successful tasks publish summaries and discard histograms and one-second
 buckets. Failed tasks may include raw diagnostic files in their GitHub
@@ -324,13 +268,13 @@ $ act workflow_dispatch \
     --input slatedb_ref=v0.14.1 \
     --input golden_id=local-smoke \
     --input mode=smoke \
-    --input scale=1%
+    --input scale=0.01
 
 $ act workflow_dispatch \
     -W .github/workflows/benchmark.yml \
     --input golden_id=local-smoke \
     --input mode=smoke \
-    --input scale=1%
+    --input scale=0.01
 ```
 
 `scripts/smoke.sh` wraps those commands. `scripts/fixtures.sh` changes the mode
