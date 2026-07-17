@@ -387,16 +387,17 @@ async fn prepare_golden_database(
         records = record_count,
         "preparing golden database"
     );
+    let load_settings = golden_load_settings(&variant.slate_settings);
     let recorder = Arc::new(BenchmarkMetricsRecorder::new());
     let db = open_database(
         path.clone(),
         Arc::clone(&store),
         &variant.suite,
-        &variant.slate_settings,
+        &load_settings,
         Arc::clone(&recorder),
     )
     .await?;
-    populate_dataset(
+    let load_result = populate_dataset(
         Arc::clone(&db),
         &variant.suite.name,
         record_count,
@@ -405,9 +406,26 @@ async fn prepare_golden_database(
         variant.value_compression_ratio(),
         prefix_layout,
     )
+    .await;
+    close_database_after(&db, load_result, "closing golden load database").await?;
+
+    let recorder = Arc::new(BenchmarkMetricsRecorder::new());
+    let compaction_db = open_database(
+        path.clone(),
+        Arc::clone(&store),
+        &variant.suite,
+        &variant.slate_settings,
+        Arc::clone(&recorder),
+    )
     .await?;
-    compact_database_fully(path.clone(), control_store, &variant.suite).await?;
-    db.close().await.context("closing golden database")?;
+    let compaction_result =
+        compact_database_fully(path.clone(), control_store, &variant.suite).await;
+    close_database_after(
+        &compaction_db,
+        compaction_result,
+        "closing golden compaction database",
+    )
+    .await?;
 
     let admin = AdminBuilder::new(path.clone(), Arc::clone(&store)).build();
     let checkpoint = admin
@@ -530,6 +548,23 @@ async fn execute_bulk_load_and_compact(
 }
 
 fn bulk_load_settings(suite_settings: &Settings) -> Settings {
+    let mut settings = uncompacted_load_settings(suite_settings);
+    settings.l0_flush_parallelism = 16;
+    settings
+}
+
+fn golden_load_settings(suite_settings: &Settings) -> Settings {
+    const GOLDEN_L0_SST_SIZE_BYTES: usize = 256 * 1024 * 1024;
+    const GOLDEN_MAX_UNFLUSHED_BYTES: usize = 4 * 1024 * 1024 * 1024;
+
+    let mut settings = uncompacted_load_settings(suite_settings);
+    settings.l0_flush_parallelism = 16;
+    settings.l0_sst_size_bytes = GOLDEN_L0_SST_SIZE_BYTES;
+    settings.max_unflushed_bytes = GOLDEN_MAX_UNFLUSHED_BYTES;
+    settings
+}
+
+fn uncompacted_load_settings(suite_settings: &Settings) -> Settings {
     let mut settings = suite_settings.clone();
     settings.wal_enabled = false;
     settings.compactor_options = None;
@@ -1043,8 +1078,8 @@ fn average_database_bytes(
 mod tests {
     use super::{
         average_database_bytes, bulk_load_settings, close_database_after, compact_database_fully,
-        enabled_features, execute_rocks_variant, lsm_digest, object_store_cache_directory,
-        open_database,
+        enabled_features, execute_rocks_variant, golden_load_settings, lsm_digest,
+        object_store_cache_directory, open_database,
     };
     use crate::cli::RunArgs;
     use crate::config::{
@@ -1106,8 +1141,30 @@ mod tests {
         assert!(settings.compactor_options.is_none());
         assert_eq!(settings.l0_max_ssts, u32::MAX as usize);
         assert_eq!(settings.l0_max_ssts_per_key, u32::MAX as usize);
+        assert_eq!(settings.l0_flush_parallelism, 16);
         assert!(suite_settings.wal_enabled);
         assert!(suite_settings.compactor_options.is_some());
+    }
+
+    #[test]
+    fn golden_load_settings_stream_uncompacted_data() {
+        let suite_settings = Settings::default();
+        let settings = golden_load_settings(&suite_settings);
+
+        assert!(!settings.wal_enabled);
+        assert!(settings.compactor_options.is_none());
+        assert_eq!(settings.l0_max_ssts, u32::MAX as usize);
+        assert_eq!(settings.l0_max_ssts_per_key, u32::MAX as usize);
+        assert_eq!(settings.l0_flush_parallelism, 16);
+        assert_eq!(settings.l0_sst_size_bytes, 256 * 1024 * 1024);
+        assert_eq!(settings.max_unflushed_bytes, 4 * 1024 * 1024 * 1024);
+        assert!(suite_settings.wal_enabled);
+        assert!(suite_settings.compactor_options.is_some());
+        assert_ne!(suite_settings.l0_sst_size_bytes, settings.l0_sst_size_bytes);
+        assert_ne!(
+            suite_settings.max_unflushed_bytes,
+            settings.max_unflushed_bytes
+        );
     }
 
     #[test]

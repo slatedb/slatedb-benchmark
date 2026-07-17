@@ -23,6 +23,14 @@ smoke results and cannot be published as release benchmarks.
 Each measured variant starts with an empty local object-store cache. Warmup may
 populate it; PUT caching and startup preloading remain disabled.
 
+Isolated suites prepare their unmeasured golden databases with the WAL and
+background compactor disabled, unrestricted L0 SST counts, 16 parallel L0
+flushers, 256 MiB L0 SSTs, and up to 4 GiB of unflushed data. After loading, the
+runner closes the database, reopens it with the published suite settings,
+performs a full compaction, and only then creates the golden checkpoint. Thus
+the temporary loading settings improve setup throughput without changing the
+database shape used for measurement.
+
 ## Standard results
 
 Every workload emits the same result record. Use `null` for fields that do not
@@ -121,11 +129,12 @@ where SlateDB has an equivalent setting.
 
 RocksDB's `max_background_jobs=16` is a shared budget for flush and compaction
 threads. SlateDB has no shared background-job pool, so the suite applies 16 to
-both compaction limits and leaves SlateDB's separate L0 object-store upload
-parallelism unchanged. RocksDB's leveled-compaction geometry
-(`max_bytes_for_level_base`, level multiplier, and number of levels) has no
-SlateDB equivalent because SlateDB uses size-tiered compaction, so those settings
-are intentionally not mapped.
+both compaction limits. During bulk load, when compaction is disabled, the
+runner also uses 16 L0 object-store upload workers; subsequent workloads restore
+SlateDB's normal separate L0 upload parallelism. RocksDB's leveled-compaction
+geometry (`max_bytes_for_level_base`, level multiplier, and number of levels)
+has no SlateDB equivalent because SlateDB uses size-tiered compaction, so those
+settings are intentionally not mapped.
 
 Run the tests below in order against the same database.
 
@@ -136,8 +145,9 @@ Run the tests below in order against the same database.
    them individually. Throughput and payload accounting remain record-based.
    Disable the WAL and compactor, and do not wait for durability during individual
    writes. Set both L0 SST limits to `u32::MAX` so the uncompacted L0 can hold the
-   complete load. Flush all memtables after loading, restore the suite settings,
-   and wait for compaction to finish. RocksDB also uses its vector memtable and
+   complete load, and use 16 L0 flushers while compaction is disabled. Flush all
+   memtables after loading, restore the suite settings, and wait for compaction
+   to finish. RocksDB also uses its vector memtable and
    an explicit full compaction; SlateDB has no exact equivalents. Bulk-load
    workloads must have an effective warmup of zero because their
    record-count-driven phase ignores duration. While inserting, report progress,
