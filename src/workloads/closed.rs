@@ -5,7 +5,7 @@ use super::util::{
     KeySelector, ValueGenerator, YcsbLatestSelector,
 };
 use crate::config::{KeyDistribution, VariantConfig, WorkloadKind};
-use crate::system::{measure_backpressure, ApplicationWindowRegistry};
+use crate::system::{duration_ns, measure_backpressure, ApplicationWindowRegistry};
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use futures::future::join_all;
@@ -40,6 +40,10 @@ fn point_payload_bytes(variant: &VariantConfig, key_bytes: usize, value_bytes: u
         0
     };
     key_bytes.saturating_add(value_bytes) as u64
+}
+
+fn truncate_log_float(value: f64) -> f64 {
+    (value * 100.0).trunc() / 100.0
 }
 
 #[derive(Clone)]
@@ -723,15 +727,15 @@ pub(super) async fn run_bulk_load(
                         successful_records = stats.successful,
                         total_records = count,
                         errors = stats.errors,
-                        progress_percent,
-                        recent_puts_per_second,
-                        average_puts_per_second,
-                        logical_mib_per_second = recent_puts_per_second
-                            * logical_bytes_per_record
-                            / (1024.0 * 1024.0),
-                        backpressure_percent,
-                        elapsed_seconds = elapsed.as_secs_f64(),
-                        eta_seconds,
+                        progress_percent = truncate_log_float(progress_percent),
+                        recent_puts_per_second = truncate_log_float(recent_puts_per_second),
+                        average_puts_per_second = truncate_log_float(average_puts_per_second),
+                        logical_mib_per_second = truncate_log_float(
+                            recent_puts_per_second * logical_bytes_per_record / (1024.0 * 1024.0)
+                        ),
+                        backpressure_percent = truncate_log_float(backpressure_percent),
+                        elapsed_seconds = truncate_log_float(elapsed.as_secs_f64()),
+                        eta_seconds = truncate_log_float(eta_seconds),
                         "bulk-load progress"
                     );
                     last_reported_at = now;
@@ -772,14 +776,16 @@ pub(super) async fn run_bulk_load(
         successful_records = stats.successful,
         total_records = count,
         errors = stats.errors,
-        progress_percent = 100.0,
-        average_puts_per_second,
-        logical_mib_per_second =
-            average_puts_per_second * logical_bytes_per_record / (1024.0 * 1024.0),
-        backpressure_percent =
+        progress_percent = truncate_log_float(100.0),
+        average_puts_per_second = truncate_log_float(average_puts_per_second),
+        logical_mib_per_second = truncate_log_float(
+            average_puts_per_second * logical_bytes_per_record / (1024.0 * 1024.0)
+        ),
+        backpressure_percent = truncate_log_float(
             (stats.backpressure_ns as f64 / 1e9 / elapsed.as_secs_f64().max(f64::EPSILON) * 100.0)
-                .min(100.0),
-        elapsed_seconds = elapsed.as_secs_f64(),
+                .min(100.0)
+        ),
+        elapsed_seconds = truncate_log_float(elapsed.as_secs_f64()),
         "bulk-load insert phase complete"
     );
     Ok(stats)
@@ -966,6 +972,7 @@ pub async fn populate_dataset(
     value_compression_ratio: f64,
     prefix_layout: bool,
 ) -> Result<()> {
+    const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
     // Golden-database creation is unmeasured setup, so batch independent records
     // to avoid making one asynchronous database call per record.
     const BATCH_RECORDS: u64 = 1_024;
@@ -977,6 +984,16 @@ pub async fn populate_dataset(
         ..Default::default()
     };
     let put_options = PutOptions::default();
+    let load_started = Instant::now();
+    let mut last_reported_at = load_started;
+    let mut last_reported_records = 0_u64;
+    let mut last_reported_backpressure_ns = 0_u64;
+    let mut backpressure_ns = 0_u64;
+    let logical_bytes_per_record = key_bytes.saturating_add(value_bytes) as f64;
+    let mut heartbeat = tokio::time::interval(HEARTBEAT_INTERVAL);
+    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    heartbeat.tick().await;
+
     let mut loaded_records = 0_u64;
     while loaded_records < record_count {
         let batch_end = loaded_records
@@ -991,11 +1008,83 @@ pub async fn populate_dataset(
             };
             batch.put_bytes_with_options(key, values.generate(value_bytes, &mut rng), &put_options);
         }
-        db.write_with_options(batch, &options)
-            .await
-            .with_context(|| format!("loading records {loaded_records}..{batch_end}"))?;
+        let mut write = Box::pin(measure_backpressure(db.write_with_options(batch, &options)));
+        let (result, backpressure) = loop {
+            tokio::select! {
+                result = &mut write => break result,
+                _ = heartbeat.tick() => {
+                    let now = Instant::now();
+                    let interval = now.saturating_duration_since(last_reported_at);
+                    let elapsed = now.saturating_duration_since(load_started);
+                    let recent_records = loaded_records.saturating_sub(last_reported_records);
+                    let recent_puts_per_second =
+                        recent_records as f64 / interval.as_secs_f64().max(f64::EPSILON);
+                    let average_puts_per_second =
+                        loaded_records as f64 / elapsed.as_secs_f64().max(f64::EPSILON);
+                    let recent_backpressure_ns =
+                        backpressure_ns.saturating_sub(last_reported_backpressure_ns);
+                    let backpressure_percent = (recent_backpressure_ns as f64 / 1e9
+                        / interval.as_secs_f64().max(f64::EPSILON)
+                        * 100.0)
+                        .min(100.0);
+                    let progress_percent = if record_count == 0 {
+                        100.0
+                    } else {
+                        loaded_records as f64 / record_count as f64 * 100.0
+                    };
+                    let eta_seconds = if recent_puts_per_second > 0.0 {
+                        record_count.saturating_sub(loaded_records) as f64
+                            / recent_puts_per_second
+                    } else {
+                        -1.0
+                    };
+                    tracing::info!(
+                        suite,
+                        records_completed = loaded_records,
+                        successful_records = loaded_records,
+                        total_records = record_count,
+                        errors = 0_u64,
+                        progress_percent = truncate_log_float(progress_percent),
+                        recent_puts_per_second = truncate_log_float(recent_puts_per_second),
+                        average_puts_per_second = truncate_log_float(average_puts_per_second),
+                        logical_mib_per_second = truncate_log_float(
+                            recent_puts_per_second * logical_bytes_per_record / (1024.0 * 1024.0)
+                        ),
+                        backpressure_percent = truncate_log_float(backpressure_percent),
+                        elapsed_seconds = truncate_log_float(elapsed.as_secs_f64()),
+                        eta_seconds = truncate_log_float(eta_seconds),
+                        "golden dataset preparation progress"
+                    );
+                    last_reported_at = now;
+                    last_reported_records = loaded_records;
+                    last_reported_backpressure_ns = backpressure_ns;
+                }
+            }
+        };
+        result.with_context(|| format!("loading records {loaded_records}..{batch_end}"))?;
+        backpressure_ns = backpressure_ns.saturating_add(duration_ns(backpressure));
         loaded_records = batch_end;
     }
+    let elapsed = load_started.elapsed();
+    let average_puts_per_second = loaded_records as f64 / elapsed.as_secs_f64().max(f64::EPSILON);
+    tracing::info!(
+        suite,
+        records_completed = loaded_records,
+        successful_records = loaded_records,
+        total_records = record_count,
+        errors = 0_u64,
+        progress_percent = truncate_log_float(100.0),
+        average_puts_per_second = truncate_log_float(average_puts_per_second),
+        logical_mib_per_second = truncate_log_float(
+            average_puts_per_second * logical_bytes_per_record / (1024.0 * 1024.0)
+        ),
+        backpressure_percent = truncate_log_float(
+            (backpressure_ns as f64 / 1e9 / elapsed.as_secs_f64().max(f64::EPSILON) * 100.0)
+                .min(100.0)
+        ),
+        elapsed_seconds = truncate_log_float(elapsed.as_secs_f64()),
+        "golden dataset insert phase complete"
+    );
     db.flush().await.context("flushing loaded dataset")?;
     Ok(())
 }
@@ -1004,7 +1093,7 @@ pub async fn populate_dataset(
 mod tests {
     use super::{
         capped_writer, key_for_suite, point_payload_bytes, populate_dataset, run_bulk_load,
-        ClosedLoopState,
+        truncate_log_float, ClosedLoopState,
     };
     use crate::config::BenchmarkConfig;
     use anyhow::Result;
@@ -1014,6 +1103,13 @@ mod tests {
     use std::path::Path;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn progress_log_floats_are_truncated_to_two_decimal_places() {
+        assert_eq!(truncate_log_float(1.3359786666666666), 1.33);
+        assert_eq!(truncate_log_float(121_718.11765259692), 121_718.11);
+        assert_eq!(truncate_log_float(-1.0), -1.0);
+    }
 
     #[test]
     fn rocksdb_point_payload_includes_keys_without_changing_ycsb_payload() -> Result<()> {
