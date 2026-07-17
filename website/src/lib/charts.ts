@@ -166,7 +166,6 @@ export function buildCharts(
   };
 
   const apiLabel = (api: string) => `${api}()`;
-  const apiChartLabel = (api: string) => `${api.replace(/^transaction\./, '')}()`;
   const apiDescription = (api: string) => {
     if (api === 'scan') return 'SlateDB scan invocation through iterator exhaustion';
     if (api === 'flush') return 'SlateDB flush() invocation through durable completion';
@@ -194,7 +193,7 @@ export function buildCharts(
       if (api === 'flush' && calls < 2) return [];
       return [{
         key: `api-${api.replaceAll('.', '-')}`,
-        title: `${apiChartLabel(api)} latency`,
+        title: `${apiLabel(api)} latency`,
         description: apiDescription(api),
         unit: 'Milliseconds',
         digits: 3,
