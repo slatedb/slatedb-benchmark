@@ -23,7 +23,7 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use slatedb::admin::{Admin, AdminBuilder, CloneSourceSpec};
-use slatedb::compactor::{Compaction, CompactionSpec, CompactionStatus, SourceId};
+use slatedb::compactor::CompactionStatus;
 use slatedb::config::{CheckpointOptions, Settings};
 use slatedb::db_cache::{
     foyer::{FoyerCache, FoyerCacheOptions},
@@ -38,7 +38,7 @@ use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 const SETTINGS_PATH: &str = "config/settings.toml";
-const COMPACTION_QUIET: Duration = Duration::from_secs(15);
+const COMPACTION_QUIET: Duration = Duration::from_secs(60);
 
 pub async fn execute(args: RunArgs) -> Result<()> {
     validate_name(&args.golden, "golden")?;
@@ -63,7 +63,7 @@ pub async fn execute(args: RunArgs) -> Result<()> {
     let object_store = ObjectStoreContext::load()?;
     let result = match args.task {
         Task::BulkLoad => run_bulk_load(&args, &config, &object_store).await,
-        Task::FullCompaction => run_full_compaction(&args, &config, &object_store).await,
+        Task::Compaction => run_compaction(&args, &config, &object_store).await,
         _ => run_workload(&args, &config, &object_store).await,
     };
     if let Err(error) = &result {
@@ -190,7 +190,7 @@ async fn run_bulk_load(
     print_success(args, false)
 }
 
-async fn run_full_compaction(
+async fn run_compaction(
     args: &RunArgs,
     config: &ResolvedConfig,
     context: &ObjectStoreContext,
@@ -206,7 +206,7 @@ async fn run_full_compaction(
     verify_checkpoint_reference(Arc::clone(&context.control), &bulk.checkpoint).await?;
     validate_uncompacted_checkpoint(Arc::clone(&context.control), &bulk.checkpoint).await?;
 
-    let task_root = golden_task_root(context, &args.golden, Task::FullCompaction);
+    let task_root = golden_task_root(context, &args.golden, Task::Compaction);
     let result_path = task_root.clone().join("result.json");
     if let Some(existing) =
         load_optional::<PreparationResult>(Arc::clone(&context.control), &result_path).await?
@@ -216,11 +216,9 @@ async fn run_full_compaction(
             ensure_preparation_matches(&existing, args, config)?;
             anyhow::ensure!(
                 existing.source_checkpoint.as_ref() == Some(&bulk.checkpoint),
-                "existing full-compaction result belongs to another bulk-load checkpoint"
+                "existing compaction result belongs to another bulk-load checkpoint"
             );
             verify_checkpoint_reference(Arc::clone(&context.control), &existing.checkpoint).await?;
-            validate_compacted_checkpoint(Arc::clone(&context.control), &existing.checkpoint)
-                .await?;
             write_local_result(&args.output, &existing)?;
             return print_success(args, true);
         }
@@ -247,25 +245,33 @@ async fn run_full_compaction(
     )
     .await?;
     let application = Arc::new(ApplicationRegistry::default());
+    let admin = AdminBuilder::new(database_path.clone(), Arc::clone(&context.control)).build();
+    tracing::info!(
+        quiet_seconds = COMPACTION_QUIET.as_secs(),
+        "waiting for normal compaction to settle"
+    );
     let compaction = measure_until_complete(
         application,
         context.instrumented.metrics(),
-        compact_database_fully(database_path.clone(), Arc::clone(&context.control)),
+        wait_for_compactor_quiet(&admin),
     )
     .await;
     let ((), measurement) =
-        close_database_after(&db, compaction, "closing full-compaction database").await?;
+        close_database_after(&db, compaction, "closing compaction database").await?;
+    tracing::info!(
+        quiet_seconds = COMPACTION_QUIET.as_secs(),
+        "normal compaction settled"
+    );
     ensure_measurement_has_no_application_errors(&measurement)?;
     let checkpoint = checkpoint_database(
         database_path,
         Arc::clone(&context.control),
-        &format!("benchmark-{}-full-compaction", args.golden),
+        &format!("benchmark-{}-compaction", args.golden),
     )
     .await?;
-    validate_compacted_checkpoint(Arc::clone(&context.control), &checkpoint).await?;
     let result = PreparationResult {
         status: "ok".to_string(),
-        task: Task::FullCompaction,
+        task: Task::Compaction,
         golden_id: args.golden.clone(),
         timestamp: Utc::now().to_rfc3339(),
         source: SourceIdentity::current(),
@@ -293,17 +299,16 @@ async fn run_workload(
 ) -> Result<()> {
     let session = args.session.as_deref().context("workload session")?;
     let golden = if args.task.uses_golden() {
-        let full_path =
-            golden_task_root(context, &args.golden, Task::FullCompaction).join("result.json");
+        let compaction_path =
+            golden_task_root(context, &args.golden, Task::Compaction).join("result.json");
         let golden: PreparationResult =
-            load_required(Arc::clone(&context.control), &full_path).await?;
+            load_required(Arc::clone(&context.control), &compaction_path).await?;
         validate_preparation_result(&golden)?;
         ensure_shared_configuration(&golden.configuration, config, true)?;
         if golden.source.slate_commit != env!("BENCHMARK_SLATE_COMMIT") {
             bail!("golden checkpoint was created by a different SlateDB commit");
         }
         verify_checkpoint_reference(Arc::clone(&context.control), &golden.checkpoint).await?;
-        validate_compacted_checkpoint(Arc::clone(&context.control), &golden.checkpoint).await?;
         Some(golden)
     } else {
         None
@@ -878,39 +883,6 @@ async fn validate_uncompacted_checkpoint(
     Ok(())
 }
 
-async fn validate_compacted_checkpoint(
-    store: Arc<dyn ObjectStore>,
-    checkpoint: &CheckpointReference,
-) -> Result<()> {
-    let manifest = AdminBuilder::new(Path::from(checkpoint.database_path.clone()), store)
-        .build()
-        .read_manifest(Some(checkpoint.manifest_id))
-        .await
-        .context("reading full-compaction checkpoint manifest")?
-        .context("full-compaction checkpoint manifest does not exist")?;
-    validate_fully_compacted_manifest(&manifest)
-}
-
-async fn compact_database_fully(database_path: Path, store: Arc<dyn ObjectStore>) -> Result<()> {
-    let admin = AdminBuilder::new(database_path, store).build();
-    loop {
-        wait_for_compactor_quiet(&admin).await?;
-        let state = admin
-            .read_compactor_state_view()
-            .await
-            .context("reading compactor state before full compaction")?;
-        let Some(spec) = next_full_compaction_spec(state.manifest())? else {
-            validate_fully_compacted_manifest(state.manifest())?;
-            return Ok(());
-        };
-        let compaction = admin
-            .submit_compaction(spec)
-            .await
-            .context("submitting full-database compaction")?;
-        wait_for_submitted_compaction(&admin, &compaction).await?;
-    }
-}
-
 async fn wait_for_compactor_quiet(admin: &Admin) -> Result<()> {
     let mut stable_since = Instant::now();
     let mut last_state = None;
@@ -949,26 +921,6 @@ async fn wait_for_compactor_quiet(admin: &Admin) -> Result<()> {
     }
 }
 
-async fn wait_for_submitted_compaction(admin: &Admin, submitted: &Compaction) -> Result<()> {
-    let id = submitted.id();
-    loop {
-        let compaction = admin
-            .read_compaction(id, None)
-            .await
-            .with_context(|| format!("reading submitted compaction {id}"))?
-            .with_context(|| format!("submitted compaction {id} disappeared"))?;
-        match compaction.status() {
-            CompactionStatus::Completed => return Ok(()),
-            CompactionStatus::Failed => bail!("full-database compaction {id} failed"),
-            CompactionStatus::Submitted
-            | CompactionStatus::Scheduled
-            | CompactionStatus::Running
-            | CompactionStatus::Compacted => {}
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-}
-
 async fn ensure_no_failed_compactions(path: Path, store: Arc<dyn ObjectStore>) -> Result<()> {
     let state = AdminBuilder::new(path, store)
         .build()
@@ -981,97 +933,6 @@ async fn ensure_no_failed_compactions(path: Path, store: Arc<dyn ObjectStore>) -
                 bail!("compaction {} failed during the workload", compaction.id());
             }
         }
-    }
-    Ok(())
-}
-
-fn next_full_compaction_spec(manifest: &VersionedManifest) -> Result<Option<CompactionSpec>> {
-    let fresh_destination = manifest
-        .compacted()
-        .iter()
-        .map(|run| run.id)
-        .chain(
-            manifest
-                .segments()
-                .iter()
-                .flat_map(|segment| segment.compacted().iter().map(|run| run.id)),
-        )
-        .max()
-        .map_or(Ok(0), |id| {
-            id.checked_add(1).context("sorted-run ID space exhausted")
-        })?;
-    let root_sources = manifest
-        .l0()
-        .iter()
-        .map(|view| SourceId::SstView(view.id))
-        .chain(
-            manifest
-                .compacted()
-                .iter()
-                .map(|run| SourceId::SortedRun(run.id)),
-        )
-        .collect();
-    if let Some(spec) = full_tree_compaction_spec(
-        Bytes::new(),
-        root_sources,
-        manifest.compacted().iter().map(|run| run.id).collect(),
-        manifest.l0().len(),
-        fresh_destination,
-    ) {
-        return Ok(Some(spec));
-    }
-    for segment in manifest.segments() {
-        let sources = segment
-            .l0()
-            .iter()
-            .map(|view| SourceId::SstView(view.id))
-            .chain(
-                segment
-                    .compacted()
-                    .iter()
-                    .map(|run| SourceId::SortedRun(run.id)),
-            )
-            .collect();
-        if let Some(spec) = full_tree_compaction_spec(
-            segment.prefix().clone(),
-            sources,
-            segment.compacted().iter().map(|run| run.id).collect(),
-            segment.l0().len(),
-            fresh_destination,
-        ) {
-            return Ok(Some(spec));
-        }
-    }
-    Ok(None)
-}
-
-fn full_tree_compaction_spec(
-    segment: Bytes,
-    sources: Vec<SourceId>,
-    sorted_run_ids: Vec<u32>,
-    l0_count: usize,
-    fresh_destination: u32,
-) -> Option<CompactionSpec> {
-    if l0_count == 0 && sorted_run_ids.len() <= 1 {
-        return None;
-    }
-    let destination = sorted_run_ids
-        .into_iter()
-        .min()
-        .unwrap_or(fresh_destination);
-    Some(CompactionSpec::for_segment(segment, sources, destination))
-}
-
-fn validate_fully_compacted_manifest(manifest: &VersionedManifest) -> Result<()> {
-    anyhow::ensure!(
-        manifest.l0().is_empty() && manifest.compacted().len() <= 1,
-        "full compaction left root L0 or multiple sorted runs"
-    );
-    for segment in manifest.segments() {
-        anyhow::ensure!(
-            segment.l0().is_empty() && segment.compacted().len() <= 1,
-            "full compaction left segment L0 or multiple sorted runs"
-        );
     }
     Ok(())
 }
@@ -1096,28 +957,14 @@ fn manifest_lsm_digest(manifest: &VersionedManifest) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{full_tree_compaction_spec, sha256_bytes, validate_name, validate_series_digest};
+    use super::{sha256_bytes, validate_name, validate_series_digest};
     use crate::model::SeriesReference;
-    use bytes::Bytes;
-    use slatedb::compactor::SourceId;
 
     #[test]
     fn names_reject_path_components() {
         assert!(validate_name("golden-1", "golden").is_ok());
         assert!(validate_name("../golden", "golden").is_err());
         assert!(validate_name("golden/one", "golden").is_err());
-    }
-
-    #[test]
-    fn one_sorted_run_requires_no_more_full_compaction() {
-        assert!(full_tree_compaction_spec(
-            Bytes::new(),
-            vec![SourceId::SortedRun(7)],
-            vec![7],
-            0,
-            8,
-        )
-        .is_none());
     }
 
     #[test]

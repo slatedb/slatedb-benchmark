@@ -41,9 +41,9 @@ once, and all later workloads use the same mapping.
 
 `bulk-load` runs first. It loads the canonical dataset with background
 compaction disabled, flushes the writes, and saves an uncompacted checkpoint.
-`full-compaction` clones that checkpoint, compacts the database, and saves the
-golden checkpoint. These are tool phases, not workloads. The tool records their
-results separately.
+`compaction` clones that checkpoint, lets SlateDB's normal compactor settle the
+database, and saves the golden checkpoint. These are tool phases, not
+workloads. The tool records their results separately.
 
 ### Bulk load
 
@@ -60,18 +60,20 @@ Progress logs include completed records, recent and average records per second,
 logical MiB/s, physical HTTP upload MiB/s, L0 flush MiB/s, backpressure,
 elapsed time, and ETA.
 
-### Full compaction
+### Compaction
 
 The tool clones the uncompacted checkpoint and opens it with the published
-SlateDB settings. It records the input manifest, triggers a full compaction,
-and waits for SlateDB to report idle. This phase has no warmup or client
-operations. Its output becomes the golden checkpoint. The compaction wait has
-no runner-level deadline. The GitHub job's 24-hour timeout remains the outer
+SlateDB settings. It lets SlateDB schedule compactions normally and waits until
+there are no active compactions and the manifest and compaction state remain
+unchanged for one minute. It does not submit a manual compaction or require a
+specific number of L0 SSTs or sorted runs. This phase has no warmup or client
+operations. Its output becomes the golden checkpoint. The wait has no
+runner-level deadline. The GitHub job's 24-hour timeout remains the outer
 limit.
 
-Measurement starts after the cloned database opens and ends when full
-compaction completes. This phase has no application API rows; its activity
-appears in the object-store, process, and machine tables.
+Measurement starts after the cloned database opens and ends after the normal
+compactor remains idle for one minute. This phase has no application API rows;
+its activity appears in the object-store, process, and machine tables.
 
 The measured steady-state workloads clone the golden checkpoint and do not
 inherit another workload's writes.
@@ -166,7 +168,7 @@ The website shows seven tables: application operations, application throughput,
 application latency, object-store requests, object-store throughput, process
 statistics, and machine statistics. Workload rows expand to charts;
 preparation pages keep tables only. Preparation pages also show checkpoint
-references and golden dataset metadata. Full compaction omits the three empty
+references and golden dataset metadata. Compaction omits the three empty
 application tables. The website omits rows with no calls and keeps zero values
 in rows that have calls. Values in the examples are illustrative.
 
@@ -294,7 +296,7 @@ The runner also checks these preparation and workload invariants:
 
 - `bulk-load` creates the configured number of unique records and saves the
   expected uncompacted manifest.
-- `full-compaction` starts from that manifest and completes without queued work.
+- `compaction` starts from that manifest and remains idle for one minute.
 - Golden workloads start from the saved manifest digest.
 - Idle records no client operations or logical payload.
 - Hit-only reads and updates of the canonical dataset do not miss.

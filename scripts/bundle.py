@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-PREPARATION = ["bulk-load", "full-compaction"]
+PREPARATION = ["bulk-load", "compaction"]
 WORKLOADS = [
     "idle",
     "point-read-uniform",
@@ -101,10 +101,10 @@ def main():
         for task in WORKLOADS
     }
 
-    full = preparation["full-compaction"]
+    compaction = preparation["compaction"]
     bulk = preparation["bulk-load"]
-    if full.get("source_checkpoint") != bulk["checkpoint"]:
-        raise ValueError("full compaction did not use the published bulk-load checkpoint")
+    if compaction.get("source_checkpoint") != bulk["checkpoint"]:
+        raise ValueError("compaction did not use the published bulk-load checkpoint")
 
     source = workloads[WORKLOADS[0]]["source"]
     version = source["slate_version"]
@@ -128,7 +128,7 @@ def main():
                 raise ValueError("sustained-ingest did not start empty")
         else:
             initial = result["initial_state"]
-            checkpoint = full["checkpoint"]
+            checkpoint = compaction["checkpoint"]
             if (
                 initial["checkpoint_id"] != checkpoint["checkpoint_id"]
                 or initial["manifest_id"] != checkpoint["manifest_id"]

@@ -66,15 +66,15 @@ pub fn validate_preparation_result(result: &PreparationResult) -> Result<()> {
             );
             validate_preparation_application_rows(result)?;
         }
-        crate::config::Task::FullCompaction => {
+        crate::config::Task::Compaction => {
             let source = result
                 .source_checkpoint
                 .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("full compaction has no source checkpoint"))?;
+                .ok_or_else(|| anyhow::anyhow!("compaction has no source checkpoint"))?;
             validate_checkpoint(source)?;
             ensure!(
                 source.checkpoint_id != result.checkpoint.checkpoint_id,
-                "full compaction reused its source checkpoint"
+                "compaction reused its source checkpoint"
             );
             validate_preparation_application_rows(result)?;
         }
@@ -844,11 +844,11 @@ fn validate_preparation_application_rows(result: &PreparationResult) -> Result<(
                 "bulk-load write throughput differs from logical dataset bytes"
             );
         }
-        Task::FullCompaction => ensure!(
+        Task::Compaction => ensure!(
             result.application.operations.is_empty()
                 && result.application.throughput.is_empty()
                 && result.application.latency.is_empty(),
-            "full compaction must not record application calls"
+            "compaction must not record application calls"
         ),
         _ => unreachable!("checked preparation task"),
     }

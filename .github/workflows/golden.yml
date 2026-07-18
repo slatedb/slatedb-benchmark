@@ -135,13 +135,13 @@ jobs:
           if-no-files-found: ignore
           overwrite: true
 
-  full-compaction:
+  compaction:
     needs: [build, bulk-load]
     runs-on: warp-ubuntu-latest-x64-16x
     timeout-minutes: 1440
     environment: benchmark
     concurrency:
-      group: golden-${{ inputs.golden_id }}-full-compaction
+      group: golden-${{ inputs.golden_id }}-compaction
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
@@ -152,7 +152,7 @@ jobs:
           name: benchmark-runner
           path: bin
       - run: chmod +x bin/slatedb-benchmark
-      - name: Run full compaction
+      - name: Run compaction
         shell: bash
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
@@ -171,15 +171,15 @@ jobs:
           export SLATEDB_BENCH_REGION=${SLATEDB_BENCH_REGION:-fra}
           export SLATEDB_BENCH_RUNNER_TYPE=${SLATEDB_BENCH_RUNNER_TYPE:-warp-ubuntu-latest-x64-16x}
           bin/slatedb-benchmark run \
-            --task full-compaction \
+            --task compaction \
             --golden "$GOLDEN_ID" \
             --scale "$BENCHMARK_SCALE" \
-            --output .runs/preparation/full-compaction
+            --output .runs/preparation/compaction
       - name: Preserve result
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: golden-full-compaction
-          path: .runs/preparation/full-compaction
+          name: golden-compaction
+          path: .runs/preparation/compaction
           if-no-files-found: ignore
           overwrite: true

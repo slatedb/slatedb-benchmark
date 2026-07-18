@@ -55,7 +55,7 @@ A measured preparation phase follows this sequence:
 ```text
 open database and caches
 reset recorders and take counter baselines
-run bulk load through its final flush, or run full compaction to completion
+run bulk load through its final flush, or wait for compaction to settle
 stop recorders
 close database and create checkpoint
 write and validate the result
@@ -63,7 +63,7 @@ write and validate the result
 
 Database cloning, opening, closing, checkpoint creation, and validation stay
 outside preparation metrics. Bulk-load `write` rows count 1,024-record API
-batches. Full compaction has no application rows.
+batches. Compaction has no application rows.
 
 The runner implements the metric definitions in
 [`BENCHMARKS.md`](BENCHMARKS.md) at these boundaries:
@@ -110,7 +110,7 @@ Preparation data and benchmark sessions have different lifetimes:
 ```text
 goldens/<golden-id>/
   bulk-load/result.json
-  full-compaction/result.json
+  compaction/result.json
 
 sessions/<session>/
   <workload>/series.json
@@ -171,7 +171,7 @@ Usage: slatedb-benchmark run [OPTIONS] --task <TASK> --golden <GOLDEN_ID> \
 Options:
       --task <TASK>
           Preparation task or workload from BENCHMARKS.md
-          [possible values: bulk-load, full-compaction, idle,
+          [possible values: bulk-load, compaction, idle,
           point-read-uniform, point-read-skewed, point-read-missing,
           read-heavy, balanced, update-heavy, range-scan, sustained-ingest,
           transaction-contention]
@@ -196,15 +196,15 @@ Examples:
   slatedb-benchmark run --task bulk-load --golden slatedb-v0.14.1-001 \
     --scale 1.0 --output .runs/bulk-load
 
-  slatedb-benchmark run --task full-compaction --golden slatedb-v0.14.1-001 \
-    --scale 1.0 --output .runs/full-compaction
+  slatedb-benchmark run --task compaction --golden slatedb-v0.14.1-001 \
+    --scale 1.0 --output .runs/compaction
 
   slatedb-benchmark run --task balanced --golden slatedb-v0.14.1-001 \
     --session github-123456 --scale 1.0 --output .runs/balanced
 ```
 
-Full compaction requires `bulk-load/result.json`. A golden workload requires
-`full-compaction/result.json`. The workflow passes its `scale` input to
+Compaction requires `bulk-load/result.json`. A golden workload requires
+`compaction/result.json`. The workflow passes its `scale` input to
 `--scale`; the scaling rules remain in [`BENCHMARKS.md`](BENCHMARKS.md).
 
 Logs go to stderr. Stdout contains one machine-readable status record. Failure
@@ -258,15 +258,15 @@ $ gh workflow run benchmark.yml \
 | --- | --- |
 | `build` | Resolve SlateDB and build the runner |
 | `bulk-load` | Restore or create the uncompacted checkpoint |
-| `full-compaction` | Restore or create the golden checkpoint |
+| `compaction` | Restore or create the golden checkpoint |
 
-Full compaction waits for the bulk-load job. Both jobs use the `result.json`
+Compaction waits for the bulk-load job. Both jobs use the `result.json`
 recovery rule defined above. A repeat dispatch skips phases with valid results.
 Before rerunning a phase without a result, the workflow deletes that phase's
-database prefix. Retrying full compaction preserves the bulk-load checkpoint
-and replaces only the incomplete compacted clone.
+database prefix. Retrying compaction preserves the bulk-load checkpoint and
+replaces only the incomplete clone.
 
-The full-compaction job has a 24-hour GitHub timeout and no shorter runner
+The compaction job has a 24-hour GitHub timeout and no shorter runner
 deadline. The workflow leaves both checkpoints in Tigris. Use a new golden ID
 after changing the SlateDB commit or preparation configuration.
 
@@ -325,7 +325,7 @@ results/<version>/
   run.json
   preparation/
     bulk-load/result.json
-    full-compaction/result.json
+    compaction/result.json
   workload/
     <name>/
       result.json

@@ -6,8 +6,8 @@ const RUN_EXAMPLES: &str = r#"Examples:
   slatedb-benchmark run --task bulk-load --golden slatedb-v0.14.1-001 \
     --scale 1.0 --output .runs/bulk-load
 
-  slatedb-benchmark run --task full-compaction --golden slatedb-v0.14.1-001 \
-    --scale 1.0 --output .runs/full-compaction
+  slatedb-benchmark run --task compaction --golden slatedb-v0.14.1-001 \
+    --scale 1.0 --output .runs/compaction
 
   slatedb-benchmark run --task balanced --golden slatedb-v0.14.1-001 \
     --session github-123456 --scale 1.0 --output .runs/balanced"#;

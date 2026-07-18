@@ -77,7 +77,7 @@ impl FromStr for BenchmarkScale {
 #[clap(rename_all = "kebab-case")]
 pub enum Task {
     BulkLoad,
-    FullCompaction,
+    Compaction,
     Idle,
     PointReadUniform,
     PointReadSkewed,
@@ -105,13 +105,13 @@ impl Task {
     ];
 
     pub const fn is_preparation(self) -> bool {
-        matches!(self, Self::BulkLoad | Self::FullCompaction)
+        matches!(self, Self::BulkLoad | Self::Compaction)
     }
 
     pub const fn uses_golden(self) -> bool {
         !matches!(
             self,
-            Self::BulkLoad | Self::FullCompaction | Self::SustainedIngest
+            Self::BulkLoad | Self::Compaction | Self::SustainedIngest
         )
     }
 
@@ -130,7 +130,7 @@ impl Task {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::BulkLoad => "bulk-load",
-            Self::FullCompaction => "full-compaction",
+            Self::Compaction => "compaction",
             Self::Idle => "idle",
             Self::PointReadUniform => "point-read-uniform",
             Self::PointReadSkewed => "point-read-skewed",
@@ -369,7 +369,7 @@ fn task_config(task: Task, scale: BenchmarkScale, record_count: u64) -> TaskConf
             scaled_u64(WARMUP_MS, MIN_DURATION_MS, scale)
         },
         measurement_ms: match task {
-            Task::BulkLoad | Task::FullCompaction => 0,
+            Task::BulkLoad | Task::Compaction => 0,
             Task::Idle => scaled_u64(IDLE_MS, MIN_DURATION_MS, scale),
             Task::SustainedIngest => scaled_u64(INGEST_MS, MIN_DURATION_MS, scale),
             _ => scaled_u64(MEASUREMENT_MS, MIN_DURATION_MS, scale),
@@ -420,7 +420,7 @@ fn task_config(task: Task, scale: BenchmarkScale, record_count: u64) -> TaskConf
             config.transaction_reads = Some(5);
             config.transaction_updates = Some(5);
         }
-        Task::BulkLoad | Task::FullCompaction | Task::Idle => {}
+        Task::BulkLoad | Task::Compaction | Task::Idle => {}
     }
     config
 }

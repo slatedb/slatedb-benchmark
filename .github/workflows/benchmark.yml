@@ -62,7 +62,7 @@ jobs:
           endpoint=${AWS_ENDPOINT_URL_S3:-https://t3.storage.dev}
           bucket=${SLATEDB_BENCH_BUCKET:-${TIGRIS_BUCKET_PREFIX}-slatedb}
           prefix=${SLATEDB_BENCH_PREFIX:-benchmark}
-          for task in bulk-load full-compaction; do
+          for task in bulk-load compaction; do
             mkdir -p ".runs/bundle/preparation/$task"
             aws s3 cp --endpoint-url "$endpoint" --only-show-errors \
               "s3://$bucket/$prefix/goldens/$GOLDEN_ID/$task/result.json" \
@@ -83,12 +83,12 @@ jobs:
             exit 1
           fi
           bulk=.runs/bundle/preparation/bulk-load/result.json
-          full=.runs/bundle/preparation/full-compaction/result.json
+          compaction=.runs/bundle/preparation/compaction/result.json
           jq -e --arg golden "$GOLDEN_ID" \
             '.status == "ok" and .task == "bulk-load" and .golden_id == $golden' "$bulk" >/dev/null
           jq -e --arg golden "$GOLDEN_ID" \
-            '.status == "ok" and .task == "full-compaction" and .golden_id == $golden' "$full" >/dev/null
-          for result in "$bulk" "$full"; do
+            '.status == "ok" and .task == "compaction" and .golden_id == $golden' "$compaction" >/dev/null
+          for result in "$bulk" "$compaction"; do
             if ! jq -e '
               .recorded_interval_ns > 0 and
               (.environment | type == "object") and
@@ -101,14 +101,14 @@ jobs:
               exit 1
             fi
           done
-          commit=$(jq -r .source.slate_commit "$full")
-          version=$(jq -r .source.slate_version "$full")
+          commit=$(jq -r .source.slate_commit "$compaction")
+          version=$(jq -r .source.slate_version "$compaction")
           test "$commit" = "$(jq -r .source.slate_commit "$bulk")"
           jq -e --argjson scale "$BENCHMARK_SCALE" \
             '.configuration.scale == $scale' "$bulk" >/dev/null
           jq -e --argjson scale "$BENCHMARK_SCALE" \
-            '.configuration.scale == $scale' "$full" >/dev/null
-          test "$(jq -r .source_checkpoint.checkpoint_id "$full")" = \
+            '.configuration.scale == $scale' "$compaction" >/dev/null
+          test "$(jq -r .source_checkpoint.checkpoint_id "$compaction")" = \
             "$(jq -r .checkpoint.checkpoint_id "$bulk")"
           if [[ ${ACT:-false} == true ]]; then
             started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)

@@ -65,7 +65,7 @@ export type ResolvedConfiguration = {
 
 export type PreparationResult = {
   status: 'ok';
-  task: 'bulk-load' | 'full-compaction';
+  task: 'bulk-load' | 'compaction';
   golden_id: string;
   timestamp: string;
   source: SourceIdentity;
@@ -301,7 +301,7 @@ function compareRoutes(left: ResultRoute<unknown>, right: ResultRoute<unknown>) 
 
 const taskOrder = [
   'bulk-load',
-  'full-compaction',
+  'compaction',
   'idle',
   'point-read-uniform',
   'point-read-skewed',
