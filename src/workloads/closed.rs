@@ -1,7 +1,7 @@
 use super::durability::DurabilitySender;
 use super::stats::{record_error, record_success, WorkerStats};
 use super::util::{key_for_id, missing_key_for_id, KeySelector, ValueGenerator};
-use crate::config::{ResolvedConfig, Task};
+use crate::config::{ResolvedConfig, Task, TaskConfig};
 use crate::instrumented_store::StoreMetrics;
 use crate::system::{
     counter_value, duration_ns, measure_backpressure, ApplicationRecorder, ApplicationRegistry,
@@ -19,6 +19,60 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WorkloadOperation {
+    Get,
+    Put,
+    Scan,
+    Transaction,
+}
+
+fn configured_operations(config: &TaskConfig) -> Result<Vec<(f64, WorkloadOperation)>> {
+    config.validate()?;
+    let mut cumulative = 0.0;
+    Ok(config
+        .operation_mix
+        .iter()
+        .map(|(name, fraction)| {
+            let operation = match name.as_str() {
+                "get" => WorkloadOperation::Get,
+                "put" => WorkloadOperation::Put,
+                "scan" => WorkloadOperation::Scan,
+                "transaction" => WorkloadOperation::Transaction,
+                _ => unreachable!("validated operation mix"),
+            };
+            cumulative += fraction;
+            (cumulative, operation)
+        })
+        .collect())
+}
+
+fn select_operation(operations: &[(f64, WorkloadOperation)], draw: f64) -> WorkloadOperation {
+    operations
+        .iter()
+        .find(|(threshold, _)| draw < *threshold)
+        .or_else(|| operations.last())
+        .map(|(_, operation)| *operation)
+        .expect("active workload has an operation")
+}
+
+fn configured_key_selector(config: &ResolvedConfig) -> Result<KeySelector> {
+    let selection_domain = config
+        .task
+        .transaction_hot_keys
+        .unwrap_or(config.dataset.record_count);
+    match config.task.key_selection.as_str() {
+        "scrambled-zipfian-0.99" => Ok(KeySelector::zipfian(selection_domain)),
+        "uniform" | "uniform-absent" | "unique-sequential" | "uniform-hot-set" => {
+            Ok(KeySelector::uniform(selection_domain))
+        }
+        _ => anyhow::bail!(
+            "{} is not an active key selection",
+            config.task.key_selection
+        ),
+    }
+}
+
 pub async fn run_phase(
     db: Arc<Db>,
     config: &ResolvedConfig,
@@ -30,6 +84,7 @@ pub async fn run_phase(
         tokio::time::sleep(duration).await;
         return Ok(WorkerStats::default());
     }
+    let operations = Arc::new(configured_operations(&config.task)?);
     let next_insert = Arc::new(AtomicU64::new(0));
     let deadline = Instant::now() + duration;
     let mut tasks = JoinSet::new();
@@ -39,8 +94,18 @@ pub async fn run_phase(
         let recorder = registry.as_ref().map(|registry| registry.recorder());
         let durability = durability.clone();
         let next_insert = Arc::clone(&next_insert);
+        let operations = Arc::clone(&operations);
         tasks.spawn(async move {
-            worker_loop(db, config, deadline, recorder, durability, next_insert).await
+            worker_loop(
+                db,
+                config,
+                deadline,
+                recorder,
+                durability,
+                next_insert,
+                operations,
+            )
+            .await
         });
     }
     let mut merged = WorkerStats::default();
@@ -57,129 +122,31 @@ async fn worker_loop(
     recorder: Option<ApplicationRecorder>,
     durability: Option<DurabilitySender>,
     next_insert: Arc<AtomicU64>,
+    operations: Arc<Vec<(f64, WorkloadOperation)>>,
 ) -> Result<WorkerStats> {
     let mut rng = StdRng::from_os_rng();
-    let selector = if matches!(
-        config.task.task,
-        Task::PointReadSkewed | Task::ReadHeavy | Task::Balanced | Task::UpdateHeavy
-    ) {
-        KeySelector::zipfian(config.dataset.record_count)
-    } else {
-        KeySelector::uniform(config.dataset.record_count)
-    };
+    let selector = configured_key_selector(&config)?;
     let mut values = ValueGenerator::new();
     let mut stats = WorkerStats::default();
     while Instant::now() < deadline {
-        match config.task.task {
-            Task::PointReadUniform | Task::PointReadSkewed => {
+        match select_operation(&operations, rng.random()) {
+            WorkloadOperation::Get => {
                 get(
                     &db,
                     &config,
                     selector.sample(&mut rng),
-                    false,
+                    config.task.key_selection == "uniform-absent",
                     recorder.as_ref(),
                     &mut stats,
                 )
                 .await;
             }
-            Task::PointReadMissing => {
-                get(
-                    &db,
-                    &config,
-                    selector.sample(&mut rng),
-                    true,
-                    recorder.as_ref(),
-                    &mut stats,
-                )
-                .await;
-            }
-            Task::ReadHeavy => {
-                if rng.random_bool(0.95) {
-                    get(
-                        &db,
-                        &config,
-                        selector.sample(&mut rng),
-                        false,
-                        recorder.as_ref(),
-                        &mut stats,
-                    )
-                    .await;
+            WorkloadOperation::Put => {
+                let id = if config.task.key_selection == "unique-sequential" {
+                    next_insert.fetch_add(1, Ordering::Relaxed)
                 } else {
-                    put(
-                        &db,
-                        &config,
-                        selector.sample(&mut rng),
-                        recorder.as_ref(),
-                        durability.as_ref(),
-                        &mut rng,
-                        &mut values,
-                        &mut stats,
-                    )
-                    .await;
-                }
-            }
-            Task::Balanced => {
-                if rng.random_bool(0.5) {
-                    get(
-                        &db,
-                        &config,
-                        selector.sample(&mut rng),
-                        false,
-                        recorder.as_ref(),
-                        &mut stats,
-                    )
-                    .await;
-                } else {
-                    put(
-                        &db,
-                        &config,
-                        selector.sample(&mut rng),
-                        recorder.as_ref(),
-                        durability.as_ref(),
-                        &mut rng,
-                        &mut values,
-                        &mut stats,
-                    )
-                    .await;
-                }
-            }
-            Task::UpdateHeavy => {
-                if rng.random_bool(0.05) {
-                    get(
-                        &db,
-                        &config,
-                        selector.sample(&mut rng),
-                        false,
-                        recorder.as_ref(),
-                        &mut stats,
-                    )
-                    .await;
-                } else {
-                    put(
-                        &db,
-                        &config,
-                        selector.sample(&mut rng),
-                        recorder.as_ref(),
-                        durability.as_ref(),
-                        &mut rng,
-                        &mut values,
-                        &mut stats,
-                    )
-                    .await;
-                }
-            }
-            Task::RangeScan => {
-                scan(
-                    &db,
-                    &config,
-                    selector.sample(&mut rng),
-                    recorder.as_ref(),
-                    &mut stats,
-                )
-                .await;
-            }
-            Task::SustainedIngest => {
-                let id = next_insert.fetch_add(1, Ordering::Relaxed);
+                    selector.sample(&mut rng)
+                };
                 put(
                     &db,
                     &config,
@@ -192,10 +159,21 @@ async fn worker_loop(
                 )
                 .await;
             }
-            Task::TransactionContention => {
+            WorkloadOperation::Scan => {
+                scan(
+                    &db,
+                    &config,
+                    selector.sample(&mut rng),
+                    recorder.as_ref(),
+                    &mut stats,
+                )
+                .await;
+            }
+            WorkloadOperation::Transaction => {
                 transaction(
                     &db,
                     &config,
+                    &selector,
                     recorder.as_ref(),
                     durability.as_ref(),
                     &mut rng,
@@ -203,9 +181,6 @@ async fn worker_loop(
                     &mut stats,
                 )
                 .await;
-            }
-            Task::BulkLoad | Task::FullCompaction | Task::Idle => {
-                anyhow::bail!("{} is not an active workload", config.task.task);
             }
         }
     }
@@ -336,6 +311,7 @@ async fn scan(
 async fn transaction(
     db: &Db,
     config: &ResolvedConfig,
+    selector: &KeySelector,
     recorder: Option<&ApplicationRecorder>,
     durability: Option<&DurabilitySender>,
     rng: &mut StdRng,
@@ -351,13 +327,9 @@ async fn transaction(
             return;
         }
     };
-    let hot_keys = config.task.transaction_hot_keys.unwrap_or(10_000).max(1);
-    let mut operations = [
-        true, true, true, true, true, false, false, false, false, false,
-    ];
-    operations.shuffle(rng);
+    let operations = configured_transaction_operations(&config.task, rng);
     for read in operations {
-        let id = rng.random_range(0..hot_keys);
+        let id = selector.sample(rng);
         let key = key_for_id(id, config.dataset.key_bytes);
         if read {
             let started = Instant::now();
@@ -416,6 +388,19 @@ async fn transaction(
             tracing::debug!(%error, "transaction commit failed");
         }
     }
+}
+
+fn configured_transaction_operations(config: &TaskConfig, rng: &mut StdRng) -> Vec<bool> {
+    let reads = config
+        .transaction_reads
+        .expect("validated transaction read count");
+    let updates = config
+        .transaction_updates
+        .expect("validated transaction update count");
+    let mut operations = vec![true; reads];
+    operations.resize(reads + updates, false);
+    operations.shuffle(rng);
+    operations
 }
 
 pub(crate) const DATASET_BATCH_RECORDS: u64 = 1_024;
@@ -724,11 +709,68 @@ fn truncate(value: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::truncate;
+    use super::{
+        configured_key_selector, configured_operations, configured_transaction_operations,
+        select_operation, truncate, WorkloadOperation,
+    };
+    use crate::config::{load, BenchmarkScale, Task};
+    use crate::workloads::util::KeySelector;
+    use rand::SeedableRng;
+    use std::path::Path;
 
     #[test]
     fn progress_values_have_two_decimal_places() {
         assert_eq!(truncate(1.3359), 1.33);
         assert_eq!(truncate(121_718.117), 121_718.11);
+    }
+
+    #[test]
+    fn operation_mix_drives_worker_selection() {
+        let mut config = load(
+            Task::Balanced,
+            BenchmarkScale::FULL,
+            Path::new("config/settings.toml"),
+        )
+        .expect("balanced config");
+        config.task.operation_mix.insert("get".to_string(), 0.8);
+        config.task.operation_mix.insert("put".to_string(), 0.2);
+        let operations = configured_operations(&config.task).expect("configured operations");
+
+        assert_eq!(select_operation(&operations, 0.79), WorkloadOperation::Get);
+        assert_eq!(select_operation(&operations, 0.8), WorkloadOperation::Put);
+    }
+
+    #[test]
+    fn key_selection_drives_selector_type() {
+        let mut config = load(
+            Task::PointReadUniform,
+            BenchmarkScale::FULL,
+            Path::new("config/settings.toml"),
+        )
+        .expect("point-read config");
+        config.task.key_selection = "scrambled-zipfian-0.99".to_string();
+
+        assert!(matches!(
+            configured_key_selector(&config).expect("configured selector"),
+            KeySelector::ScrambledZipfian { .. }
+        ));
+    }
+
+    #[test]
+    fn transaction_shape_drives_operation_plan() {
+        let mut config = load(
+            Task::TransactionContention,
+            BenchmarkScale::FULL,
+            Path::new("config/settings.toml"),
+        )
+        .expect("transaction config");
+        config.task.transaction_reads = Some(2);
+        config.task.transaction_updates = Some(3);
+        config.task.validate().expect("transaction shape");
+        let mut rng = rand::rngs::StdRng::seed_from_u64(7);
+        let operations = configured_transaction_operations(&config.task, &mut rng);
+
+        assert_eq!(operations.iter().filter(|read| **read).count(), 2);
+        assert_eq!(operations.iter().filter(|read| !**read).count(), 3);
     }
 }

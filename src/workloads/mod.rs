@@ -3,7 +3,7 @@ mod durability;
 mod stats;
 mod util;
 
-use crate::config::{ResolvedConfig, Task};
+use crate::config::{ResolvedConfig, TaskConfig};
 use crate::instrumented_store::StoreMetrics;
 use crate::system::{
     sample_until_stopped_with_rate_control, ApplicationRegistry, RateWindowControl,
@@ -41,7 +41,7 @@ pub async fn execute(
                 warmup_stats.errors
             );
         }
-        validate_stats(config.task.task, &warmup_stats)?;
+        validate_stats(&config.task, &warmup_stats)?;
         if config.task.task.may_write() {
             db.flush().await.context("flushing warmup writes")?;
         }
@@ -143,7 +143,7 @@ pub async fn execute(
         }
         measurement.add_latency_histogram("durable", result.lag);
     }
-    validate_workload(config.task.task, &stats, &measurement)?;
+    validate_workload(config, &stats, &measurement)?;
     if measurement.errors() > 0 {
         bail!(
             "workload recorded {} API or HTTP errors",
@@ -159,29 +159,20 @@ pub async fn execute(
 }
 
 fn validate_workload(
-    task: Task,
+    config: &ResolvedConfig,
     stats: &WorkerStats,
     measurement: &SampledMeasurement,
 ) -> Result<()> {
-    validate_stats(task, stats)?;
-    validate_mix(task, measurement)
+    validate_stats(&config.task, stats)?;
+    validate_mix(&config.task, measurement)
 }
 
-fn validate_stats(task: Task, stats: &WorkerStats) -> Result<()> {
+fn validate_stats(config: &TaskConfig, stats: &WorkerStats) -> Result<()> {
     if stats.errors > 0 {
         bail!("workload completed with {} operation errors", stats.errors);
     }
-    match task {
-        Task::PointReadUniform
-        | Task::PointReadSkewed
-        | Task::ReadHeavy
-        | Task::Balanced
-        | Task::UpdateHeavy => {
-            if stats.read_misses > 0 {
-                bail!("hit-only workload recorded {} misses", stats.read_misses);
-            }
-        }
-        Task::PointReadMissing => {
+    if config.operation_mix.contains_key("get") {
+        if config.key_selection == "uniform-absent" {
             if stats.read_hits > 0 || stats.read_misses == 0 {
                 bail!(
                     "missing-read workload recorded {} hits and {} misses",
@@ -189,64 +180,58 @@ fn validate_stats(task: Task, stats: &WorkerStats) -> Result<()> {
                     stats.read_misses
                 );
             }
+        } else if stats.read_misses > 0 {
+            bail!("hit-only workload recorded {} misses", stats.read_misses);
         }
-        Task::TransactionContention => {
-            if stats.transaction_attempts
-                != stats
-                    .transaction_commits
-                    .saturating_add(stats.transaction_conflicts)
-            {
-                bail!("transaction outcomes do not reconcile with attempts");
-            }
-        }
-        _ => {}
+    }
+    if config.operation_mix.contains_key("transaction")
+        && stats.transaction_attempts
+            != stats
+                .transaction_commits
+                .saturating_add(stats.transaction_conflicts)
+    {
+        bail!("transaction outcomes do not reconcile with attempts");
     }
     Ok(())
 }
 
-fn validate_mix(task: Task, measurement: &SampledMeasurement) -> Result<()> {
+fn validate_mix(config: &TaskConfig, measurement: &SampledMeasurement) -> Result<()> {
+    let (Some(expected_get), Some(expected_put)) = (
+        config.operation_mix.get("get"),
+        config.operation_mix.get("put"),
+    ) else {
+        return Ok(());
+    };
+    let expected = expected_get / (expected_get + expected_put);
     let get = measurement.operation_total("get");
     let put = measurement.operation_total("put");
-    let total = get.saturating_add(put);
-    let expected = match task {
-        Task::ReadHeavy => Some(0.95),
-        Task::Balanced => Some(0.5),
-        Task::UpdateHeavy => Some(0.05),
-        _ => None,
-    };
-    if let Some(expected) = expected {
-        let observed = get as f64 / total.max(1) as f64;
-        anyhow::ensure!(
-            (observed - expected).abs() <= 0.01,
-            "observed read mix {observed:.4} differs from expected {expected:.4}"
-        );
-    }
+    let observed = get as f64 / get.saturating_add(put).max(1) as f64;
+    anyhow::ensure!(
+        (observed - expected).abs() <= 0.01,
+        "observed read mix {observed:.4} differs from configured {expected:.4}"
+    );
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::validate_workload;
-    use crate::config::Task;
-    use crate::instrumented_store::StoreMetrics;
-    use crate::system::{sample_until_stopped, ApplicationRegistry};
+    use super::validate_stats;
+    use crate::config::{load, BenchmarkScale, Task};
     use crate::workloads::stats::WorkerStats;
-    use std::sync::Arc;
-    use tokio::sync::watch;
+    use std::path::Path;
 
-    #[tokio::test]
-    async fn missing_reads_require_misses_and_no_hits() {
-        let registry = Arc::new(ApplicationRegistry::default());
-        let (_tx, rx) = watch::channel(true);
-        let measurement =
-            sample_until_stopped(registry, Arc::new(StoreMetrics::default()), rx, None)
-                .await
-                .expect("measurement");
+    #[test]
+    fn missing_reads_require_misses_and_no_hits() {
+        let config = load(
+            Task::PointReadMissing,
+            BenchmarkScale::FULL,
+            Path::new("config/settings.toml"),
+        )
+        .expect("missing-read config");
         let stats = WorkerStats {
             read_misses: 1,
             ..Default::default()
         };
-        validate_workload(Task::PointReadMissing, &stats, &measurement)
-            .expect("valid missing reads");
+        validate_stats(&config.task, &stats).expect("valid missing reads");
     }
 }

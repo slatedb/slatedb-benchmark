@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{ensure, Context, Result};
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 use slatedb::config::Settings;
@@ -192,6 +192,106 @@ pub struct TaskConfig {
     pub transaction_updates: Option<usize>,
 }
 
+impl TaskConfig {
+    pub(crate) fn validate(&self) -> Result<()> {
+        let active = !self.task.is_preparation() && self.task != Task::Idle;
+        ensure!(
+            matches!(
+                self.key_selection.as_str(),
+                "none"
+                    | "uniform"
+                    | "scrambled-zipfian-0.99"
+                    | "uniform-absent"
+                    | "unique-sequential"
+                    | "uniform-hot-set"
+            ),
+            "unknown key selection {}",
+            self.key_selection
+        );
+        ensure!(
+            active != self.operation_mix.is_empty(),
+            "active workloads must define an operation mix"
+        );
+        ensure!(
+            active != (self.key_selection == "none"),
+            "active workloads must define key selection"
+        );
+
+        let mut total = 0.0;
+        for (operation, fraction) in &self.operation_mix {
+            ensure!(
+                matches!(operation.as_str(), "get" | "put" | "scan" | "transaction"),
+                "unknown workload operation {operation}"
+            );
+            ensure!(
+                fraction.is_finite() && *fraction > 0.0,
+                "workload operation {operation} has an invalid fraction"
+            );
+            total += fraction;
+        }
+        if active {
+            ensure!(
+                (total - 1.0).abs() <= 1e-9,
+                "workload operation mix sums to {total}, not 1"
+            );
+            let writes = self.operation_mix.contains_key("put")
+                || self.operation_mix.contains_key("transaction");
+            ensure!(
+                writes == self.task.may_write(),
+                "operation mix write behavior disagrees with task {}",
+                self.task
+            );
+        }
+
+        let transactions = self.operation_mix.contains_key("transaction");
+        if transactions {
+            let hot_keys = self
+                .transaction_hot_keys
+                .context("transaction workload has no hot-key count")?;
+            let reads = self
+                .transaction_reads
+                .context("transaction workload has no read count")?;
+            let updates = self
+                .transaction_updates
+                .context("transaction workload has no update count")?;
+            ensure!(hot_keys > 0, "transaction hot-key count is zero");
+            let operation_count = reads
+                .checked_add(updates)
+                .context("transaction operation count overflows")?;
+            ensure!(operation_count > 0, "transaction has no operations");
+            ensure!(
+                operation_count <= 10_000,
+                "transaction has too many operations"
+            );
+            ensure!(updates > 0, "transaction must contain an update");
+            ensure!(
+                self.key_selection == "uniform-hot-set",
+                "transaction workload must select from its hot set"
+            );
+        } else {
+            ensure!(
+                self.transaction_hot_keys.is_none()
+                    && self.transaction_reads.is_none()
+                    && self.transaction_updates.is_none(),
+                "non-transaction workload has transaction settings"
+            );
+        }
+
+        if self.operation_mix.contains_key("scan") {
+            ensure!(
+                self.scan_limit.is_some_and(|limit| limit > 0),
+                "scan workload has no positive limit"
+            );
+        } else {
+            ensure!(
+                self.scan_limit.is_none(),
+                "non-scan workload has a scan limit"
+            );
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ResolvedConfig {
     pub scale: f64,
@@ -232,6 +332,9 @@ pub fn load(task: Task, scale: BenchmarkScale, settings_path: &Path) -> Result<R
         .object_store_cache_options
         .preload_disk_cache_on_startup = None;
     let task_config = task_config(task, scale, dataset.record_count);
+    task_config
+        .validate()
+        .context("validating task configuration")?;
     Ok(ResolvedConfig {
         scale: scale.factor(),
         dataset,

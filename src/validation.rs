@@ -247,6 +247,7 @@ fn validate_configuration(
         configuration.task.task == task,
         "configuration belongs to another task"
     );
+    configuration.task.validate()?;
     ensure!(
         configuration.scale.is_finite() && configuration.scale > 0.0 && configuration.scale <= 1.0,
         "configuration scale is invalid"
@@ -263,6 +264,12 @@ fn validate_configuration(
         configuration.dataset.value_bytes > 0,
         "configuration has zero-byte values"
     );
+    if let Some(hot_keys) = configuration.task.transaction_hot_keys {
+        ensure!(
+            hot_keys <= configuration.dataset.record_count,
+            "transaction hot set exceeds the dataset"
+        );
+    }
     ensure!(configuration.caches.block_bytes > 0, "block cache is empty");
     ensure!(
         configuration.caches.metadata_bytes > 0,
@@ -403,29 +410,27 @@ fn validate_preparation_application_rows(result: &PreparationResult) -> Result<(
 }
 
 fn validate_application_rows(result: &WorkloadResult) -> Result<()> {
-    use crate::config::Task;
-
-    let expected: &[&str] = match result.task {
-        Task::Idle => &[],
-        Task::PointReadUniform | Task::PointReadSkewed | Task::PointReadMissing => &["get"],
-        Task::ReadHeavy | Task::Balanced | Task::UpdateHeavy => &["get", "put", "flush"],
-        Task::RangeScan => &["scan"],
-        Task::SustainedIngest => &["put", "flush"],
-        Task::TransactionContention => &[
-            "transaction.get",
-            "transaction.put",
-            "transaction.commit",
-            "flush",
-        ],
-        Task::BulkLoad | Task::FullCompaction => unreachable!("checked workload task"),
-    };
+    let mut expected = BTreeSet::new();
+    for operation in result.configuration.task.operation_mix.keys() {
+        match operation.as_str() {
+            "get" | "put" | "scan" => {
+                expected.insert(operation.as_str());
+            }
+            "transaction" => {
+                expected.extend(["transaction.get", "transaction.put", "transaction.commit"]);
+            }
+            _ => unreachable!("validated operation mix"),
+        }
+    }
+    if result.task.may_write() {
+        expected.insert("flush");
+    }
     let actual = result
         .application
         .operations
         .keys()
         .map(String::as_str)
         .collect::<BTreeSet<_>>();
-    let expected = expected.iter().copied().collect::<BTreeSet<_>>();
     ensure!(
         actual == expected,
         "application operation rows do not match the workload"
@@ -451,28 +456,47 @@ fn validate_application_rows(result: &WorkloadResult) -> Result<()> {
             "write workload must record exactly one final flush"
         );
         let durable = result.application.latency["durable"].count;
-        match result.task {
-            Task::ReadHeavy | Task::Balanced | Task::UpdateHeavy | Task::SustainedIngest => {
-                ensure!(
-                    durable == result.application.operations["put"].total,
-                    "durability count does not match accepted puts"
-                );
-            }
-            Task::TransactionContention => {
-                let commits = result.application.operations["transaction.commit"].total;
-                ensure!(
-                    result.application.operations["transaction.get"].total
-                        == commits.saturating_mul(5)
-                        && result.application.operations["transaction.put"].total
-                            == commits.saturating_mul(5),
-                    "transaction API counts do not match five reads and five updates"
-                );
-                ensure!(
-                    durable <= commits,
-                    "durability count exceeds transaction commits"
-                );
-            }
-            _ => unreachable!("checked write workload"),
+        if result.configuration.task.operation_mix.contains_key("put") {
+            ensure!(
+                durable == result.application.operations["put"].total,
+                "durability count does not match accepted puts"
+            );
+        } else if result
+            .configuration
+            .task
+            .operation_mix
+            .contains_key("transaction")
+        {
+            let commits = result.application.operations["transaction.commit"].total;
+            let reads = u64::try_from(
+                result
+                    .configuration
+                    .task
+                    .transaction_reads
+                    .expect("validated transaction read count"),
+            )
+            .unwrap_or(u64::MAX);
+            let updates = u64::try_from(
+                result
+                    .configuration
+                    .task
+                    .transaction_updates
+                    .expect("validated transaction update count"),
+            )
+            .unwrap_or(u64::MAX);
+            ensure!(
+                result.application.operations["transaction.get"].total
+                    == commits.saturating_mul(reads)
+                    && result.application.operations["transaction.put"].total
+                        == commits.saturating_mul(updates),
+                "transaction API counts do not match the configured reads and updates"
+            );
+            ensure!(
+                durable <= commits,
+                "durability count exceeds transaction commits"
+            );
+        } else {
+            unreachable!("validated write workload");
         }
     }
     Ok(())
