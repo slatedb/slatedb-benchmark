@@ -146,6 +146,11 @@ pub fn validate_workload_result(result: &WorkloadResult) -> Result<()> {
 pub fn validate_workload_series(result: &WorkloadResult, series: &WorkloadSeries) -> Result<()> {
     validate_timeline("rate", &series.rate_elapsed_ns, &series.rate_duration_ns)?;
     validate_timeline(
+        "latency",
+        &series.latency_elapsed_ns,
+        &series.latency_duration_ns,
+    )?;
+    validate_timeline(
         "resource",
         &series.resource_elapsed_ns,
         &series.resource_duration_ns,
@@ -153,6 +158,15 @@ pub fn validate_workload_series(result: &WorkloadResult, series: &WorkloadSeries
     ensure!(
         series.rate_elapsed_ns.last().copied().unwrap_or_default() <= result.recorded_interval_ns,
         "rate series extends past the recorded interval"
+    );
+    ensure!(
+        series
+            .latency_elapsed_ns
+            .last()
+            .copied()
+            .unwrap_or_default()
+            <= result.recorded_interval_ns,
+        "latency series extends past the recorded interval"
     );
     ensure!(
         series
@@ -204,6 +218,16 @@ pub fn validate_workload_series(result: &WorkloadResult, series: &WorkloadSeries
         .collect::<BTreeSet<_>>();
     let actual = series
         .application
+        .latency_ns
+        .keys()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    ensure!(
+        actual == expected,
+        "application latency time-series keys differ"
+    );
+    let actual = series
+        .application
         .latency_histograms
         .keys()
         .map(String::as_str)
@@ -217,6 +241,9 @@ pub fn validate_workload_series(result: &WorkloadResult, series: &WorkloadSeries
     for (name, values) in &series.application.bytes_per_second {
         validate_values(name, values, series.rate_elapsed_ns.len())?;
         validate_throughput_distribution(values, &result.application.throughput[name])?;
+    }
+    for (name, values) in &series.application.latency_ns {
+        validate_optional_values(name, values, series.latency_elapsed_ns.len())?;
     }
     for (name, histogram) in &series.application.latency_histograms {
         let summary = &result.application.latency[name];
@@ -404,6 +431,25 @@ fn validate_values(name: &str, values: &[f64], expected_len: usize) -> Result<()
             .iter()
             .all(|value| value.is_finite() && *value >= 0.0),
         "series {name} contains a negative or non-finite value"
+    );
+    Ok(())
+}
+
+fn validate_optional_values(name: &str, values: &[Option<f64>], expected_len: usize) -> Result<()> {
+    ensure!(
+        values.len() == expected_len,
+        "series {name} has the wrong length"
+    );
+    ensure!(
+        values
+            .iter()
+            .flatten()
+            .all(|value| value.is_finite() && *value >= 0.0),
+        "series {name} contains a negative or non-finite value"
+    );
+    ensure!(
+        values.iter().any(Option::is_some),
+        "series {name} contains no samples"
     );
     Ok(())
 }

@@ -183,11 +183,14 @@ export type HistogramSeries = {
 export type WorkloadSeries = {
   rate_elapsed_ns: number[];
   rate_duration_ns: number[];
+  latency_elapsed_ns: number[];
+  latency_duration_ns: number[];
   resource_elapsed_ns: number[];
   resource_duration_ns: number[];
   application: {
     operations_per_second: Record<string, number[]>;
     bytes_per_second: Record<string, number[]>;
+    latency_ns: Record<string, (number | null)[]>;
     latency_histograms: Record<string, HistogramSeries>;
   };
   object_store: {

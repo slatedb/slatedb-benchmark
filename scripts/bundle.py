@@ -62,6 +62,8 @@ def read_series(path, result):
     required = {
         "rate_elapsed_ns",
         "rate_duration_ns",
+        "latency_elapsed_ns",
+        "latency_duration_ns",
         "resource_elapsed_ns",
         "resource_duration_ns",
         "application",

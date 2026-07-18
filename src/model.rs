@@ -226,6 +226,7 @@ pub struct HistogramSeries {
 pub struct ApplicationSeries {
     pub operations_per_second: BTreeMap<String, Vec<f64>>,
     pub bytes_per_second: BTreeMap<String, Vec<f64>>,
+    pub latency_ns: BTreeMap<String, Vec<Option<f64>>>,
     pub latency_histograms: BTreeMap<String, HistogramSeries>,
 }
 
@@ -261,6 +262,8 @@ pub struct MachineSeries {
 pub struct WorkloadSeries {
     pub rate_elapsed_ns: Vec<u64>,
     pub rate_duration_ns: Vec<u64>,
+    pub latency_elapsed_ns: Vec<u64>,
+    pub latency_duration_ns: Vec<u64>,
     pub resource_elapsed_ns: Vec<u64>,
     pub resource_duration_ns: Vec<u64>,
     pub application: ApplicationSeries,

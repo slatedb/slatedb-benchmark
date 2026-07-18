@@ -1,4 +1,5 @@
 use crate::histogram::LatencyHistogram;
+use crate::system::ApplicationRecorder;
 use anyhow::{Context, Result};
 use slatedb::Db;
 use std::collections::BTreeMap;
@@ -28,11 +29,11 @@ pub struct DurabilityTracker {
 }
 
 impl DurabilityTracker {
-    pub fn start(db: Arc<Db>) -> Self {
+    pub fn start(db: Arc<Db>, recorder: ApplicationRecorder) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
         Self {
             sender: Some(DurabilitySender { tx }),
-            task: tokio::spawn(track(db, rx)),
+            task: tokio::spawn(track(db, recorder, rx)),
         }
     }
 
@@ -64,6 +65,7 @@ impl DurabilitySender {
 
 async fn track(
     db: Arc<Db>,
+    recorder: ApplicationRecorder,
     mut rx: mpsc::UnboundedReceiver<AcceptedWrite>,
 ) -> Result<DurabilityResult> {
     let mut status = db.subscribe();
@@ -79,7 +81,9 @@ async fn track(
         let covered_at = Instant::now();
         for sequence in covered {
             if let Some(returned_at) = pending.remove(&sequence) {
-                lag.record(covered_at.saturating_duration_since(returned_at));
+                let elapsed = covered_at.saturating_duration_since(returned_at);
+                lag.record(elapsed);
+                recorder.record_latency("durable", elapsed);
             }
         }
         if input_closed && pending.is_empty() {

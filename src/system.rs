@@ -192,6 +192,13 @@ pub struct ApplicationWindow {
     pub operations: BTreeMap<String, OperationDelta>,
 }
 
+#[derive(Debug, Clone, Default)]
+struct LatencyWindow {
+    elapsed: Duration,
+    duration: Duration,
+    histograms: HistogramSet,
+}
+
 #[derive(Debug, Default)]
 struct ApplicationDelta {
     operations: BTreeMap<String, OperationDelta>,
@@ -233,6 +240,15 @@ impl ApplicationRecorder {
 
     pub fn record_error(&self, api: &str, latency: Duration) {
         self.record(api, latency, 0, true);
+    }
+
+    pub fn record_latency(&self, api: &str, latency: Duration) {
+        self.inner
+            .lock()
+            .expect("application recorder lock")
+            .active
+            .histograms
+            .record(format!("api/{api}"), latency);
     }
 
     fn record(&self, api: &str, latency: Duration, logical_bytes: u64, error: bool) {
@@ -314,6 +330,7 @@ pub struct SampledMeasurement {
     elapsed: Duration,
     application_total: ApplicationDelta,
     application_windows: Vec<ApplicationWindow>,
+    latency_windows: Vec<LatencyWindow>,
     store_start: StoreSnapshot,
     store_end: StoreSnapshot,
     store_windows: Vec<StoreWindow>,
@@ -357,16 +374,6 @@ impl SampledMeasurement {
             .map(|operation| operation.errors)
             .sum::<u64>()
             .saturating_add(self.store_end.difference(&self.store_start).errors())
-    }
-
-    pub fn add_latency_histogram(
-        &mut self,
-        name: &str,
-        histogram: crate::histogram::LatencyHistogram,
-    ) {
-        self.application_total
-            .histograms
-            .insert(format!("api/{name}"), histogram);
     }
 
     pub fn application(&self) -> ApplicationMetrics {
@@ -543,6 +550,23 @@ impl SampledMeasurement {
             }
         }
 
+        let latency_summaries = self
+            .application_total
+            .histograms
+            .summaries_with_prefix("api/");
+        let latency_ns = latency_summaries
+            .keys()
+            .map(|name| {
+                let histogram_name = format!("api/{name}");
+                let values = self
+                    .latency_windows
+                    .iter()
+                    .map(|window| window.histograms.average_ns(&histogram_name))
+                    .collect();
+                (name.clone(), values)
+            })
+            .collect();
+
         let store_total = self.store_end.difference(&self.store_start);
         let mut requests_per_second = BTreeMap::new();
         let mut store_bytes_per_second = BTreeMap::new();
@@ -576,6 +600,16 @@ impl SampledMeasurement {
         WorkloadSeries {
             rate_elapsed_ns,
             rate_duration_ns,
+            latency_elapsed_ns: self
+                .latency_windows
+                .iter()
+                .map(|window| duration_ns(window.elapsed))
+                .collect(),
+            latency_duration_ns: self
+                .latency_windows
+                .iter()
+                .map(|window| duration_ns(window.duration))
+                .collect(),
             resource_elapsed_ns: self
                 .resources
                 .iter()
@@ -589,6 +623,7 @@ impl SampledMeasurement {
             application: ApplicationSeries {
                 operations_per_second,
                 bytes_per_second: application_bytes_per_second,
+                latency_ns,
                 latency_histograms: self.application_total.histograms.series_with_prefix("api/"),
             },
             object_store: ObjectStoreSeries {
@@ -684,6 +719,7 @@ pub(crate) async fn sample_until_stopped_with_rate_control(
     let mut previous_at = started;
     let mut application_total = ApplicationDelta::default();
     let mut application_windows = Vec::new();
+    let mut latency_windows = Vec::new();
     let mut store_windows = Vec::new();
     let mut resources = Vec::new();
     let mut interval = tokio::time::interval(Duration::from_secs(1));
@@ -708,6 +744,11 @@ pub(crate) async fn sample_until_stopped_with_rate_control(
                 let store = store_metrics.snapshot();
                 let host_snapshot = host.snapshot();
                 application_total.merge(&application)?;
+                latency_windows.push(LatencyWindow {
+                    elapsed,
+                    duration,
+                    histograms: application.histograms,
+                });
                 if *rate_windows_active {
                     application_windows.push(ApplicationWindow {
                         elapsed,
@@ -736,6 +777,11 @@ pub(crate) async fn sample_until_stopped_with_rate_control(
     let ended = Instant::now();
     let duration = ended.saturating_duration_since(previous_at);
     application_total.merge(&application)?;
+    latency_windows.push(LatencyWindow {
+        elapsed: ended.saturating_duration_since(started),
+        duration,
+        histograms: application.histograms,
+    });
     if *rate_windows
         .active
         .lock()
@@ -755,6 +801,7 @@ pub(crate) async fn sample_until_stopped_with_rate_control(
         elapsed: ended.saturating_duration_since(started),
         application_total,
         application_windows,
+        latency_windows,
         store_start,
         store_end,
         store_windows,
@@ -1099,11 +1146,13 @@ mod tests {
         let recorder = registry.recorder();
         recorder.record_success("get", Duration::from_millis(1), 420);
         recorder.record_success("put", Duration::from_millis(2), 420);
+        recorder.record_latency("durable", Duration::from_millis(3));
         let delta = registry.drain().expect("drain");
 
         assert_eq!(delta.operations["get"].calls, 1);
         assert_eq!(delta.operations["put"].calls, 1);
-        assert_eq!(delta.histograms.summaries_with_prefix("api/").len(), 2);
+        assert!(!delta.operations.contains_key("durable"));
+        assert_eq!(delta.histograms.summaries_with_prefix("api/").len(), 3);
     }
 
     #[tokio::test]
@@ -1180,7 +1229,12 @@ mod tests {
 
         let series = measurement.series();
         assert_eq!(series.rate_elapsed_ns.len(), series.rate_duration_ns.len());
+        assert_eq!(
+            series.latency_elapsed_ns.len(),
+            series.latency_duration_ns.len()
+        );
         assert!(series.resource_elapsed_ns.len() > series.rate_elapsed_ns.len());
+        assert!(series.latency_elapsed_ns.len() > series.rate_elapsed_ns.len());
         assert!(series.application.operations_per_second["get"]
             .iter()
             .any(|value| *value > 0.0));
@@ -1190,5 +1244,11 @@ mod tests {
         assert!(series.object_store.requests_per_second["PUT"]
             .iter()
             .all(|value| *value == 0.0));
+        assert!(series.application.latency_ns["get"]
+            .iter()
+            .any(Option::is_some));
+        assert!(series.application.latency_ns["flush"]
+            .iter()
+            .any(Option::is_some));
     }
 }

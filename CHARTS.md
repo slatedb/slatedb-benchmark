@@ -24,7 +24,7 @@ summary table remains intact.
 | --- | --- | --- |
 | Application operations | Elapsed seconds | Calls/s |
 | Application throughput | Elapsed seconds | MiB/s |
-| Application latency | Latency (ms, logarithmic) | Cumulative calls (%) |
+| Application latency | Elapsed seconds | Latency (ms) |
 | Object-store requests | Elapsed seconds | Requests/s |
 | Object-store throughput | Elapsed seconds | MiB/s |
 | Process CPU utilization | Elapsed seconds | CPU cores |
@@ -36,17 +36,18 @@ summary table remains intact.
 | Machine disk read/write operations | Elapsed seconds | Operations/s |
 
 Rate charts use complete client buckets and stop before durability drain.
-Process and machine charts continue through drain and mark its start. Draw the
-row's published average as a reference line.
+Latency, process, and machine charts continue through drain and mark its
+start. Draw the row's published average as a reference line.
 
 The average may differ from the arithmetic mean of plotted points. The table
 divides totals by the full recorded interval, including partial boundary
 intervals, while rate percentiles and charts use complete buckets.
 
-Application latency uses the aggregate HDR histogram already recorded for each
-API call and `durable`. Display it as a cumulative distribution. A tooltip
-should read, for example, `99% at 5.10 ms`. Time-chart tooltips show elapsed
-time, value, and whether the point falls in measurement or drain.
+Application latency plots the average latency of calls completed in each
+sampling window. Windows with no calls for that API appear as gaps. The
+aggregate HDR histogram remains in the sidecar so the published table can be
+validated. Time-chart tooltips show elapsed time, value, and whether the point
+falls in measurement or drain.
 
 ## Data contract
 
@@ -75,6 +76,8 @@ results/<version>/workload/<name>/
 {
   "rate_elapsed_ns": [1000123000, 2000876000],
   "rate_duration_ns": [1000123000, 1000753000],
+  "latency_elapsed_ns": [1000123000, 2000876000, 2260000000],
+  "latency_duration_ns": [1000123000, 1000753000, 259124000],
   "resource_elapsed_ns": [1000123000, 2000876000, 3001142000],
   "resource_duration_ns": [1000123000, 1000753000, 1000266000],
   "application": {
@@ -83,6 +86,9 @@ results/<version>/workload/<name>/
     },
     "bytes_per_second": {
       "get": [22053152.0, 21947716.0]
+    },
+    "latency_ns": {
+      "get": [72000.0, 68000.0, null]
     },
     "latency_histograms": {
       "get": {
@@ -99,15 +105,16 @@ The complete sidecar contains these series:
 | Area | Series |
 | --- | --- |
 | Application | Calls/s and logical bytes/s by API |
-| Application latency | HDR upper bounds and counts by API |
+| Application latency | Window averages and aggregate HDR data by API |
 | Object store | Requests/s and combined body bytes/s by HTTP method |
 | Process | CPU cores and RSS bytes |
 | Machine | CPU percent, RSS bytes, network bytes/s, disk bytes/s, disk ops/s |
 
-Application and object-store arrays match `rate_elapsed_ns`. Process and
-machine arrays match `resource_elapsed_ns`. Missing APIs and HTTP methods
-contribute zero rather than a gap. Store nanoseconds and bytes; the website
-converts display units.
+Application rate and object-store arrays match `rate_elapsed_ns`. Application
+latency arrays match `latency_elapsed_ns`. Process and machine arrays match
+`resource_elapsed_ns`. Missing APIs and HTTP methods contribute zero to rate
+arrays. A latency window with no completed call uses `null`. Store nanoseconds
+and bytes; the website converts display units.
 
 Keep every complete sampling bucket and populated HDR bucket. Do not reduce the
 sample count. GitHub Pages compression and caching limit transfer cost, and the
@@ -123,7 +130,8 @@ Before dropping them:
 3. Export aligned, zero-filled arrays from application, object-store, process,
    and machine windows.
 4. Use one rate helper for the summaries and sidecar.
-5. Export populated HDR bounds and counts from `src/histogram.rs`.
+5. Export per-window average latency and populated aggregate HDR bounds and
+   counts from `src/histogram.rs`.
 6. Add the sidecar reference to `WorkloadResult`.
 7. Validate and write `series.json` before creating `result.json`.
 
@@ -150,6 +158,8 @@ validation checks:
 - Each series matches its timeline and contains finite, nonnegative values.
 - Series keys match the rows in `result.json`.
 - Throughput exists only for rows that transferred bytes.
+- Latency arrays match their timeline and contain a value for every published
+  latency row.
 - Histogram bounds increase, counts are positive, and counts sum to latency
   totals.
 - Rate summaries match the complete sample arrays.
@@ -194,9 +204,8 @@ second after the window `load` event unless the user has enabled reduced data
 usage. A click starts the same request immediately or waits for the in-flight
 request. Later rows reuse the parsed result.
 
-Add two canvas renderers: time series and latency CDF. Keep labels and tooltips
-in HTML, resize with `ResizeObserver`, and destroy the chart when its row
-closes.
+Use one canvas time-series renderer. Keep labels and tooltips in HTML, resize
+with `ResizeObserver`, and destroy the chart when its row closes.
 
 Expose the sidecar through:
 
@@ -228,7 +237,7 @@ A browser test verifies:
 4. Opening another row closes the first.
 5. The page fetches the sidecar once.
 6. Time charts mark measurement and drain.
-7. Latency charts produce a monotonic cumulative distribution.
+7. Latency charts use elapsed time and include drain samples.
 8. Desktop and mobile layouts work.
 9. Tables survive chart-loading failure.
 

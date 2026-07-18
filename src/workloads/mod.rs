@@ -66,7 +66,7 @@ pub async fn execute(
         .task
         .task
         .may_write()
-        .then(|| DurabilityTracker::start(Arc::clone(&db)));
+        .then(|| DurabilityTracker::start(Arc::clone(&db), registry.recorder()));
     let durability = tracker.as_ref().map(DurabilityTracker::sender);
     let client_started = Instant::now();
     let stats = closed::run_phase(
@@ -120,7 +120,7 @@ pub async fn execute(
     };
     let durability_drain = drain_started.map_or(Duration::ZERO, |started| started.elapsed());
     let _ = stop_tx.send(true);
-    let mut measurement = sampler.await.context("joining metric sampler")??;
+    let measurement = sampler.await.context("joining metric sampler")??;
     flush_result?;
     let durable_result = durable_result?;
 
@@ -141,7 +141,6 @@ pub async fn execute(
                 );
             }
         }
-        measurement.add_latency_histogram("durable", result.lag);
     }
     validate_workload(config, &stats, &measurement)?;
     if measurement.errors() > 0 {

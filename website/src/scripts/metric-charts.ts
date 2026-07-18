@@ -1,7 +1,7 @@
-import type { HistogramSeries, WorkloadSeries } from '../lib/results';
+import type { WorkloadSeries } from '../lib/results';
 
 type ChartOptions = {
-  kind: 'time' | 'cdf';
+  kind: 'time';
   source: string;
   key?: string;
   unit: string;
@@ -128,9 +128,7 @@ async function renderRow(
   try {
     const series = await loadSeries();
     if (panel.dataset.open !== 'true') return;
-    const destroy = options.kind === 'cdf'
-      ? renderCdf(panel, options, series)
-      : renderTimeSeries(panel, options, series, clientMeasurementNs);
+    const destroy = renderTimeSeries(panel, options, series, clientMeasurementNs);
     destroyers.set(panel, destroy);
   } catch (error) {
     if (panel.dataset.open !== 'true') return;
@@ -154,50 +152,51 @@ function renderTimeSeries(
   clientMeasurementNs: number,
 ): DestroyChart {
   const resource = options.source.startsWith('process.') || options.source.startsWith('machine.');
-  const elapsed = resource ? series.resource_elapsed_ns : series.rate_elapsed_ns;
+  const latency = options.source === 'application.latency_ns';
+  const elapsed = latency
+    ? series.latency_elapsed_ns
+    : resource
+      ? series.resource_elapsed_ns
+      : series.rate_elapsed_ns;
   const raw = resolveSource(series, options.source, options.key);
   if (!Array.isArray(raw) || raw.length !== elapsed.length || raw.length === 0) {
     throw new Error(`No chart data was recorded for ${options.label}.`);
   }
   const divisor = options.divisor ?? 1;
-  const values = raw.map((value) => Number(value) / divisor);
   const average = options.average === undefined ? undefined : options.average / divisor;
-  const points = elapsed.map((value, index) => ({ x: value / 1e9, y: values[index] }));
+  const points: Point[] = [];
+  let startsSegment = true;
+  elapsed.forEach((value, index) => {
+    if (raw[index] === null) {
+      startsSegment = true;
+      return;
+    }
+    const y = Number(raw[index]) / divisor;
+    if (!Number.isFinite(y)) {
+      startsSegment = true;
+      return;
+    }
+    points.push({ x: value / 1e9, y, startsSegment });
+    startsSegment = false;
+  });
+  if (points.length === 0) {
+    throw new Error(`No chart data was recorded for ${options.label}.`);
+  }
+  const includesDrain = resource || latency;
   return renderCanvas(panel, {
     label: options.label,
     xLabel: 'Elapsed seconds',
     yLabel: options.unit,
     points,
+    xMax: elapsed.at(-1)! / 1e9,
     average,
-    boundary: resource && clientMeasurementNs > 0 ? clientMeasurementNs / 1e9 : undefined,
-    logarithmicX: false,
+    boundary: includesDrain && clientMeasurementNs > 0 ? clientMeasurementNs / 1e9 : undefined,
     tooltip: (point) => {
-      const interval = resource && clientMeasurementNs > 0 && point.x * 1e9 > clientMeasurementNs
+      const interval = includesDrain && clientMeasurementNs > 0 && point.x * 1e9 > clientMeasurementNs
         ? 'drain'
         : 'measurement';
       return `${formatElapsed(point.x)} · ${number.format(point.y)} ${options.unit} · ${interval}`;
     },
-  });
-}
-
-function renderCdf(panel: HTMLElement, options: ChartOptions, series: WorkloadSeries): DestroyChart {
-  const histogram = resolveSource(series, options.source, options.key) as HistogramSeries | undefined;
-  if (!histogram || histogram.counts.length === 0) {
-    throw new Error(`No latency data was recorded for ${options.label}.`);
-  }
-  const total = histogram.counts.reduce((sum, count) => sum + count, 0);
-  let cumulative = 0;
-  const points = histogram.counts.map((count, index) => {
-    cumulative += count;
-    return { x: histogram.upper_bound_ns[index] / 1e6, y: cumulative / total * 100 };
-  });
-  return renderCanvas(panel, {
-    label: options.label,
-    xLabel: 'Latency (ms, logarithmic)',
-    yLabel: 'Cumulative calls (%)',
-    points,
-    logarithmicX: true,
-    tooltip: (point) => `${number.format(point.y)}% at ${number.format(point.x)} ms`,
   });
 }
 
@@ -212,15 +211,15 @@ function resolveSource(series: WorkloadSeries, source: string, key?: string): un
   return (value as Record<string, unknown>)[key];
 }
 
-type Point = { x: number; y: number };
+type Point = { x: number; y: number; startsSegment?: boolean };
 type CanvasOptions = {
   label: string;
   xLabel: string;
   yLabel: string;
   points: Point[];
+  xMax?: number;
   average?: number;
   boundary?: number;
-  logarithmicX: boolean;
   tooltip: (point: Point) => string;
 };
 
@@ -268,13 +267,12 @@ function renderCanvas(panel: HTMLElement, options: CanvasOptions): DestroyChart 
     const right = 18;
     const bottom = 43;
     plot = { left: 64, top: 16, width: width - 64 - right, height: height - 16 - bottom };
-    const transformedX = options.points.map((point) => options.logarithmicX ? Math.log10(Math.max(point.x, 1e-6)) : point.x);
-    const minX = options.logarithmicX ? Math.min(...transformedX) : 0;
-    const maxX = Math.max(...transformedX);
+    const minX = 0;
+    const maxX = options.xMax ?? Math.max(...options.points.map((point) => point.x));
     const maxY = Math.max(...options.points.map((point) => point.y), options.average ?? 0, 1);
     const xScale = (value: number) => plot.left + (value - minX) / Math.max(maxX - minX, Number.EPSILON) * plot.width;
     const yScale = (value: number) => plot.top + plot.height - value / maxY * plot.height;
-    xValues = transformedX.map(xScale);
+    xValues = options.points.map((point) => xScale(point.x));
 
     context.clearRect(0, 0, width, height);
     context.font = '10px JetBrains Mono, monospace';
@@ -294,10 +292,9 @@ function renderCanvas(panel: HTMLElement, options: CanvasOptions): DestroyChart 
     context.textAlign = 'center';
     context.textBaseline = 'top';
     for (let index = 0; index <= 4; index += 1) {
-      const transformed = minX + (maxX - minX) * index / 4;
-      const label = options.logarithmicX ? 10 ** transformed : transformed;
+      const label = minX + (maxX - minX) * index / 4;
       context.fillStyle = '#626d7c';
-      context.fillText(number.format(label), xScale(transformed), plot.top + plot.height + 10);
+      context.fillText(number.format(label), xScale(label), plot.top + plot.height + 10);
     }
     if (options.average !== undefined) {
       context.setLineDash([5, 5]);
@@ -308,9 +305,8 @@ function renderCanvas(panel: HTMLElement, options: CanvasOptions): DestroyChart 
       context.stroke();
       context.setLineDash([]);
     }
-    if (options.boundary !== undefined && options.boundary < options.points.at(-1)!.x) {
-      const transformed = options.logarithmicX ? Math.log10(options.boundary) : options.boundary;
-      const x = xScale(transformed);
+    if (options.boundary !== undefined && options.boundary < maxX) {
+      const x = xScale(options.boundary);
       context.setLineDash([2, 4]);
       context.strokeStyle = '#a45632';
       context.beginPath();
@@ -329,10 +325,19 @@ function renderCanvas(panel: HTMLElement, options: CanvasOptions): DestroyChart 
     options.points.forEach((point, index) => {
       const x = xValues[index];
       const y = yScale(point.y);
-      if (index === 0) context.moveTo(x, y);
+      if (index === 0 || point.startsSegment) context.moveTo(x, y);
       else context.lineTo(x, y);
     });
     context.stroke();
+    options.points.forEach((point, index) => {
+      const isolated = point.startsSegment
+        && (index === options.points.length - 1 || options.points[index + 1].startsSegment);
+      if (!isolated) return;
+      context.fillStyle = '#a45632';
+      context.beginPath();
+      context.arc(xValues[index], yScale(point.y), 3, 0, Math.PI * 2);
+      context.fill();
+    });
   };
 
   const move = (event: PointerEvent) => {

@@ -179,10 +179,11 @@ at the boundaries. Preparation rate percentiles also include the final partial
 window. Average rates divide the total by the full recorded interval. Latency
 statistics use individual calls and milliseconds.
 
-Rate charts use the same complete client windows as rate percentiles. Process
-and machine charts continue through durability drain and mark its start.
-Latency charts plot the recorded HDR histogram as a cumulative distribution.
-Chart data lives in a separate workload file and is fetched after page load.
+All charts use elapsed seconds on the x-axis. Rate charts use the same complete
+client windows as rate percentiles. Latency charts plot the average latency of
+calls completed in each sampling window. Latency, process, and machine charts
+continue through durability drain and mark its start. Chart data lives in a
+separate workload file and is fetched after page load.
 
 ### Application operations
 

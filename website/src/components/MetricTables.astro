@@ -70,9 +70,6 @@ const distributionValues = (value: DistributionSummary, divisor = 1) => [
 
 const timeChart = (source: string, key: string | undefined, unit: string, average: number, divisor = 1) =>
   chartSeriesUrl ? { kind: 'time' as const, source, key, unit, average, divisor } : undefined;
-const cdfChart = (key: string) => chartSeriesUrl
-  ? { kind: 'cdf' as const, source: 'application.latency_histograms', key, unit: 'ms' }
-  : undefined;
 const applicationOperations = ordered(result.application.operations).map(([label, value]) => ({
   label,
   values: rateValues(value),
@@ -86,7 +83,7 @@ const applicationThroughput = ordered(result.application.throughput).map(([label
 const applicationLatency = ordered(result.application.latency).map(([label, value]) => ({
   label,
   values: latencyValues(value),
-  chart: cdfChart(label),
+  chart: timeChart('application.latency_ns', label, 'ms', value.avg_ns, 1_000_000),
 }));
 const objectRequests = ordered(result.object_store.requests, objectStoreOrder).map(([label, value]) => ({
   label,

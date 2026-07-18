@@ -111,8 +111,11 @@ impl HistogramSet {
         }
     }
 
-    pub fn insert(&mut self, name: impl Into<String>, histogram: LatencyHistogram) {
-        self.values.insert(name.into(), histogram);
+    pub fn average_ns(&self, name: &str) -> Option<f64> {
+        self.values
+            .get(name)
+            .filter(|histogram| !histogram.is_empty())
+            .map(|histogram| histogram.summary().avg_ns)
     }
 
     pub fn summaries_with_prefix(&self, prefix: &str) -> BTreeMap<String, LatencySummary> {
