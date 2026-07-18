@@ -327,7 +327,6 @@ pub fn load(task: Task, scale: BenchmarkScale, settings_path: &Path) -> Result<R
             .context("object-store cache capacity exceeds the platform limit")?,
     );
     settings.object_store_cache_options.root_folder = None;
-    settings.object_store_cache_options.cache_puts = false;
     settings
         .object_store_cache_options
         .preload_disk_cache_on_startup = None;
@@ -487,7 +486,24 @@ mod tests {
                 .max_cache_size_bytes,
             Some(171_798_692)
         );
-        assert!(!config.settings.object_store_cache_options.cache_puts);
+        let cache = &config.slate_settings["object_store_cache_options"];
+        assert_eq!(
+            cache
+                .get("cache_puts")
+                .and_then(serde_json::Value::as_bool)
+                .or_else(|| {
+                    cache
+                        .get("cache_on_flush")
+                        .and_then(serde_json::Value::as_bool)
+                }),
+            Some(false)
+        );
+        assert_ne!(
+            cache
+                .get("cache_on_compaction")
+                .and_then(serde_json::Value::as_bool),
+            Some(true)
+        );
         assert!(config
             .settings
             .object_store_cache_options

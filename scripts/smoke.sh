@@ -25,9 +25,15 @@ if [[ ! -f .act.env ]]; then
   created_env=true
 fi
 if [[ ! -f .act.secrets ]]; then
-  printf '%s\n' \
-    'TIGRIS_ACCESS_KEY_ID=slatedb' \
-    'TIGRIS_SECRET_ACCESS_KEY=slatedb-secret' > .act.secrets
+  {
+    printf '%s\n' \
+      'TIGRIS_ACCESS_KEY_ID=slatedb' \
+      'TIGRIS_SECRET_ACCESS_KEY=slatedb-secret'
+    if [[ -n ${GITHUB_TOKEN:-} ]]; then
+      printf 'GITHUB_TOKEN=%s\n' "$GITHUB_TOKEN"
+    fi
+  } > .act.secrets
+  chmod 600 .act.secrets
   created_secrets=true
 fi
 

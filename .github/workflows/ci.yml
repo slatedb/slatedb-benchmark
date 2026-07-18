@@ -50,6 +50,8 @@ jobs:
             https://github.com/nektos/act/releases/download/v0.2.89/act_Linux_x86_64.tar.gz \
             | sudo tar -xz -C /usr/local/bin act
       - run: ./scripts/smoke.sh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
 
   slatedb-compatibility:
     runs-on: ubuntu-latest
