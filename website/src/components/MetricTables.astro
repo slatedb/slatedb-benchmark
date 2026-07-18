@@ -11,9 +11,11 @@ import type {
 interface Props {
   result: RecordedMetrics;
   showEmptyApplication?: boolean;
+  chartSeriesUrl?: string;
+  clientMeasurementNs?: number;
 }
 
-const { result, showEmptyApplication = true } = Astro.props;
+const { result, showEmptyApplication = true, chartSeriesUrl, clientMeasurementNs } = Astro.props;
 const statisticColumns = ['avg', 'p50', 'p95', 'p99', 'p99.9', 'min', 'max'];
 const rateColumns = ['total', 'avg/s', 'p50/s', 'p95/s', 'p99/s', 'p99.9/s', 'min/s', 'max/s'];
 const throughputColumns = ['total GiB', 'avg MiB/s', 'p50', 'p95', 'p99', 'p99.9', 'min', 'max'];
@@ -66,31 +68,68 @@ const distributionValues = (value: DistributionSummary, divisor = 1) => [
   number.format(value.max / divisor),
 ];
 
-const applicationOperations = ordered(result.application.operations).map(([label, value]) => ({ label, values: rateValues(value) }));
-const applicationThroughput = ordered(result.application.throughput).map(([label, value]) => ({ label, values: throughputValues(value) }));
-const applicationLatency = ordered(result.application.latency).map(([label, value]) => ({ label, values: latencyValues(value) }));
-const objectRequests = ordered(result.object_store.requests, objectStoreOrder).map(([label, value]) => ({ label, values: rateValues(value) }));
-const objectThroughput = ordered(result.object_store.throughput, objectStoreOrder).map(([label, value]) => ({ label, values: throughputValues(value) }));
+const timeChart = (source: string, key: string | undefined, unit: string, average: number, divisor = 1) =>
+  chartSeriesUrl ? { kind: 'time' as const, source, key, unit, average, divisor } : undefined;
+const cdfChart = (key: string) => chartSeriesUrl
+  ? { kind: 'cdf' as const, source: 'application.latency_histograms', key, unit: 'ms' }
+  : undefined;
+const applicationOperations = ordered(result.application.operations).map(([label, value]) => ({
+  label,
+  values: rateValues(value),
+  chart: timeChart('application.operations_per_second', label, 'calls/s', value.avg_per_second),
+}));
+const applicationThroughput = ordered(result.application.throughput).map(([label, value]) => ({
+  label,
+  values: throughputValues(value),
+  chart: timeChart('application.bytes_per_second', label, 'MiB/s', value.avg_bytes_per_second, 1024 ** 2),
+}));
+const applicationLatency = ordered(result.application.latency).map(([label, value]) => ({
+  label,
+  values: latencyValues(value),
+  chart: cdfChart(label),
+}));
+const objectRequests = ordered(result.object_store.requests, objectStoreOrder).map(([label, value]) => ({
+  label,
+  values: rateValues(value),
+  chart: timeChart('object_store.requests_per_second', label, 'requests/s', value.avg_per_second),
+}));
+const objectThroughput = ordered(result.object_store.throughput, objectStoreOrder).map(([label, value]) => ({
+  label,
+  values: throughputValues(value),
+  chart: timeChart('object_store.bytes_per_second', label, 'MiB/s', value.avg_bytes_per_second, 1024 ** 2),
+}));
 const process = [
-  { label: 'CPU utilization (cores)', values: distributionValues(result.process.cpu_cores) },
-  { label: 'RSS (GiB)', values: distributionValues(result.process.rss_bytes, 1024 ** 3) },
+  { label: 'CPU utilization (cores)', values: distributionValues(result.process.cpu_cores), chart: timeChart('process.cpu_cores', undefined, 'cores', result.process.cpu_cores.avg) },
+  { label: 'RSS (GiB)', values: distributionValues(result.process.rss_bytes, 1024 ** 3), chart: timeChart('process.rss_bytes', undefined, 'GiB', result.process.rss_bytes.avg, 1024 ** 3) },
 ];
 const machine = [
-  { label: 'CPU (%)', values: distributionValues(result.machine.cpu_percent) },
-  { label: 'RSS (GiB)', values: distributionValues(result.machine.rss_bytes, 1024 ** 3) },
-  { label: 'Network receive (MiB/s)', values: distributionValues(result.machine.network_receive_bytes_per_second, 1024 ** 2) },
-  { label: 'Network send (MiB/s)', values: distributionValues(result.machine.network_send_bytes_per_second, 1024 ** 2) },
-  { label: 'Disk read (MiB/s)', values: distributionValues(result.machine.disk_read_bytes_per_second, 1024 ** 2) },
-  { label: 'Disk write (MiB/s)', values: distributionValues(result.machine.disk_write_bytes_per_second, 1024 ** 2) },
-  { label: 'Disk read ops/s', values: distributionValues(result.machine.disk_read_operations_per_second) },
-  { label: 'Disk write ops/s', values: distributionValues(result.machine.disk_write_operations_per_second) },
+  { label: 'CPU (%)', values: distributionValues(result.machine.cpu_percent), chart: timeChart('machine.cpu_percent', undefined, '%', result.machine.cpu_percent.avg) },
+  { label: 'RSS (GiB)', values: distributionValues(result.machine.rss_bytes, 1024 ** 3), chart: timeChart('machine.rss_bytes', undefined, 'GiB', result.machine.rss_bytes.avg, 1024 ** 3) },
+  { label: 'Network receive (MiB/s)', values: distributionValues(result.machine.network_receive_bytes_per_second, 1024 ** 2), chart: timeChart('machine.network_receive_bytes_per_second', undefined, 'MiB/s', result.machine.network_receive_bytes_per_second.avg, 1024 ** 2) },
+  { label: 'Network send (MiB/s)', values: distributionValues(result.machine.network_send_bytes_per_second, 1024 ** 2), chart: timeChart('machine.network_send_bytes_per_second', undefined, 'MiB/s', result.machine.network_send_bytes_per_second.avg, 1024 ** 2) },
+  { label: 'Disk read (MiB/s)', values: distributionValues(result.machine.disk_read_bytes_per_second, 1024 ** 2), chart: timeChart('machine.disk_read_bytes_per_second', undefined, 'MiB/s', result.machine.disk_read_bytes_per_second.avg, 1024 ** 2) },
+  { label: 'Disk write (MiB/s)', values: distributionValues(result.machine.disk_write_bytes_per_second, 1024 ** 2), chart: timeChart('machine.disk_write_bytes_per_second', undefined, 'MiB/s', result.machine.disk_write_bytes_per_second.avg, 1024 ** 2) },
+  { label: 'Disk read ops/s', values: distributionValues(result.machine.disk_read_operations_per_second), chart: timeChart('machine.disk_read_operations_per_second', undefined, 'operations/s', result.machine.disk_read_operations_per_second.avg) },
+  { label: 'Disk write ops/s', values: distributionValues(result.machine.disk_write_operations_per_second), chart: timeChart('machine.disk_write_operations_per_second', undefined, 'operations/s', result.machine.disk_write_operations_per_second.avg) },
 ];
 ---
 
-{(showEmptyApplication || applicationOperations.length > 0) && <MetricTable title="Application operations" firstColumn="API" columns={rateColumns} rows={applicationOperations} />}
-{(showEmptyApplication || applicationThroughput.length > 0) && <MetricTable title="Application throughput" firstColumn="API" columns={throughputColumns} rows={applicationThroughput} />}
-{(showEmptyApplication || applicationLatency.length > 0) && <MetricTable title="Application latency (ms)" firstColumn="API" columns={statisticColumns} rows={applicationLatency} />}
-<MetricTable title="Object-store requests" firstColumn="Method" columns={rateColumns} rows={objectRequests} />
-<MetricTable title="Object-store throughput" firstColumn="Method" columns={throughputColumns} rows={objectThroughput} />
-<MetricTable title="Process statistics" firstColumn="Metric" columns={statisticColumns} rows={process} codeLabels={false} />
-<MetricTable title="Machine statistics" firstColumn="Metric" columns={statisticColumns} rows={machine} codeLabels={false} />
+<div
+  data-metric-charts={chartSeriesUrl ? '' : undefined}
+  data-series-url={chartSeriesUrl}
+  data-client-measurement-ns={clientMeasurementNs}
+>
+  {(showEmptyApplication || applicationOperations.length > 0) && <MetricTable idPrefix="application-operations" title="Application operations" firstColumn="API" columns={rateColumns} rows={applicationOperations} />}
+  {(showEmptyApplication || applicationThroughput.length > 0) && <MetricTable idPrefix="application-throughput" title="Application throughput" firstColumn="API" columns={throughputColumns} rows={applicationThroughput} />}
+  {(showEmptyApplication || applicationLatency.length > 0) && <MetricTable idPrefix="application-latency" title="Application latency (ms)" firstColumn="API" columns={statisticColumns} rows={applicationLatency} />}
+  <MetricTable idPrefix="object-requests" title="Object-store requests" firstColumn="Method" columns={rateColumns} rows={objectRequests} />
+  <MetricTable idPrefix="object-throughput" title="Object-store throughput" firstColumn="Method" columns={throughputColumns} rows={objectThroughput} />
+  <MetricTable idPrefix="process" title="Process statistics" firstColumn="Metric" columns={statisticColumns} rows={process} codeLabels={false} />
+  <MetricTable idPrefix="machine" title="Machine statistics" firstColumn="Metric" columns={statisticColumns} rows={machine} codeLabels={false} />
+</div>
+
+<script>
+  import { initializeMetricCharts } from '../scripts/metric-charts';
+
+  initializeMetricCharts();
+</script>

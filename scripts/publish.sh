@@ -35,6 +35,23 @@ if ! jq -e '
 fi
 
 source_directory=$(dirname "$run_manifest")
+mapfile -t manifest_files < <(jq -r '.results | keys[]' "$run_manifest" | sort)
+mapfile -t actual_files < <(
+  find "$source_directory" -mindepth 3 -maxdepth 3 -name '*.json' -type f \
+    -printf '%P\n' | sort
+)
+if [[ "${manifest_files[*]}" != "${actual_files[*]}" ]]; then
+  echo "bundle files do not match run.json" >&2
+  exit 1
+fi
+while IFS=$'\t' read -r relative expected; do
+  actual=$(sha256sum "$source_directory/$relative" | awk '{print $1}')
+  if [[ "$actual" != "$expected" ]]; then
+    echo "$relative does not match run.json" >&2
+    exit 1
+  fi
+done < <(jq -r '.results | to_entries[] | [.key, .value] | @tsv' "$run_manifest")
+
 destination_directory="$publish_checkout/results/$version"
 rm -rf "$destination_directory"
 mkdir -p "$destination_directory"

@@ -2,6 +2,14 @@
 interface Row {
   label: string;
   values: string[];
+  chart?: {
+    kind: 'time' | 'cdf';
+    source: string;
+    key?: string;
+    unit: string;
+    divisor?: number;
+    average?: number;
+  };
 }
 
 interface Props {
@@ -10,9 +18,10 @@ interface Props {
   columns: string[];
   rows: Row[];
   codeLabels?: boolean;
+  idPrefix?: string;
 }
 
-const { title, firstColumn, columns, rows, codeLabels = true } = Astro.props;
+const { title, firstColumn, columns, rows, codeLabels = true, idPrefix = 'metric' } = Astro.props;
 ---
 
 <section class="metric-section">
@@ -21,7 +30,7 @@ const { title, firstColumn, columns, rows, codeLabels = true } = Astro.props;
   </div>
   {rows.length > 0 ? (
     <div class="table-scroll">
-      <table class="metric-table">
+      <table class="metric-table" data-chart-table>
         <thead>
           <tr>
             <th scope="col">{firstColumn}</th>
@@ -29,12 +38,39 @@ const { title, firstColumn, columns, rows, codeLabels = true } = Astro.props;
           </tr>
         </thead>
         <tbody>
-          {rows.map((row) => (
-            <tr>
-              <th scope="row">{codeLabels ? <code>{row.label}</code> : row.label}</th>
-              {row.values.map((value) => <td>{value}</td>)}
-            </tr>
-          ))}
+          {rows.map((row, index) => {
+            const panelId = `${idPrefix}-${index}-chart`;
+            return (
+              <Fragment>
+                <tr class:list={{ 'chart-trigger-row': row.chart }} data-chart-row={row.chart ? '' : undefined}>
+                  <th scope="row">
+                    {row.chart ? (
+                      <button
+                        type="button"
+                        class="chart-row-button"
+                        aria-expanded="false"
+                        aria-controls={panelId}
+                        data-chart={JSON.stringify({ ...row.chart, label: row.label })}
+                      >
+                        <span>{codeLabels ? <code>{row.label}</code> : row.label}</span>
+                        <span class="chart-row-icon" aria-hidden="true">›</span>
+                      </button>
+                    ) : codeLabels ? <code>{row.label}</code> : row.label}
+                  </th>
+                  {row.values.map((value) => <td>{value}</td>)}
+                </tr>
+                {row.chart && (
+                  <tr class="chart-detail-row" hidden data-chart-detail>
+                    <td colspan={columns.length + 1}>
+                      <div class="chart-detail" id={panelId} data-chart-panel data-open="false">
+                        <p class="chart-status" role="status">Loading chart…</p>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
+            );
+          })}
         </tbody>
       </table>
     </div>

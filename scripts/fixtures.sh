@@ -11,4 +11,5 @@ cp -R .runs/release/results/. .scaled-results/results/
 rm -rf .runs/act-artifacts .runs/release .runs/bundle
 
 result_count=$(find .scaled-results/results -name result.json -type f | wc -l | tr -d ' ')
-echo "Generated $result_count scaled benchmark fixtures in .scaled-results"
+series_count=$(find .scaled-results/results -name series.json -type f | wc -l | tr -d ' ')
+echo "Generated $result_count scaled results and $series_count chart sidecars in .scaled-results"

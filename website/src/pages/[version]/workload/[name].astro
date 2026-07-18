@@ -52,7 +52,11 @@ const result = route.result;
         </dl>
       </header>
 
-      <MetricTables result={result} />
+      <MetricTables
+        result={result}
+        chartSeriesUrl={`/raw/${route.version}/workload/${route.name}/${result.series.file}`}
+        clientMeasurementNs={result.client_measurement_ns}
+      />
 
       <section class="metric-section">
         <div class="section-heading"><h2>Configuration</h2></div>

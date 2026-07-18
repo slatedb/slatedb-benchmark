@@ -1,4 +1,4 @@
-use crate::model::LatencySummary;
+use crate::model::{HistogramSeries, LatencySummary};
 use anyhow::{Context, Result};
 use hdrhistogram::Histogram;
 use std::collections::BTreeMap;
@@ -67,6 +67,19 @@ impl LatencyHistogram {
             max_ns: self.inner.max() * 1_000,
         }
     }
+
+    pub fn series(&self) -> HistogramSeries {
+        let mut upper_bound_ns = Vec::new();
+        let mut counts = Vec::new();
+        for value in self.inner.iter_recorded() {
+            upper_bound_ns.push(value.value_iterated_to().saturating_mul(1_000));
+            counts.push(value.count_at_value());
+        }
+        HistogramSeries {
+            upper_bound_ns,
+            counts,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -110,5 +123,37 @@ impl HistogramSet {
                     .map(|short| (short.to_string(), histogram.summary()))
             })
             .collect()
+    }
+
+    pub fn series_with_prefix(&self, prefix: &str) -> BTreeMap<String, HistogramSeries> {
+        self.values
+            .iter()
+            .filter_map(|(name, histogram)| {
+                name.strip_prefix(prefix)
+                    .map(|short| (short.to_string(), histogram.series()))
+            })
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LatencyHistogram;
+    use std::time::Duration;
+
+    #[test]
+    fn exports_only_populated_histogram_buckets() {
+        let mut histogram = LatencyHistogram::new();
+        histogram.record_n(Duration::from_micros(10), 2);
+        histogram.record(Duration::from_micros(20));
+
+        let series = histogram.series();
+        assert_eq!(series.counts.iter().sum::<u64>(), 3);
+        assert_eq!(series.upper_bound_ns.len(), series.counts.len());
+        assert!(series
+            .upper_bound_ns
+            .windows(2)
+            .all(|pair| pair[0] < pair[1]));
+        assert!(series.counts.iter().all(|count| *count > 0));
     }
 }

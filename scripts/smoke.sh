@@ -62,4 +62,18 @@ if [[ $result_count -ne 12 ]]; then
   echo "expected 12 task results, found $result_count" >&2
   exit 1
 fi
+series_count=$(find .runs/release/results -name series.json -type f | wc -l | tr -d ' ')
+if [[ $series_count -ne 10 ]]; then
+  echo "expected 10 workload series, found $series_count" >&2
+  exit 1
+fi
+while IFS= read -r result; do
+  series=$(dirname "$result")/series.json
+  expected=$(jq -r '.series.sha256' "$result")
+  actual=$(sha256sum "$series" | awk '{print $1}')
+  if [[ "$actual" != "$expected" ]]; then
+    echo "$series does not match its result digest" >&2
+    exit 1
+  fi
+done < <(find .runs/release/results -path '*/workload/*/result.json' -type f)
 find .runs/release/results -mindepth 2 -maxdepth 2 -name run.json -type f | grep -q .

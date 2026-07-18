@@ -169,7 +169,46 @@ export type WorkloadResult = {
   };
   client_measurement_ns: number;
   durability_drain_ns: number;
+  series: {
+    file: 'series.json';
+    sha256: string;
+  };
 } & RecordedMetrics;
+
+export type HistogramSeries = {
+  upper_bound_ns: number[];
+  counts: number[];
+};
+
+export type WorkloadSeries = {
+  rate_elapsed_ns: number[];
+  rate_duration_ns: number[];
+  resource_elapsed_ns: number[];
+  resource_duration_ns: number[];
+  application: {
+    operations_per_second: Record<string, number[]>;
+    bytes_per_second: Record<string, number[]>;
+    latency_histograms: Record<string, HistogramSeries>;
+  };
+  object_store: {
+    requests_per_second: Record<string, number[]>;
+    bytes_per_second: Record<string, number[]>;
+  };
+  process: {
+    cpu_cores: number[];
+    rss_bytes: number[];
+  };
+  machine: {
+    cpu_percent: number[];
+    rss_bytes: number[];
+    network_receive_bytes_per_second: number[];
+    network_send_bytes_per_second: number[];
+    disk_read_bytes_per_second: number[];
+    disk_write_bytes_per_second: number[];
+    disk_read_operations_per_second: number[];
+    disk_write_operations_per_second: number[];
+  };
+};
 
 export type ResultRoute<T> = {
   version: string;
@@ -229,7 +268,7 @@ async function loadTaskResults<T>(kind: 'preparation' | 'workload'): Promise<Res
 
 export async function rawResultFiles() {
   const files = (await walk(resultsRoot)).filter((file) =>
-    ['result.json', 'run.json'].includes(path.basename(file)),
+    ['result.json', 'run.json', 'series.json'].includes(path.basename(file)),
   );
   return Promise.all(
     files.map(async (file) => ({

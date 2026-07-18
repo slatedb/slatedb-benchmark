@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { APIRoute, GetStaticPaths } from 'astro';
 
-const names = ['result', 'run'];
+const names = ['result', 'run', 'series'];
 const schemaRoot = path.resolve(process.cwd(), '..', 'schema');
 
 export const getStaticPaths = (async () =>

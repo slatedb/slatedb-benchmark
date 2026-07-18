@@ -258,6 +258,15 @@
         }
       }
     },
+    "seriesReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file", "sha256"],
+      "properties": {
+        "file": { "const": "series.json" },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
     "rateSummary": {
       "type": "object",
       "additionalProperties": false,
@@ -478,7 +487,8 @@
         "application",
         "object_store",
         "process",
-        "machine"
+        "machine",
+        "series"
       ],
       "properties": {
         "status": { "const": "ok" },
@@ -496,7 +506,8 @@
         "application": { "$ref": "#/$defs/applicationMetrics" },
         "object_store": { "$ref": "#/$defs/objectStoreMetrics" },
         "process": { "$ref": "#/$defs/processStatistics" },
-        "machine": { "$ref": "#/$defs/machineStatistics" }
+        "machine": { "$ref": "#/$defs/machineStatistics" },
+        "series": { "$ref": "#/$defs/seriesReference" }
       }
     }
   }

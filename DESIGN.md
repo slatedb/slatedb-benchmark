@@ -111,28 +111,32 @@ goldens/<golden-id>/
   full-compaction/result.json
 
 sessions/<session>/
+  <workload>/series.json
   <workload>/result.json
 ```
 
-Preparation results contain checkpoint references and golden dataset metadata.
-They contain no benchmark metric tables. Workload results contain their metrics,
-resolved configuration, source commits, and benchmark environment.
+Preparation results contain checkpoint references, golden dataset metadata, and
+phase metrics. Workload results contain their summaries, configuration, source
+commits, and environment. Each workload result names and authenticates its
+chart sidecar.
 
 Every result is also its task's completion signal and is created last:
 
 ```text
 run task
-  -> validate its database and result
+  -> validate its database, summaries, and series
   -> finish database writes
+  -> create series.json
   -> create result.json
 ```
 
 The workflow creates `result.json` with an object-store create precondition. A
 valid existing result skips the task. A missing result reruns it, while an
-invalid result fails and requires cleanup. GitHub concurrency groups prevent
-two jobs from writing the same golden phase or session task. The operator
-chooses a new golden ID when the SlateDB commit or preparation configuration
-changes.
+invalid result or sidecar fails and requires cleanup. A resumed workload checks
+the sidecar digest and restores both files to its local artifact. GitHub
+concurrency groups prevent two jobs from writing the same golden phase or
+session task. The operator chooses a new golden ID when the SlateDB commit or
+preparation configuration changes.
 
 Golden checkpoints remain immutable until explicit deletion. Each workload
 clone uses a session- and task-specific prefix and owns its new manifests and
@@ -278,7 +282,7 @@ after changing the SlateDB commit or preparation configuration.
 The workload matrix uses one WarpBuild machine per task and
 `max-parallel: 4`. All workload jobs share Tigris, so `run.json` records that
 limit. Each workload writes to
-`sessions/<github.run_id>/<workload>/result.json`.
+`sessions/<github.run_id>/<workload>/{series,result}.json`.
 
 ```text
 new dispatch -> new github.run_id -> run every workload
@@ -321,7 +325,9 @@ results/<version>/
     bulk-load/result.json
     full-compaction/result.json
   workload/
-    <name>/result.json
+    <name>/
+      result.json
+      series.json
 ```
 
 `run.json` records the golden ID, preparation and benchmark runner commits,
@@ -337,10 +343,11 @@ coverage, database identity, and the invariants in
 [`BENCHMARKS.md`](BENCHMARKS.md). JSON schemas remain the published contract;
 the runner does not repeat validation through a schema engine.
 
-Successful tasks publish summaries and discard histograms and one-second
-buckets. Failed tasks may include raw diagnostic files in their GitHub artifact.
-Published files contain no credentials, signed URLs, cache paths, or session
-tokens.
+Workload sidecars contain complete rate and resource buckets plus populated HDR
+histogram buckets. `result.json` stores the sidecar digest, and `run.json`
+checksums both files. Failed tasks may include raw diagnostic files in their
+GitHub artifact. Published files contain no credentials, signed URLs, cache
+paths, or session tokens.
 
 ## Smoke tests and fixtures
 
@@ -389,7 +396,7 @@ concurrency groups, job timeouts, and permissions.
 ## Website
 
 The Astro website reads checked-in results during its build and deploys through
-GitHub Pages. It has no database service or charting code.
+GitHub Pages. It has no database service.
 
 ```text
 /<version>/preparation/<name>/
@@ -397,9 +404,12 @@ GitHub Pages. It has no database service or charting code.
 ```
 
 Preparation pages display golden dataset and checkpoint information alongside
-the applicable metric tables. Workload pages display the same tables. Both omit
-inapplicable rows and keep measured zeroes visible. Result files and source
-commits remain linked from each page.
+the applicable metric tables. Workload pages display the same tables. Clicking
+a workload row opens its chart below the row. The browser fetches one sidecar
+after page load and reuses it for every row. Data-saving mode disables the
+preload; a click still fetches it. Both page types omit inapplicable rows and
+keep measured zeroes visible. Result files and source commits remain linked
+from each page.
 
 The site uses the SlateDB logo, colors, and fonts: Marcellus for headings, Inter
 for body text, and JetBrains Mono for numeric tables. The intended custom domain

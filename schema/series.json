@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://benchmark.slatedb.io/schema/series.json",
+  "title": "SlateDB benchmark workload series",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "rate_elapsed_ns",
+    "rate_duration_ns",
+    "resource_elapsed_ns",
+    "resource_duration_ns",
+    "application",
+    "object_store",
+    "process",
+    "machine"
+  ],
+  "properties": {
+    "rate_elapsed_ns": { "$ref": "#/$defs/positiveIntegers" },
+    "rate_duration_ns": { "$ref": "#/$defs/positiveIntegers" },
+    "resource_elapsed_ns": { "$ref": "#/$defs/positiveIntegers" },
+    "resource_duration_ns": { "$ref": "#/$defs/positiveIntegers" },
+    "application": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operations_per_second",
+        "bytes_per_second",
+        "latency_histograms"
+      ],
+      "properties": {
+        "operations_per_second": { "$ref": "#/$defs/namedSeries" },
+        "bytes_per_second": { "$ref": "#/$defs/namedSeries" },
+        "latency_histograms": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/histogram" }
+        }
+      }
+    },
+    "object_store": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requests_per_second", "bytes_per_second"],
+      "properties": {
+        "requests_per_second": { "$ref": "#/$defs/namedSeries" },
+        "bytes_per_second": { "$ref": "#/$defs/namedSeries" }
+      }
+    },
+    "process": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cpu_cores", "rss_bytes"],
+      "properties": {
+        "cpu_cores": { "$ref": "#/$defs/nonnegativeNumbers" },
+        "rss_bytes": { "$ref": "#/$defs/nonnegativeNumbers" }
+      }
+    },
+    "machine": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cpu_percent",
+        "rss_bytes",
+        "network_receive_bytes_per_second",
+        "network_send_bytes_per_second",
+        "disk_read_bytes_per_second",
+        "disk_write_bytes_per_second",
+        "disk_read_operations_per_second",
+        "disk_write_operations_per_second"
+      ],
+      "properties": {
+        "cpu_percent": { "$ref": "#/$defs/nonnegativeNumbers" },
+        "rss_bytes": { "$ref": "#/$defs/nonnegativeNumbers" },
+        "network_receive_bytes_per_second": {
+          "$ref": "#/$defs/nonnegativeNumbers"
+        },
+        "network_send_bytes_per_second": {
+          "$ref": "#/$defs/nonnegativeNumbers"
+        },
+        "disk_read_bytes_per_second": {
+          "$ref": "#/$defs/nonnegativeNumbers"
+        },
+        "disk_write_bytes_per_second": {
+          "$ref": "#/$defs/nonnegativeNumbers"
+        },
+        "disk_read_operations_per_second": {
+          "$ref": "#/$defs/nonnegativeNumbers"
+        },
+        "disk_write_operations_per_second": {
+          "$ref": "#/$defs/nonnegativeNumbers"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "positiveIntegers": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "integer", "minimum": 1 }
+    },
+    "nonnegativeNumbers": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "number", "minimum": 0 }
+    },
+    "namedSeries": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/nonnegativeNumbers" }
+    },
+    "histogram": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["upper_bound_ns", "counts"],
+      "properties": {
+        "upper_bound_ns": { "$ref": "#/$defs/positiveIntegers" },
+        "counts": { "$ref": "#/$defs/positiveIntegers" }
+      }
+    }
+  }
+}

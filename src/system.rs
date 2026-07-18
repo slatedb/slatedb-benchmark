@@ -1,8 +1,9 @@
 use crate::histogram::HistogramSet;
 use crate::instrumented_store::{StoreMetrics, StoreSnapshot};
 use crate::model::{
-    ApplicationMetrics, DistributionSummary, Environment, MachineStatistics, ObjectStoreMetrics,
-    ProcessStatistics, RateSummary, ThroughputSummary,
+    ApplicationMetrics, ApplicationSeries, DistributionSummary, Environment, MachineSeries,
+    MachineStatistics, ObjectStoreMetrics, ObjectStoreSeries, ProcessSeries, ProcessStatistics,
+    RateSummary, ThroughputSummary, WorkloadSeries,
 };
 use anyhow::{Context, Result};
 use slatedb_common::metrics::{
@@ -186,6 +187,7 @@ impl OperationDelta {
 
 #[derive(Debug, Clone, Default)]
 pub struct ApplicationWindow {
+    pub elapsed: Duration,
     pub duration: Duration,
     pub operations: BTreeMap<String, OperationDelta>,
 }
@@ -289,6 +291,8 @@ impl ApplicationRegistry {
 
 #[derive(Debug, Clone)]
 struct ResourceWindow {
+    elapsed: Duration,
+    duration: Duration,
     process_cpu_cores: f64,
     process_rss_bytes: f64,
     machine_cpu_percent: f64,
@@ -490,6 +494,163 @@ impl SampledMeasurement {
             }),
         }
     }
+
+    pub fn series(&self) -> WorkloadSeries {
+        let rate_elapsed_ns = self
+            .application_windows
+            .iter()
+            .map(|window| duration_ns(window.elapsed))
+            .collect();
+        let rate_duration_ns = self
+            .application_windows
+            .iter()
+            .map(|window| duration_ns(window.duration))
+            .collect();
+        let mut operations_per_second = BTreeMap::new();
+        let mut application_bytes_per_second = BTreeMap::new();
+        for (name, total) in &self.application_total.operations {
+            operations_per_second.insert(
+                name.clone(),
+                self.application_windows
+                    .iter()
+                    .map(|window| {
+                        rate(
+                            window
+                                .operations
+                                .get(name)
+                                .map_or(0, |operation| operation.calls),
+                            window.duration,
+                        )
+                    })
+                    .collect(),
+            );
+            if total.logical_bytes > 0 {
+                application_bytes_per_second.insert(
+                    name.clone(),
+                    self.application_windows
+                        .iter()
+                        .map(|window| {
+                            rate(
+                                window
+                                    .operations
+                                    .get(name)
+                                    .map_or(0, |operation| operation.logical_bytes),
+                                window.duration,
+                            )
+                        })
+                        .collect(),
+                );
+            }
+        }
+
+        let store_total = self.store_end.difference(&self.store_start);
+        let mut requests_per_second = BTreeMap::new();
+        let mut store_bytes_per_second = BTreeMap::new();
+        for (method, count) in &store_total.requests {
+            if *count == 0 {
+                continue;
+            }
+            requests_per_second.insert(
+                method.clone(),
+                self.store_windows
+                    .iter()
+                    .map(|window| {
+                        rate(
+                            window.delta.requests.get(method).copied().unwrap_or(0),
+                            window.duration,
+                        )
+                    })
+                    .collect(),
+            );
+            if store_total.body_bytes(method) > 0 {
+                store_bytes_per_second.insert(
+                    method.clone(),
+                    self.store_windows
+                        .iter()
+                        .map(|window| rate(window.delta.body_bytes(method), window.duration))
+                        .collect(),
+                );
+            }
+        }
+
+        WorkloadSeries {
+            rate_elapsed_ns,
+            rate_duration_ns,
+            resource_elapsed_ns: self
+                .resources
+                .iter()
+                .map(|window| duration_ns(window.elapsed))
+                .collect(),
+            resource_duration_ns: self
+                .resources
+                .iter()
+                .map(|window| duration_ns(window.duration))
+                .collect(),
+            application: ApplicationSeries {
+                operations_per_second,
+                bytes_per_second: application_bytes_per_second,
+                latency_histograms: self.application_total.histograms.series_with_prefix("api/"),
+            },
+            object_store: ObjectStoreSeries {
+                requests_per_second,
+                bytes_per_second: store_bytes_per_second,
+            },
+            process: ProcessSeries {
+                cpu_cores: self
+                    .resources
+                    .iter()
+                    .map(|window| window.process_cpu_cores)
+                    .collect(),
+                rss_bytes: self
+                    .resources
+                    .iter()
+                    .map(|window| window.process_rss_bytes)
+                    .collect(),
+            },
+            machine: MachineSeries {
+                cpu_percent: self
+                    .resources
+                    .iter()
+                    .map(|window| window.machine_cpu_percent)
+                    .collect(),
+                rss_bytes: self
+                    .resources
+                    .iter()
+                    .map(|window| window.process_rss_bytes)
+                    .collect(),
+                network_receive_bytes_per_second: self
+                    .resources
+                    .iter()
+                    .map(|window| window.network_receive_bytes_per_second)
+                    .collect(),
+                network_send_bytes_per_second: self
+                    .resources
+                    .iter()
+                    .map(|window| window.network_send_bytes_per_second)
+                    .collect(),
+                disk_read_bytes_per_second: self
+                    .resources
+                    .iter()
+                    .map(|window| window.disk_read_bytes_per_second)
+                    .collect(),
+                disk_write_bytes_per_second: self
+                    .resources
+                    .iter()
+                    .map(|window| window.disk_write_bytes_per_second)
+                    .collect(),
+                disk_read_operations_per_second: self
+                    .resources
+                    .iter()
+                    .map(|window| window.disk_read_operations_per_second)
+                    .collect(),
+                disk_write_operations_per_second: self
+                    .resources
+                    .iter()
+                    .map(|window| window.disk_write_operations_per_second)
+                    .collect(),
+            },
+        }
+    }
 }
 
 pub async fn sample_until_stopped(
@@ -542,12 +703,14 @@ pub(crate) async fn sample_until_stopped_with_rate_control(
                     .expect("rate window control lock");
                 let now = Instant::now();
                 let duration = now.saturating_duration_since(previous_at);
+                let elapsed = now.saturating_duration_since(started);
                 let application = registry.drain()?;
                 let store = store_metrics.snapshot();
                 let host_snapshot = host.snapshot();
                 application_total.merge(&application)?;
                 if *rate_windows_active {
                     application_windows.push(ApplicationWindow {
+                        elapsed,
                         duration,
                         operations: application.operations,
                     });
@@ -556,7 +719,7 @@ pub(crate) async fn sample_until_stopped_with_rate_control(
                         delta: store.difference(&previous_store),
                     });
                 }
-                resources.push(host_snapshot.window(&previous_host, duration));
+                resources.push(host_snapshot.window(&previous_host, elapsed, duration));
                 previous_at = now;
                 previous_store = store;
                 previous_host = host_snapshot;
@@ -579,6 +742,7 @@ pub(crate) async fn sample_until_stopped_with_rate_control(
         .expect("rate window control lock")
     {
         application_windows.push(ApplicationWindow {
+            elapsed: ended.saturating_duration_since(started),
             duration,
             operations: application.operations,
         });
@@ -770,9 +934,11 @@ struct HostSnapshot {
 }
 
 impl HostSnapshot {
-    fn window(&self, previous: &Self, duration: Duration) -> ResourceWindow {
+    fn window(&self, previous: &Self, elapsed: Duration, duration: Duration) -> ResourceWindow {
         let seconds = duration.as_secs_f64().max(f64::EPSILON);
         ResourceWindow {
+            elapsed,
+            duration,
             process_cpu_cores: self.process_cpu_cores,
             process_rss_bytes: self.process_rss_bytes as f64,
             machine_cpu_percent: self.machine_cpu_percent,
@@ -1011,5 +1177,18 @@ mod tests {
         assert!(object_store.requests["GET"].min_per_second > 0.0);
         assert_eq!(object_store.requests["PUT"].total, 1);
         assert_eq!(object_store.requests["PUT"].p50_per_second, 0.0);
+
+        let series = measurement.series();
+        assert_eq!(series.rate_elapsed_ns.len(), series.rate_duration_ns.len());
+        assert!(series.resource_elapsed_ns.len() > series.rate_elapsed_ns.len());
+        assert!(series.application.operations_per_second["get"]
+            .iter()
+            .any(|value| *value > 0.0));
+        assert!(series.application.operations_per_second["flush"]
+            .iter()
+            .all(|value| *value == 0.0));
+        assert!(series.object_store.requests_per_second["PUT"]
+            .iter()
+            .all(|value| *value == 0.0));
     }
 }

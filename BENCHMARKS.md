@@ -162,13 +162,13 @@ API tables retain the names `transaction.get`, `transaction.put`, and
 
 ## Metrics
 
-The website shows seven tables and no charts: application operations,
-application throughput, application latency, object-store requests,
-object-store throughput, process statistics, and machine statistics.
-Workload and preparation pages use these tables. Preparation pages also show
-checkpoint references and golden dataset metadata. Full compaction omits the
-three empty application tables. The website omits rows with no calls and keeps
-zero values in rows that have calls. Values in the examples are illustrative.
+The website shows seven tables: application operations, application throughput,
+application latency, object-store requests, object-store throughput, process
+statistics, and machine statistics. Workload rows expand to charts;
+preparation pages keep tables only. Preparation pages also show checkpoint
+references and golden dataset metadata. Full compaction omits the three empty
+application tables. The website omits rows with no calls and keeps zero values
+in rows that have calls. Values in the examples are illustrative.
 
 The runner counts operations and samples machine counters once per second. The
 workload recorders stay active through the durability drain, so totals and
@@ -178,6 +178,11 @@ one-second client windows and exclude the durability drain and partial windows
 at the boundaries. Preparation rate percentiles also include the final partial
 window. Average rates divide the total by the full recorded interval. Latency
 statistics use individual calls and milliseconds.
+
+Rate charts use the same complete client windows as rate percentiles. Process
+and machine charts continue through durability drain and mark its start.
+Latency charts plot the recorded HDR histogram as a cumulative distribution.
+Chart data lives in a separate workload file and is fetched after page load.
 
 ### Application operations
 

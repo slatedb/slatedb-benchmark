@@ -3,14 +3,16 @@ use crate::config::{self, ResolvedConfig, Task};
 use crate::database_size::live_database_size_bytes;
 use crate::model::{
     CheckpointReference, GoldenDatasetMetadata, InitialState, PreparationResult,
-    ResultConfiguration, SourceIdentity, WorkloadResult,
+    ResultConfiguration, SeriesReference, SourceIdentity, WorkloadResult, WorkloadSeries,
 };
 use crate::object_store::{delete_prefix, ObjectStoreContext};
 use crate::system::{
     duration_ns, inspect_environment, measure_until_complete, verify_environment,
     ApplicationRegistry, BenchmarkMetricsRecorder, SampledMeasurement,
 };
-use crate::validation::{validate_preparation_result, validate_workload_result};
+use crate::validation::{
+    validate_preparation_result, validate_workload_result, validate_workload_series,
+};
 use crate::workloads::{self, DatasetLoadMetrics};
 use anyhow::{bail, Context, Result};
 use bytes::Bytes;
@@ -55,6 +57,7 @@ pub async fn execute(args: RunArgs) -> Result<()> {
     fs::create_dir_all(&args.output)
         .with_context(|| format!("creating {}", args.output.display()))?;
     remove_local_output(&args.output.join("result.json"))?;
+    remove_local_output(&args.output.join("series.json"))?;
     remove_local_output(&args.output.join("failure.json"))?;
     let config = config::load(args.task, args.scale, FsPath::new(SETTINGS_PATH))?;
     let object_store = ObjectStoreContext::load()?;
@@ -318,11 +321,18 @@ async fn run_workload(
         .join(session)
         .join(args.task.as_str());
     let result_path = task_root.clone().join("result.json");
+    let series_path = task_root.clone().join("series.json");
     if let Some(existing) =
         load_optional::<WorkloadResult>(Arc::clone(&context.control), &result_path).await?
     {
         validate_workload_result(&existing)?;
         ensure_workload_matches(&existing, args, config, golden.as_ref())?;
+        let series_bytes = load_required_bytes(Arc::clone(&context.control), &series_path).await?;
+        validate_series_digest(&existing.series, &series_bytes)?;
+        let series: WorkloadSeries =
+            serde_json::from_slice(&series_bytes).context("parsing stored workload series")?;
+        validate_workload_series(&existing, &series)?;
+        write_local_bytes(&args.output, "series.json", &series_bytes)?;
         write_local_result(&args.output, &existing)?;
         return print_success(args, true);
     }
@@ -387,6 +397,8 @@ async fn run_workload(
     close?;
     compaction_check?;
 
+    let series = execution.measurement.series();
+    let series_bytes = serde_json::to_vec_pretty(&series)?;
     let result = WorkloadResult {
         status: "ok".to_string(),
         task: args.task,
@@ -404,9 +416,22 @@ async fn run_workload(
         object_store: execution.measurement.object_store(),
         process: execution.measurement.process(),
         machine: execution.measurement.machine(),
+        series: SeriesReference {
+            file: "series.json".to_string(),
+            sha256: sha256_bytes(&series_bytes),
+        },
     };
     validate_workload_result(&result)?;
+    validate_workload_series(&result, &series)?;
+    write_local_bytes(&args.output, "series.json", &series_bytes)?;
     write_local_result(&args.output, &result)?;
+    create_bytes(
+        Arc::clone(&context.control),
+        &series_path,
+        series_bytes,
+        "workload series",
+    )
+    .await?;
     create_result(Arc::clone(&context.control), &result_path, &result).await?;
     print_success(args, false)
 }
@@ -570,28 +595,66 @@ where
         .with_context(|| format!("required result {path} does not exist"))
 }
 
+async fn load_required_bytes(store: Arc<dyn ObjectStore>, path: &Path) -> Result<Bytes> {
+    store
+        .get(path)
+        .await
+        .with_context(|| format!("loading {path}"))?
+        .bytes()
+        .await
+        .with_context(|| format!("reading {path}"))
+}
+
+fn sha256_bytes(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+fn validate_series_digest(reference: &SeriesReference, bytes: &[u8]) -> Result<()> {
+    anyhow::ensure!(
+        reference.file == "series.json",
+        "workload series file must be series.json"
+    );
+    anyhow::ensure!(
+        sha256_bytes(bytes) == reference.sha256,
+        "workload series digest does not match result.json"
+    );
+    Ok(())
+}
+
+async fn create_bytes(
+    store: Arc<dyn ObjectStore>,
+    path: &Path,
+    bytes: Vec<u8>,
+    description: &str,
+) -> Result<()> {
+    store
+        .put_opts(path, PutPayload::from(bytes), PutMode::Create.into())
+        .await
+        .with_context(|| format!("creating {description} {path}"))?;
+    Ok(())
+}
+
 async fn create_result(
     store: Arc<dyn ObjectStore>,
     path: &Path,
     value: &impl Serialize,
 ) -> Result<()> {
-    store
-        .put_opts(
-            path,
-            PutPayload::from(serde_json::to_vec_pretty(value)?),
-            PutMode::Create.into(),
-        )
-        .await
-        .with_context(|| format!("creating completion result {path}"))?;
-    Ok(())
+    create_bytes(
+        store,
+        path,
+        serde_json::to_vec_pretty(value)?,
+        "completion result",
+    )
+    .await
 }
 
 fn write_local_result(output: &FsPath, value: &impl Serialize) -> Result<()> {
-    fs::write(
-        output.join("result.json"),
-        serde_json::to_vec_pretty(value)?,
-    )
-    .with_context(|| format!("writing {}/result.json", output.display()))
+    write_local_bytes(output, "result.json", &serde_json::to_vec_pretty(value)?)
+}
+
+fn write_local_bytes(output: &FsPath, name: &str, bytes: &[u8]) -> Result<()> {
+    fs::write(output.join(name), bytes)
+        .with_context(|| format!("writing {}/{name}", output.display()))
 }
 
 fn print_success(args: &RunArgs, skipped: bool) -> Result<()> {
@@ -1024,7 +1087,8 @@ fn manifest_lsm_digest(manifest: &VersionedManifest) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{full_tree_compaction_spec, validate_name};
+    use super::{full_tree_compaction_spec, sha256_bytes, validate_name, validate_series_digest};
+    use crate::model::SeriesReference;
     use bytes::Bytes;
     use slatedb::compactor::SourceId;
 
@@ -1045,5 +1109,15 @@ mod tests {
             8,
         )
         .is_none());
+    }
+
+    #[test]
+    fn workload_series_digest_detects_modified_bytes() {
+        let reference = SeriesReference {
+            file: "series.json".to_string(),
+            sha256: sha256_bytes(b"original"),
+        };
+        validate_series_digest(&reference, b"original").expect("matching digest");
+        assert!(validate_series_digest(&reference, b"modified").is_err());
     }
 }

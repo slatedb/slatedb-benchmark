@@ -209,6 +209,68 @@ pub struct MachineStatistics {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct SeriesReference {
+    pub file: String,
+    pub sha256: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistogramSeries {
+    pub upper_bound_ns: Vec<u64>,
+    pub counts: Vec<u64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApplicationSeries {
+    pub operations_per_second: BTreeMap<String, Vec<f64>>,
+    pub bytes_per_second: BTreeMap<String, Vec<f64>>,
+    pub latency_histograms: BTreeMap<String, HistogramSeries>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ObjectStoreSeries {
+    pub requests_per_second: BTreeMap<String, Vec<f64>>,
+    pub bytes_per_second: BTreeMap<String, Vec<f64>>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProcessSeries {
+    pub cpu_cores: Vec<f64>,
+    pub rss_bytes: Vec<f64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MachineSeries {
+    pub cpu_percent: Vec<f64>,
+    pub rss_bytes: Vec<f64>,
+    pub network_receive_bytes_per_second: Vec<f64>,
+    pub network_send_bytes_per_second: Vec<f64>,
+    pub disk_read_bytes_per_second: Vec<f64>,
+    pub disk_write_bytes_per_second: Vec<f64>,
+    pub disk_read_operations_per_second: Vec<f64>,
+    pub disk_write_operations_per_second: Vec<f64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkloadSeries {
+    pub rate_elapsed_ns: Vec<u64>,
+    pub rate_duration_ns: Vec<u64>,
+    pub resource_elapsed_ns: Vec<u64>,
+    pub resource_duration_ns: Vec<u64>,
+    pub application: ApplicationSeries,
+    pub object_store: ObjectStoreSeries,
+    pub process: ProcessSeries,
+    pub machine: MachineSeries,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct WorkloadResult {
     pub status: String,
     pub task: Task,
@@ -226,6 +288,7 @@ pub struct WorkloadResult {
     pub object_store: ObjectStoreMetrics,
     pub process: ProcessStatistics,
     pub machine: MachineStatistics,
+    pub series: SeriesReference,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

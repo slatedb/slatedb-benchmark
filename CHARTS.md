@@ -35,9 +35,9 @@ summary table remains intact.
 | Machine disk read/write | Elapsed seconds | MiB/s |
 | Machine disk read/write operations | Elapsed seconds | Operations/s |
 
-Time charts start at the post-warmup metric baseline and include complete
-one-second buckets from measurement and durability drain. Mark the boundary
-between those intervals. Draw the row's published average as a reference line.
+Rate charts use complete client buckets and stop before durability drain.
+Process and machine charts continue through drain and mark its start. Draw the
+row's published average as a reference line.
 
 The average may differ from the arithmetic mean of plotted points. The table
 divides totals by the full recorded interval, including partial boundary
@@ -73,8 +73,10 @@ results/<version>/workload/<name>/
 
 ```json
 {
-  "elapsed_ns": [1000123000, 2000876000],
-  "duration_ns": [1000123000, 1000753000],
+  "rate_elapsed_ns": [1000123000, 2000876000],
+  "rate_duration_ns": [1000123000, 1000753000],
+  "resource_elapsed_ns": [1000123000, 2000876000, 3001142000],
+  "resource_duration_ns": [1000123000, 1000753000, 1000266000],
   "application": {
     "operations_per_second": {
       "get": [50120.8, 49881.4]
@@ -102,13 +104,14 @@ The complete sidecar contains these series:
 | Process | CPU cores and RSS bytes |
 | Machine | CPU percent, RSS bytes, network bytes/s, disk bytes/s, disk ops/s |
 
-All time arrays match `elapsed_ns` and `duration_ns`. Missing APIs and HTTP
-methods contribute zero rather than a gap. Store nanoseconds and bytes; the
-website converts display units.
+Application and object-store arrays match `rate_elapsed_ns`. Process and
+machine arrays match `resource_elapsed_ns`. Missing APIs and HTTP methods
+contribute zero rather than a gap. Store nanoseconds and bytes; the website
+converts display units.
 
 Keep every complete sampling bucket and populated HDR bucket. Do not reduce the
 sample count. GitHub Pages compression and caching limit transfer cost, and the
-browser fetches the sidecar only after a row opens.
+browser fetches the sidecar after page load or when a row first opens.
 
 ## Runner
 
@@ -143,8 +146,8 @@ Add `schema/series.json` and publish it with the existing schemas. Semantic
 validation checks:
 
 - Elapsed offsets increase and describe complete samples.
-- Elapsed and duration arrays have the same nonzero length.
-- Each time series has that length and contains finite, nonnegative values.
+- Each elapsed array matches its duration array and has at least one sample.
+- Each series matches its timeline and contains finite, nonnegative values.
 - Series keys match the rows in `result.json`.
 - Throughput exists only for rows that transferred bytes.
 - Histogram bounds increase, counts are positive, and counts sum to latency
@@ -218,7 +221,8 @@ fixtures pass the result, run, and series schemas.
 
 A browser test verifies:
 
-1. The page requests `series.json` only after the `load` event and delay.
+1. Without a click, the page waits for the `load` event and delay before
+   requesting `series.json`.
 2. Reduced-data mode skips the background request.
 3. Mouse, Enter, and Space open the correct chart.
 4. Opening another row closes the first.

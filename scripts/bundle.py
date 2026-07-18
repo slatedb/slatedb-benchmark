@@ -54,6 +54,28 @@ def sha256(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def read_series(path, result):
+    if result.get("series", {}).get("file") != "series.json":
+        raise ValueError(f"{path.parent / 'result.json'} has an invalid series reference")
+    with path.open(encoding="utf-8") as file:
+        series = json.load(file)
+    required = {
+        "rate_elapsed_ns",
+        "rate_duration_ns",
+        "resource_elapsed_ns",
+        "resource_duration_ns",
+        "application",
+        "object_store",
+        "process",
+        "machine",
+    }
+    if set(series) != required:
+        raise ValueError(f"{path} does not contain the expected workload series")
+    if sha256(path) != result["series"].get("sha256"):
+        raise ValueError(f"{path} does not match its result digest")
+    return path
+
+
 def write_json(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -70,6 +92,10 @@ def main():
     }
     workloads = {
         task: read_result(args.input / "workload" / task / "result.json", task, args.golden)
+        for task in WORKLOADS
+    }
+    workload_series = {
+        task: read_series(args.input / "workload" / task / "series.json", workloads[task])
         for task in WORKLOADS
     }
 
@@ -125,6 +151,12 @@ def main():
             write_json(target, result)
             checksums[relative.as_posix()] = sha256(target)
             configurations[task] = result["configuration"]
+            if kind == "workload":
+                series_relative = Path(kind) / task / "series.json"
+                series_target = destination / series_relative
+                series_target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(workload_series[task], series_target)
+                checksums[series_relative.as_posix()] = sha256(series_target)
 
     manifest = {
         "status": "ok",
