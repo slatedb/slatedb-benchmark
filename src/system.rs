@@ -526,13 +526,24 @@ pub async fn sample_until_stopped(
         }
     }
     let application = registry.drain()?;
+    let store_end = store_metrics.snapshot();
+    let ended = Instant::now();
+    let duration = ended.saturating_duration_since(previous_at);
     application_total.merge(&application)?;
+    application_windows.push(ApplicationWindow {
+        duration,
+        operations: application.operations,
+    });
+    store_windows.push(StoreWindow {
+        duration,
+        delta: store_end.difference(&previous_store),
+    });
     Ok(SampledMeasurement {
-        elapsed: started.elapsed(),
+        elapsed: ended.saturating_duration_since(started),
         application_total,
         application_windows,
         store_start,
-        store_end: store_metrics.snapshot(),
+        store_end,
         store_windows,
         resources,
     })
@@ -824,8 +835,11 @@ pub fn counter_value(metrics: &Metrics, name: &str) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{summarize_values, ApplicationRegistry};
+    use super::{sample_until_stopped, summarize_values, ApplicationRegistry};
+    use crate::instrumented_store::{HttpMethod, StoreMetrics};
+    use std::sync::Arc;
     use std::time::Duration;
+    use tokio::sync::{oneshot, watch};
 
     #[test]
     fn distribution_contains_the_published_columns() {
@@ -847,5 +861,35 @@ mod tests {
         assert_eq!(delta.operations["get"].calls, 1);
         assert_eq!(delta.operations["put"].calls, 1);
         assert_eq!(delta.histograms.summaries_with_prefix("api/").len(), 2);
+    }
+
+    #[tokio::test]
+    async fn final_partial_window_includes_application_and_store_activity() {
+        let registry = Arc::new(ApplicationRegistry::default());
+        let recorder = registry.recorder();
+        let store_metrics = Arc::new(StoreMetrics::default());
+        let (stop_tx, stop_rx) = watch::channel(false);
+        let (ready_tx, ready_rx) = oneshot::channel();
+        let sampler = tokio::spawn(sample_until_stopped(
+            Arc::clone(&registry),
+            Arc::clone(&store_metrics),
+            stop_rx,
+            Some(ready_tx),
+        ));
+        ready_rx.await.expect("sampler baseline");
+
+        recorder.record_success("flush", Duration::from_millis(1), 0);
+        store_metrics.record_request(HttpMethod::Get);
+        store_metrics.record_response_bytes(HttpMethod::Get, 16);
+        stop_tx.send(true).expect("stop sampler");
+
+        let measurement = sampler.await.expect("join sampler").expect("measurement");
+        let application = measurement.application();
+        assert_eq!(application.operations["flush"].total, 1);
+        assert!(application.operations["flush"].min_per_second > 0.0);
+        let object_store = measurement.object_store();
+        assert_eq!(object_store.requests["GET"].total, 1);
+        assert!(object_store.requests["GET"].min_per_second > 0.0);
+        assert!(object_store.throughput["GET"].min_bytes_per_second > 0.0);
     }
 }

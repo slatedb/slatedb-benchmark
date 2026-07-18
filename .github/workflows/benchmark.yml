@@ -54,6 +54,7 @@ jobs:
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
+          GOLDEN_ID: ${{ inputs.golden_id }}
           TIGRIS_BUCKET_PREFIX: ${{ vars.TIGRIS_BUCKET_PREFIX }}
         run: |
           set -euo pipefail
@@ -63,32 +64,48 @@ jobs:
           for task in bulk-load full-compaction; do
             mkdir -p ".runs/bundle/preparation/$task"
             aws s3 cp --endpoint-url "$endpoint" --only-show-errors \
-              "s3://$bucket/$prefix/goldens/${{ inputs.golden_id }}/$task/result.json" \
+              "s3://$bucket/$prefix/goldens/$GOLDEN_ID/$task/result.json" \
               ".runs/bundle/preparation/$task/result.json"
           done
       - name: Validate preparation results
         id: validate
         shell: bash
         env:
+          BENCHMARK_SCALE: ${{ inputs.scale }}
           GH_TOKEN: ${{ github.token }}
+          GOLDEN_ID: ${{ inputs.golden_id }}
+          PUBLISH_BENCHMARK: ${{ inputs.publish }}
         run: |
           set -euo pipefail
-          if [[ "${{ inputs.publish }}" == true && "${{ inputs.scale }}" != 1.0 ]]; then
+          if [[ "$PUBLISH_BENCHMARK" == true && "$BENCHMARK_SCALE" != 1.0 ]]; then
             echo "published runs require scale 1.0" >&2
             exit 1
           fi
           bulk=.runs/bundle/preparation/bulk-load/result.json
           full=.runs/bundle/preparation/full-compaction/result.json
-          jq -e --arg golden "${{ inputs.golden_id }}" \
+          jq -e --arg golden "$GOLDEN_ID" \
             '.status == "ok" and .task == "bulk-load" and .golden_id == $golden' "$bulk" >/dev/null
-          jq -e --arg golden "${{ inputs.golden_id }}" \
+          jq -e --arg golden "$GOLDEN_ID" \
             '.status == "ok" and .task == "full-compaction" and .golden_id == $golden' "$full" >/dev/null
+          for result in "$bulk" "$full"; do
+            if ! jq -e '
+              .recorded_interval_ns > 0 and
+              (.environment | type == "object") and
+              (.application | type == "object") and
+              (.object_store | type == "object") and
+              (.process | type == "object") and
+              (.machine | type == "object")
+            ' "$result" >/dev/null; then
+              echo "preparation result has no recorded metrics; rerun golden.yml" >&2
+              exit 1
+            fi
+          done
           commit=$(jq -r .source.slate_commit "$full")
           version=$(jq -r .source.slate_version "$full")
           test "$commit" = "$(jq -r .source.slate_commit "$bulk")"
-          jq -e --argjson scale "${{ inputs.scale }}" \
+          jq -e --argjson scale "$BENCHMARK_SCALE" \
             '.configuration.scale == $scale' "$bulk" >/dev/null
-          jq -e --argjson scale "${{ inputs.scale }}" \
+          jq -e --argjson scale "$BENCHMARK_SCALE" \
             '.configuration.scale == $scale' "$full" >/dev/null
           test "$(jq -r .source_checkpoint.checkpoint_id "$full")" = \
             "$(jq -r .checkpoint.checkpoint_id "$bulk")"
@@ -188,6 +205,10 @@ jobs:
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
+          BENCHMARK_SCALE: ${{ inputs.scale }}
+          BENCHMARK_SESSION: github-${{ github.run_id }}
+          BENCHMARK_TASK: ${{ matrix.task }}
+          GOLDEN_ID: ${{ inputs.golden_id }}
           TIGRIS_BUCKET_PREFIX: ${{ vars.TIGRIS_BUCKET_PREFIX }}
           SLATEDB_BENCH_PUBLISHED: ${{ inputs.publish }}
         run: |
@@ -201,11 +222,11 @@ jobs:
           export SLATEDB_BENCH_REGION=${SLATEDB_BENCH_REGION:-fra}
           export SLATEDB_BENCH_RUNNER_TYPE=${SLATEDB_BENCH_RUNNER_TYPE:-warp-ubuntu-latest-x64-16x}
           bin/slatedb-benchmark run \
-            --task "${{ matrix.task }}" \
-            --golden "${{ inputs.golden_id }}" \
-            --session "github-${{ github.run_id }}" \
-            --scale "${{ inputs.scale }}" \
-            --output ".runs/workload/${{ matrix.task }}"
+            --task "$BENCHMARK_TASK" \
+            --golden "$GOLDEN_ID" \
+            --session "$BENCHMARK_SESSION" \
+            --scale "$BENCHMARK_SCALE" \
+            --output ".runs/workload/$BENCHMARK_TASK"
       - name: Preserve workload result
         if: always()
         uses: actions/upload-artifact@v4
@@ -232,12 +253,15 @@ jobs:
           path: .runs/bundle/workload
           merge-multiple: true
       - name: Assemble release bundle
+        env:
+          BENCHMARK_STARTED_AT: ${{ needs.validate-golden.outputs.started_at }}
+          GOLDEN_ID: ${{ inputs.golden_id }}
         run: |
           python3 scripts/bundle.py \
             --input .runs/bundle \
             --output .runs/release/results \
-            --golden "${{ inputs.golden_id }}" \
-            --started-at "${{ needs.validate-golden.outputs.started_at }}" \
+            --golden "$GOLDEN_ID" \
+            --started-at "$BENCHMARK_STARTED_AT" \
             --max-parallel 4
       - uses: actions/upload-artifact@v4
         with:

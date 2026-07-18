@@ -108,6 +108,8 @@ jobs:
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
+          BENCHMARK_SCALE: ${{ inputs.scale }}
+          GOLDEN_ID: ${{ inputs.golden_id }}
           TIGRIS_BUCKET_PREFIX: ${{ vars.TIGRIS_BUCKET_PREFIX }}
         run: |
           set -euo pipefail
@@ -121,8 +123,8 @@ jobs:
           export SLATEDB_BENCH_RUNNER_TYPE=${SLATEDB_BENCH_RUNNER_TYPE:-warp-ubuntu-latest-x64-16x}
           bin/slatedb-benchmark run \
             --task bulk-load \
-            --golden "${{ inputs.golden_id }}" \
-            --scale "${{ inputs.scale }}" \
+            --golden "$GOLDEN_ID" \
+            --scale "$BENCHMARK_SCALE" \
             --output .runs/preparation/bulk-load
       - name: Preserve result
         if: always()
@@ -155,6 +157,8 @@ jobs:
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
+          BENCHMARK_SCALE: ${{ inputs.scale }}
+          GOLDEN_ID: ${{ inputs.golden_id }}
           TIGRIS_BUCKET_PREFIX: ${{ vars.TIGRIS_BUCKET_PREFIX }}
         run: |
           set -euo pipefail
@@ -168,8 +172,8 @@ jobs:
           export SLATEDB_BENCH_RUNNER_TYPE=${SLATEDB_BENCH_RUNNER_TYPE:-warp-ubuntu-latest-x64-16x}
           bin/slatedb-benchmark run \
             --task full-compaction \
-            --golden "${{ inputs.golden_id }}" \
-            --scale "${{ inputs.scale }}" \
+            --golden "$GOLDEN_ID" \
+            --scale "$BENCHMARK_SCALE" \
             --output .runs/preparation/full-compaction
       - name: Preserve result
         if: always()
