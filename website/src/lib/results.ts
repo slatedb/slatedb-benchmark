@@ -252,6 +252,10 @@ export async function loadPreparationResults(): Promise<ResultRoute<PreparationR
   return loadTaskResults<PreparationResult>('preparation');
 }
 
+export async function loadDatasetResults(): Promise<ResultRoute<PreparationResult>[]> {
+  return (await loadPreparationResults()).filter((route) => route.name === 'compaction');
+}
+
 export async function loadWorkloadResults(): Promise<ResultRoute<WorkloadResult>[]> {
   return loadTaskResults<WorkloadResult>('workload');
 }
@@ -293,6 +297,10 @@ export function latestStable<T>(routes: ResultRoute<T>[]): ResultRoute<T> | unde
 
 export function routeHref(route: Pick<ResultRoute<unknown>, 'version' | 'kind' | 'name'>) {
   return `/${route.version}/${route.kind}/${route.name}/`;
+}
+
+export function datasetHref(version: string) {
+  return `/${version}/dataset/`;
 }
 
 function compareRoutes(left: ResultRoute<unknown>, right: ResultRoute<unknown>) {

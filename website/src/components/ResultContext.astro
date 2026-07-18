@@ -1,6 +1,7 @@
 ---
 import {
   compareVersions,
+  datasetHref,
   routeHref,
   versionLabel,
   type ResultRoute,
@@ -9,33 +10,45 @@ import {
 
 interface Props {
   version: string;
-  kind: 'preparation' | 'workload';
+  kind: 'dataset' | 'workload';
   name: string;
   goldenId: string;
   source: SourceIdentity;
   timestamp: string;
+  rawResult: string;
   routes: ResultRoute<unknown>[];
 }
 
-const { version, kind, name, goldenId, source, timestamp, routes } = Astro.props;
-const versions = [...new Set(routes.map((route) => route.version))]
+const { version, kind, name, goldenId, source, timestamp, rawResult, routes } = Astro.props;
+const versions = [...new Set(
+  routes
+    .filter((route) => route.kind === 'workload' || route.name === 'compaction')
+    .map((route) => route.version),
+)]
   .sort((left, right) => compareVersions(right, left));
 const versionRoutes = routes.filter((route) => route.version === version);
-const preparations = versionRoutes.filter((route) => route.kind === 'preparation');
 const workloads = versionRoutes
   .filter((route) => route.kind === 'workload')
   .sort((left, right) => right.name.localeCompare(left.name));
 const versionOptions = versions.map((candidate) => {
-  const target = routes.find((route) => route.version === candidate && route.name === name)
-    ?? routes.find((route) => route.version === candidate && route.kind === kind)
-    ?? routes.find((route) => route.version === candidate)!;
+  const candidateRoutes = routes.filter((route) => route.version === candidate);
+  const dataset = candidateRoutes.find(
+    (route) => route.kind === 'preparation' && route.name === 'compaction',
+  );
+  const workload = candidateRoutes.find(
+    (route) => route.kind === 'workload' && route.name === name,
+  ) ?? candidateRoutes.find((route) => route.kind === 'workload');
   return {
     version: candidate,
     label: versionLabel(candidate),
-    href: routeHref(target),
+    href: kind === 'dataset' && dataset
+      ? datasetHref(candidate)
+      : workload ? routeHref(workload) : datasetHref(candidate),
   };
 });
-const rawResult = `/raw/${version}/${kind}/${name}/result.json`;
+const hasDataset = versionRoutes.some(
+  (route) => route.kind === 'preparation' && route.name === 'compaction',
+);
 ---
 
 <aside class="result-context" aria-label="Benchmark context">
@@ -46,17 +59,6 @@ const rawResult = `/raw/${version}/${kind}/${name}/result.json`;
         <option value={option.href} selected={option.version === version}>{option.label}</option>
       ))}
     </select>
-  </div>
-
-  <div class="context-block">
-    <span class="context-label">Preparation</span>
-    <nav class="link-list" aria-label="Preparation results">
-      {preparations.map((route) => (
-        <a class:list={{ current: kind === 'preparation' && route.name === name }} href={routeHref(route)}>
-          {route.name}
-        </a>
-      ))}
-    </nav>
   </div>
 
   <div class="context-block">
@@ -71,7 +73,10 @@ const rawResult = `/raw/${version}/${kind}/${name}/result.json`;
   </div>
 
   <dl class="metadata-list">
-    <div><dt>Golden data</dt><dd>{goldenId}</dd></div>
+    <div>
+      <dt>Golden data</dt>
+      <dd>{hasDataset ? <a href={datasetHref(version)}>{goldenId}</a> : goldenId}</dd>
+    </div>
     <div>
       <dt>Recorded</dt>
       <dd>{new Date(timestamp).toLocaleString('en-US', { timeZone: 'UTC', timeZoneName: 'short' })}</dd>

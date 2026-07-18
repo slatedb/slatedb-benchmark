@@ -411,17 +411,18 @@ The Astro website reads checked-in results during its build and deploys through
 GitHub Pages. It has no database service.
 
 ```text
-/<version>/preparation/<name>/
+/<version>/dataset/
 /<version>/workload/<name>/
 ```
 
-Preparation pages display golden dataset and checkpoint information alongside
-the applicable metric tables. Workload descriptions live in
+The dataset page displays metadata from the final compaction checkpoint. The
+Golden data value on every workload page links to it. Preparation results have
+no HTML routes. Workload descriptions live in
 `website/src/content/workloads/<name>.md`; the build requires one file per
 workload. Each page renders the description below the workload title. Workload
 table rows open their charts below the row. The browser fetches one sidecar
 after page load and reuses it for every row. Data-saving mode disables the
-preload; a click still fetches it. Both page types omit inapplicable rows and
+preload; a click still fetches it. Workload tables omit inapplicable rows and
 keep measured zeroes visible.
 
 The site uses the SlateDB logo, colors, and fonts: Marcellus for headings, Inter

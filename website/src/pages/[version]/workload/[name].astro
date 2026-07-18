@@ -6,7 +6,7 @@ import SiteHeader from '../../../components/SiteHeader.astro';
 import MetricTables from '../../../components/MetricTables.astro';
 import { getCollection, render, type CollectionEntry } from 'astro:content';
 import {
-  loadPreparationResults,
+  loadDatasetResults,
   loadWorkloadResults,
   workloadNames,
   type ResultRoute,
@@ -33,7 +33,7 @@ export async function getStaticPaths() {
       ].join('; '),
     );
   }
-  const routes = [...await loadPreparationResults(), ...workloads];
+  const routes = [...await loadDatasetResults(), ...workloads];
   return workloads.map((route) => ({
     params: { version: route.version, name: route.name },
     props: { route, routes, description: descriptions.get(route.name)! },
@@ -59,6 +59,7 @@ const { Content } = await render(description);
       goldenId={result.golden_id}
       source={result.source}
       timestamp={result.timestamp}
+      rawResult={`/raw/${route.version}/workload/${route.name}/result.json`}
       routes={routes}
     />
     <article class="result-content">

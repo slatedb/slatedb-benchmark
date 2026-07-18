@@ -1,0 +1,73 @@
+---
+import Base from '../../layouts/Base.astro';
+import ResultContext from '../../components/ResultContext.astro';
+import SiteHeader from '../../components/SiteHeader.astro';
+import {
+  loadDatasetResults,
+  loadWorkloadResults,
+  type PreparationResult,
+  type ResultRoute,
+} from '../../lib/results';
+
+export async function getStaticPaths() {
+  const datasets = await loadDatasetResults();
+  const routes = [...datasets, ...await loadWorkloadResults()];
+  return datasets.map((route) => ({
+    params: { version: route.version },
+    props: { route, routes },
+  }));
+}
+
+const { route, routes } = Astro.props as {
+  route: ResultRoute<PreparationResult>;
+  routes: ResultRoute<unknown>[];
+};
+const result = route.result;
+const bytes = (value: number) => {
+  const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+  let amount = value;
+  let index = 0;
+  while (amount >= 1024 && index < units.length - 1) {
+    amount /= 1024;
+    index += 1;
+  }
+  return `${amount.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${units[index]}`;
+};
+---
+
+<Base title={`${result.golden_id} · SlateDB ${route.version}`}>
+  <SiteHeader scaled={result.configuration.scale !== 1} />
+  <main class="result-shell">
+    <ResultContext
+      version={route.version}
+      kind="dataset"
+      name="dataset"
+      goldenId={result.golden_id}
+      source={result.source}
+      timestamp={result.timestamp}
+      rawResult={`/raw/${route.version}/preparation/compaction/result.json`}
+      routes={routes}
+    />
+    <article class="result-content">
+      <header class="page-heading">
+        <p class="eyebrow">Golden dataset</p>
+        <h1>{result.golden_id}</h1>
+      </header>
+
+      <section class="metric-section">
+        <div class="section-heading"><h2>Dataset</h2></div>
+        <div class="table-scroll">
+          <table>
+            <tbody>
+              <tr><th scope="row">Records</th><td>{result.dataset.record_count.toLocaleString('en-US')}</td></tr>
+              <tr><th scope="row">Key bytes</th><td>{result.dataset.key_bytes.toLocaleString('en-US')}</td></tr>
+              <tr><th scope="row">Value bytes</th><td>{result.dataset.value_bytes.toLocaleString('en-US')}</td></tr>
+              <tr><th scope="row">Logical data</th><td>{bytes(result.dataset.logical_bytes)}</td></tr>
+              <tr><th scope="row">Live SST data</th><td>{bytes(result.dataset.live_sst_bytes)}</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </article>
+  </main>
+</Base>

@@ -164,13 +164,12 @@ API tables retain the names `transaction.get`, `transaction.put`, and
 
 ## Metrics
 
-Each page shows seven task tables: application operations, application
-throughput, application latency, object-store requests, object-store
-throughput, process statistics, and machine statistics. Workload rows expand
-to charts; preparation pages keep tables only. Preparation pages also show
-checkpoint references and golden dataset metadata. Compaction omits the three
-empty application tables. The website omits rows with no calls and keeps zero
-values in rows that have calls. Values in the examples are illustrative.
+Each workload page shows seven task tables: application operations,
+application throughput, application latency, object-store requests,
+object-store throughput, process statistics, and machine statistics. Rows
+expand to charts. The website omits rows with no calls and keeps zero values in
+rows that have calls. A separate dataset page shows the final golden dataset
+metadata. Values in the examples are illustrative.
 
 The runner counts operations and samples machine counters once per second. The
 workload recorders stay active through the durability drain, so totals and
