@@ -47,7 +47,6 @@ const { route, routes, description } = Astro.props as {
 };
 const result = route.result;
 const { Content } = await render(description);
-const sourceUrl = `https://github.com/slatedb/slatedb-benchmark/blob/${result.source.runner_commit}/${description.data.source}`;
 ---
 
 <Base title={`${route.name} · SlateDB ${route.version}`}>
@@ -66,6 +65,9 @@ const sourceUrl = `https://github.com/slatedb/slatedb-benchmark/blob/${result.so
       <header class="page-heading">
         <p class="eyebrow">Workload</p>
         <h1>{route.name}</h1>
+        <div class="workload-description">
+          <Content />
+        </div>
         <dl class="heading-metadata">
           <div><dt>Clients</dt><dd>{result.configuration.task.clients}</dd></div>
           <div><dt>Warmup</dt><dd>{result.configuration.task.warmup_ms / 1000}s</dd></div>
@@ -74,11 +76,6 @@ const sourceUrl = `https://github.com/slatedb/slatedb-benchmark/blob/${result.so
           <div><dt>Initial state</dt><dd>{result.initial_state.kind}</dd></div>
         </dl>
       </header>
-
-      <div class="workload-description">
-        <Content />
-        <a class="workload-source" href={sourceUrl}>View workload source</a>
-      </div>
 
       <MetricTables
         result={result}
