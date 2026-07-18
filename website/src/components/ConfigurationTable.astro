@@ -1,27 +1,21 @@
 ---
-import type { BenchmarkResult } from '../lib/results';
+import type { ResolvedConfiguration } from '../lib/results';
 
 interface Props {
-  configuration: BenchmarkResult['configuration'];
+  configuration: ResolvedConfiguration;
 }
 
-type ConfigurationRow = {
-  path: string[];
-  value: string;
-  empty?: boolean;
-};
+type Row = { path: string[]; value: string };
 
 const { configuration } = Astro.props;
-const { slate_settings: slateSettings, ...benchmarkConfiguration } = configuration;
+const { slate_settings: slateSettings, ...runnerConfiguration } = configuration;
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
-const label = (key: string) => key
-  .replace(/_(?:ns|bytes)$/, '')
+const label = (value: string) => value
   .replaceAll('_', ' ')
   .replace(/\bwal\b/gi, 'WAL')
   .replace(/\bsst\b/gi, 'SST')
-  .replace(/\bl0\b/gi, 'L0')
-  .replace(/\bttl\b/gi, 'TTL');
+  .replace(/\bl0\b/gi, 'L0');
 const formatBytes = (bytes: number) => {
   const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
   let amount = bytes;
@@ -30,66 +24,48 @@ const formatBytes = (bytes: number) => {
     amount /= 1024;
     index += 1;
   }
-  return `${amount.toLocaleString('en-US', {
-    minimumFractionDigits: index === 0 ? 0 : 2,
-    maximumFractionDigits: index === 0 ? 0 : 2,
-  })} ${units[index]}`;
-};
-const formatDuration = (nanoseconds: number) => {
-  if (nanoseconds === 0) return '0 s';
-  const units: [number, string][] = [
-    [3_600_000_000_000, 'h'],
-    [60_000_000_000, 'min'],
-    [1_000_000_000, 's'],
-    [1_000_000, 'ms'],
-    [1_000, 'µs'],
-    [1, 'ns'],
-  ];
-  const [size, unit] = units.find(([size]) => nanoseconds % size === 0) ?? units.at(-1)!;
-  return `${(nanoseconds / size).toLocaleString('en-US')} ${unit}`;
+  return `${amount.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${units[index]}`;
 };
 const formatScalar = (value: unknown, path: string[]) => {
   if (typeof value === 'boolean') return value ? 'Yes' : 'No';
   if (typeof value === 'number') {
     const key = path.at(-1) ?? '';
-    if (key.endsWith('_ns')) return formatDuration(value);
     if (key.endsWith('_bytes')) return formatBytes(value);
+    if (key.endsWith('_ms')) return `${value.toLocaleString('en-US')} ms`;
     return value.toLocaleString('en-US', { maximumFractionDigits: 6 });
   }
   return String(value);
 };
-const flatten = (value: unknown, path: string[] = []): ConfigurationRow[] => {
-  if (value === null || value === undefined) return [{ path, value: '—', empty: true }];
-  if (Array.isArray(value)) {
-    return [{ path, value: value.length === 0 ? '—' : value.join(', '), empty: value.length === 0 }];
-  }
+const flatten = (value: unknown, current: string[] = []): Row[] => {
+  if (value === null || value === undefined) return [{ path: current, value: '—' }];
+  if (Array.isArray(value)) return [{ path: current, value: value.join(', ') || '—' }];
   if (isRecord(value)) {
     const entries = Object.entries(value);
-    if (entries.length === 0) return [{ path, value: 'Default' }];
-    return entries.flatMap(([key, nested]) => flatten(nested, [...path, key]));
+    if (entries.length === 0) return [{ path: current, value: 'Default' }];
+    return entries.flatMap(([key, nested]) => flatten(nested, [...current, key]));
   }
-  return [{ path, value: formatScalar(value, path) }];
+  return [{ path: current, value: formatScalar(value, current) }];
 };
-const groups: [string, ConfigurationRow[]][] = [
-  ['Benchmark', flatten(benchmarkConfiguration)],
+const groups: [string, Row[]][] = [
+  ['Benchmark', flatten(runnerConfiguration)],
   ['SlateDB', flatten(slateSettings)],
 ];
 ---
 
 {groups.map(([name, rows]) => (
-  <div class="metric-group">
+  <section class="configuration-group">
     <h3>{name}</h3>
     <div class="table-scroll">
-      <table class="configuration-table">
+      <table>
         <tbody>
           {rows.map((row) => (
             <tr>
               <th scope="row">{row.path.map(label).join(' / ')}</th>
-              <td><code class:list={['configuration-value', { 'measurement-empty': row.empty }]}>{row.value}</code></td>
+              <td><code>{row.value}</code></td>
             </tr>
           ))}
         </tbody>
       </table>
     </div>
-  </div>
+  </section>
 ))}

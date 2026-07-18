@@ -24,25 +24,3 @@ services:
       - >-
         mc alias set smoke http://minio:9000 slatedb slatedb-secret &&
         mc mb --ignore-existing smoke/slatedb-benchmarks
-
-  runner:
-    build: .
-    depends_on:
-      minio-init:
-        condition: service_completed_successfully
-    environment:
-      CLOUD_PROVIDER: aws
-      AWS_ACCESS_KEY_ID: slatedb
-      AWS_SECRET_ACCESS_KEY: slatedb-secret
-      AWS_REGION: auto
-      AWS_ENDPOINT_URL_S3: http://minio:9000
-      AWS_ALLOW_HTTP: "true"
-      AWS_VIRTUAL_HOSTED_STYLE_REQUEST: "false"
-      SLATEDB_BENCH_BUCKET: slatedb-benchmarks
-      SLATEDB_BENCH_PREFIX: local-scaled
-      SLATEDB_BENCH_REGION: fra
-      SLATEDB_BENCH_RUNNER_TYPE: docker-smoke
-      RUST_LOG: info
-    volumes:
-      - ./.runs:/output
-    command: ["catalog"]

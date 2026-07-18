@@ -10,7 +10,6 @@ use std::env;
 use std::sync::Arc;
 
 pub struct ObjectStoreContext {
-    pub raw: Arc<dyn ObjectStore>,
     pub instrumented: Arc<InstrumentedStore>,
     /// A store with no benchmark metrics, used for runner control-plane operations.
     pub control: Arc<dyn ObjectStore>,
@@ -73,7 +72,6 @@ impl ObjectStoreContext {
             .unwrap_or_else(|_| "fra".to_string());
         let instrumented = Arc::new(InstrumentedStore::with_metrics(Arc::clone(&raw), metrics));
         Ok(Self {
-            raw,
             instrumented,
             control,
             root: Path::from(prefix),

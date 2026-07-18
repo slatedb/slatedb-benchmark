@@ -64,7 +64,8 @@ Linux sample        -> process and host counters
 The recorders remain active through the durability drain. Published totals,
 rate buckets, latency histograms, and resource samples include that interval.
 Rate averages use the full interval from the counter baseline through the end
-of the drain.
+of the drain. Workload results store the client interval, durability drain, and
+full recorded interval separately in nanoseconds.
 
 The `scan` API row records each iterator `next()` call separately, including a
 call that returns the end of the iterator. Latency ends when that call returns.
@@ -77,8 +78,10 @@ three significant digits. The worker keeps these structures in memory until
 result validation finishes.
 
 The S3 recorder wraps the HTTP request-attempt boundary, so retries count as
-separate requests. The Linux sampler reads process and host counters once per
-second. Errors remain in diagnostic data and fail the task.
+separate requests. A `404 Not Found` response still counts as a request, but not
+as a task error because SlateDB probes for optional objects. The Linux sampler
+reads process and host counters once per second. Other errors remain in
+diagnostic data and fail the task.
 
 ## Object-store state and recovery
 
@@ -115,7 +118,8 @@ changes.
 
 Golden checkpoints remain immutable until explicit deletion. Each workload
 clone uses a session- and task-specific prefix and owns its new manifests and
-SSTs. Benchmark cleanup deletes session data only. The uncompacted and golden
+SSTs. After a successful run, cleanup deletes the workload database prefixes
+and retains each `result.json` completion marker. The uncompacted and golden
 checkpoints remain available for later benchmark runs.
 
 ## CLI
@@ -127,22 +131,26 @@ Run SlateDB benchmarks
 Usage: slatedb-benchmark <COMMAND>
 
 Commands:
-  run       Run one preparation phase or workload
-  help      Print help for a command
+  run   Run one preparation phase or workload
+  help  Print this message or the help of the given subcommand(s)
 
 Options:
   -h, --help     Print help
-  -V, --version  Print the runner and SlateDB versions
+  -V, --version  Print version
 
 $ slatedb-benchmark run --help
 Run one preparation phase or workload
 
-Usage: slatedb-benchmark run [OPTIONS] --task <TASK> --golden <GOLDEN_ID>
+Usage: slatedb-benchmark run [OPTIONS] --task <TASK> --golden <GOLDEN_ID> \
        --output <PATH>
 
 Options:
       --task <TASK>
           Preparation task or workload from BENCHMARKS.md
+          [possible values: bulk-load, full-compaction, idle,
+          point-read-uniform, point-read-skewed, point-read-missing,
+          read-heavy, balanced, update-heavy, range-scan, sustained-ingest,
+          transaction-contention]
 
       --golden <GOLDEN_ID>
           Golden data name, for example slatedb-v0.14.1-001
@@ -161,24 +169,14 @@ Options:
           Print help
 
 Examples:
-  slatedb-benchmark run \
-    --task bulk-load \
-    --golden slatedb-v0.14.1-001 \
-    --scale 1.0 \
-    --output .runs/bulk-load
+  slatedb-benchmark run --task bulk-load --golden slatedb-v0.14.1-001 \
+    --scale 1.0 --output .runs/bulk-load
 
-  slatedb-benchmark run \
-    --task full-compaction \
-    --golden slatedb-v0.14.1-001 \
-    --scale 1.0 \
-    --output .runs/full-compaction
+  slatedb-benchmark run --task full-compaction --golden slatedb-v0.14.1-001 \
+    --scale 1.0 --output .runs/full-compaction
 
-  slatedb-benchmark run \
-    --task balanced \
-    --golden slatedb-v0.14.1-001 \
-    --session github-123456 \
-    --scale 1.0 \
-    --output .runs/balanced
+  slatedb-benchmark run --task balanced --golden slatedb-v0.14.1-001 \
+    --session github-123456 --scale 1.0 --output .runs/balanced
 ```
 
 Full compaction requires `bulk-load/result.json`. A golden workload requires
@@ -192,7 +190,9 @@ returns a nonzero status and prints no success record.
 
 GitHub exposes two manual workflows. `golden.yml` creates reusable
 golden data. `benchmark.yml` measures workloads against it. Neither workflow
-starts the other.
+starts the other. Both use the same repository concurrency group, so golden
+preparation and benchmark sessions never compete for the benchmark object
+store.
 
 ### Inputs
 
@@ -253,8 +253,9 @@ after changing the SlateDB commit or preparation configuration.
 | `validate-golden` | Verify and upload both preparation results |
 | `build` | Build the current runner against the recorded SlateDB commit |
 | `workloads` | Run the workload matrix |
+| `bundle` | Assemble and checksum the preparation and workload results |
 | `publish` | Commit results when the `publish` input is `true` |
-| `cleanup` | Delete benchmark session data after outputs are collected |
+| `cleanup` | Delete workload database clones after outputs are collected |
 
 The workload matrix uses one WarpBuild machine per task and
 `max-parallel: 4`. All workload jobs share Tigris, so `run.json` records that
@@ -273,7 +274,8 @@ The `publish` input controls the final job:
 | `true` | Must be `1.0` | Commit results and deploy Pages |
 | `false` | May be smaller | Validate artifacts only |
 
-Failed runs retain their session data. Cleanup never deletes golden data.
+Failed runs retain their session data. Successful cleanup keeps workload
+completion markers and never deletes golden data.
 
 ### Credentials
 
@@ -283,6 +285,7 @@ Failed runs retain their session data. Cleanup never deletes golden data.
 | Preparation jobs | Read | Read and write |
 | `validate-golden` | Read | Read |
 | `workloads` | Read | Read and write |
+| `bundle` | Read | None |
 | `publish` | Write | None |
 | `cleanup` | None | Read and write |
 | Pages | Read | None |
@@ -327,7 +330,9 @@ WarpBuild label mapping and artifact server:
 
 ```text
 -P warp-ubuntu-latest-x64-16x=catthehacker/ubuntu:act-latest
+-P ubuntu-latest=catthehacker/ubuntu:act-latest
 --container-architecture=linux/amd64
+--container-options=--add-host=host.docker.internal:host-gateway
 --artifact-server-path=.runs/act-artifacts
 --env-file=.act.env
 --secret-file=.act.secrets
@@ -350,9 +355,11 @@ $ act workflow_dispatch \
     --input scale=0.01
 ```
 
-Both local scripts run these commands. `scripts/smoke.sh` discards the output;
-`scripts/fixtures.sh` copies it into the website fixture directory. The scripts
-contain no task lists or dependency logic.
+Both local scripts run these commands and extract the `benchmark-results`
+artifact. `scripts/smoke.sh` discards the output; `scripts/fixtures.sh` copies
+it into the website fixture directory. The scripts contain no task lists or
+dependency logic. Act jobs install the AWS CLI because the local runner image
+does not include it.
 
 The preparation handoff uses the golden prefix because `act` cannot download
 artifacts from another workflow run. Local runs validate the runner and result
@@ -375,6 +382,6 @@ pages display the tables defined in [`BENCHMARKS.md`](BENCHMARKS.md), omit
 inapplicable rows, and keep measured zeroes visible. Result files and source
 commits remain linked from each page.
 
-The site uses the SlateDB header, colors, and fonts: Marcellus for the wordmark,
-Inter for body text, and JetBrains Mono for numeric tables. The intended custom
-domain is `benchmark.slatedb.io`.
+The site uses the SlateDB logo, colors, and fonts: Marcellus for headings, Inter
+for body text, and JetBrains Mono for numeric tables. The intended custom domain
+is `benchmark.slatedb.io`.

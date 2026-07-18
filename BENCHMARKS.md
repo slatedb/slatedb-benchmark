@@ -163,11 +163,11 @@ and golden dataset metadata instead. The website omits rows with no calls and
 keeps zero values in rows that have calls. Values in the examples are
 illustrative.
 
-The runner counts operations and samples machine counters once per second. Rate
-percentiles use complete one-second windows. The runner excludes partial
-windows at the start and end of measurement. Average operations per second is
-the total divided by the measurement duration. Latency statistics use
-individual calls and milliseconds.
+The runner counts operations and samples machine counters once per second. The
+recorders stay active through the durability drain. Rate percentiles use
+complete one-second windows and exclude partial windows at the boundaries.
+Average rates divide the total by the full recorded interval. Latency
+statistics use individual calls and milliseconds.
 
 ### Application operations
 
@@ -200,8 +200,8 @@ MiB/s.
 Each row uses the same API name as the operations table. The `durable` row is
 not an API call. For each accepted write, its timer starts when the write call
 returns and ends when SlateDB's durable frontier reaches the write's sequence
-number. The row combines durability latency for every write API used by the
-preparation phase or workload. All values use milliseconds.
+number. The row combines durability latency for the workload's accepted
+writes. All values use milliseconds.
 
 | API | avg | p50 | p95 | p99 | p99.9 | min | max |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -286,17 +286,17 @@ The runner also checks these preparation and workload invariants:
 - Sustained-ingest keys do not collide.
 - Transaction outcomes reconcile with attempted transactions.
 
-The session stores completed preparation and workload bundles with both database
-checkpoints in the object store. A retry restores them instead of rerunning
-completed work.
+Golden prefixes store preparation results and checkpoints. Benchmark sessions
+store workload results and database clones. Successful cleanup deletes the
+clones and keeps the result markers, so a retry can skip completed workloads.
 
 ## Scaling
 
 Smoke tests and website fixtures run the release suite with `--scale`; they do
 not use a separate mock catalog. Scale reduces records, durations, and cache
 capacities. It preserves operation mixes, clients, key and value sizes,
-durability, preparation and workload order, and initial state. Scaled results
-use smoke mode and cannot be published as release benchmarks.
+durability, preparation and workload order, and initial state. The publisher
+rejects scaled results.
 
 ## Out of scope
 

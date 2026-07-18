@@ -1,0 +1,181 @@
+name: Prepare golden data
+
+on:
+  workflow_dispatch:
+    inputs:
+      slatedb_ref:
+        description: SlateDB tag, branch, or commit
+        required: true
+        default: v0.14.1
+        type: string
+      golden_id:
+        description: Immutable golden data name
+        required: true
+        default: slatedb-v0.14.1-001
+        type: string
+      scale:
+        description: Decimal scale factor
+        required: true
+        default: "1.0"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: slatedb-benchmark-environment
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: warp-ubuntu-latest-x64-16x
+    outputs:
+      slate_version: ${{ steps.source.outputs.version }}
+      slate_commit: ${{ steps.source.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: slatedb/slatedb
+          ref: ${{ inputs.slatedb_ref }}
+          path: .slatedb-source
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@1.89.0
+      - name: Resolve SlateDB source
+        id: source
+        shell: bash
+        env:
+          SLATEDB_REF: ${{ inputs.slatedb_ref }}
+        run: |
+          set -euo pipefail
+          commit=$(git -C .slatedb-source rev-parse HEAD)
+          if [[ "$SLATEDB_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            version=${SLATEDB_REF#v}
+          else
+            version=sha-${commit:0:12}
+          fi
+          echo "SLATEDB_COMMIT=$commit" >> "$GITHUB_ENV"
+          echo "SLATEDB_VERSION=$version" >> "$GITHUB_ENV"
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Configure selected SlateDB source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo add --quiet --path "$GITHUB_WORKSPACE/.slatedb-source/slatedb" \
+            --no-default-features --features aws,foyer,wal_disable,zstd
+          cargo add --quiet --path "$GITHUB_WORKSPACE/.slatedb-source/slatedb-common" \
+            --features serde
+      - name: Build runner
+        run: cargo build --release --locked
+      - name: Preserve runner binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-runner
+          path: target/release/slatedb-benchmark
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7
+      - name: Restore local checkout after act
+        if: always()
+        shell: bash
+        run: |
+          if [[ ${ACT:-false} == true ]]; then
+            git restore Cargo.toml Cargo.lock
+          fi
+
+  bulk-load:
+    needs: build
+    runs-on: warp-ubuntu-latest-x64-16x
+    timeout-minutes: 1440
+    environment: benchmark
+    concurrency:
+      group: golden-${{ inputs.golden_id }}-bulk-load
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: benchmark-runner
+          path: bin
+      - run: chmod +x bin/slatedb-benchmark
+      - name: Run bulk load
+        shell: bash
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
+          TIGRIS_BUCKET_PREFIX: ${{ vars.TIGRIS_BUCKET_PREFIX }}
+        run: |
+          set -euo pipefail
+          export CLOUD_PROVIDER=aws
+          export AWS_REGION=${AWS_REGION:-auto}
+          export AWS_ENDPOINT_URL_S3=${AWS_ENDPOINT_URL_S3:-https://t3.storage.dev}
+          export AWS_ENDPOINT_URL_IAM=${AWS_ENDPOINT_URL_IAM:-https://iam.storage.dev}
+          export SLATEDB_BENCH_BUCKET=${SLATEDB_BENCH_BUCKET:-${TIGRIS_BUCKET_PREFIX}-slatedb}
+          export SLATEDB_BENCH_PREFIX=${SLATEDB_BENCH_PREFIX:-benchmark}
+          export SLATEDB_BENCH_REGION=${SLATEDB_BENCH_REGION:-fra}
+          export SLATEDB_BENCH_RUNNER_TYPE=${SLATEDB_BENCH_RUNNER_TYPE:-warp-ubuntu-latest-x64-16x}
+          bin/slatedb-benchmark run \
+            --task bulk-load \
+            --golden "${{ inputs.golden_id }}" \
+            --scale "${{ inputs.scale }}" \
+            --output .runs/preparation/bulk-load
+      - name: Preserve result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: golden-bulk-load
+          path: .runs/preparation/bulk-load
+          if-no-files-found: ignore
+          overwrite: true
+
+  full-compaction:
+    needs: [build, bulk-load]
+    runs-on: warp-ubuntu-latest-x64-16x
+    timeout-minutes: 1440
+    environment: benchmark
+    concurrency:
+      group: golden-${{ inputs.golden_id }}-full-compaction
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: benchmark-runner
+          path: bin
+      - run: chmod +x bin/slatedb-benchmark
+      - name: Run full compaction
+        shell: bash
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
+          TIGRIS_BUCKET_PREFIX: ${{ vars.TIGRIS_BUCKET_PREFIX }}
+        run: |
+          set -euo pipefail
+          export CLOUD_PROVIDER=aws
+          export AWS_REGION=${AWS_REGION:-auto}
+          export AWS_ENDPOINT_URL_S3=${AWS_ENDPOINT_URL_S3:-https://t3.storage.dev}
+          export AWS_ENDPOINT_URL_IAM=${AWS_ENDPOINT_URL_IAM:-https://iam.storage.dev}
+          export SLATEDB_BENCH_BUCKET=${SLATEDB_BENCH_BUCKET:-${TIGRIS_BUCKET_PREFIX}-slatedb}
+          export SLATEDB_BENCH_PREFIX=${SLATEDB_BENCH_PREFIX:-benchmark}
+          export SLATEDB_BENCH_REGION=${SLATEDB_BENCH_REGION:-fra}
+          export SLATEDB_BENCH_RUNNER_TYPE=${SLATEDB_BENCH_RUNNER_TYPE:-warp-ubuntu-latest-x64-16x}
+          bin/slatedb-benchmark run \
+            --task full-compaction \
+            --golden "${{ inputs.golden_id }}" \
+            --scale "${{ inputs.scale }}" \
+            --output .runs/preparation/full-compaction
+      - name: Preserve result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: golden-full-compaction
+          path: .runs/preparation/full-compaction
+          if-no-files-found: ignore
+          overwrite: true

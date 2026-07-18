@@ -1,18 +1,27 @@
 ---
 import Base from '../layouts/Base.astro';
-import { latestStable, loadResults } from '../lib/results';
+import SiteHeader from '../components/SiteHeader.astro';
+import {
+  latestStable,
+  loadPreparationResults,
+  loadWorkloadResults,
+  routeHref,
+} from '../lib/results';
 
-const routes = await loadResults();
-const latest = latestStable(routes);
-if (latest) return Astro.redirect(`/${latest.version}/${latest.suite}/${latest.workload}/${latest.variant}/`);
+const workloads = await loadWorkloadResults();
+const latest = latestStable(workloads);
+const preferred = latest
+  ? workloads.find((route) => route.version === latest.version && route.name === 'balanced') ?? latest
+  : latestStable(await loadPreparationResults());
+const redirect = preferred ? routeHref(preferred) : undefined;
+if (redirect) return Astro.redirect(redirect);
 ---
 
 <Base title="SlateDB Benchmarks">
+  <SiteHeader />
   <main class="empty-state">
-    <a class="wordmark" href="https://slatedb.io">SlateDB</a>
-    <p class="eyebrow">Release benchmarks</p>
+    <p class="eyebrow">SlateDB benchmarks</p>
     <h1>No published results yet.</h1>
-    <p>Validated result files under <code>results/</code> appear here at the next static build.</p>
-    <p>For local UI development with scaled benchmark fixtures, run <code>npm run dev:scaled</code>.</p>
+    <p>Result files checked into <code>results/</code> appear after the next static build.</p>
   </main>
 </Base>

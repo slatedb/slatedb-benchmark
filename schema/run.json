@@ -1,16 +1,86 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://benchmark.slatedb.io/schema/run.json",
+  "title": "SlateDB benchmark run",
   "type": "object",
   "additionalProperties": false,
-  "required": ["status", "started_at", "finished_at", "mode", "slate_version", "slate_commit", "runner_version", "runner_commit", "lockfile_sha256", "resolved_configuration", "results"],
+  "required": [
+    "status",
+    "golden_id",
+    "started_at",
+    "finished_at",
+    "source",
+    "preparation_runner_commits",
+    "resolved_configuration",
+    "max_parallel",
+    "results"
+  ],
   "properties": {
     "status": { "const": "ok" },
-    "started_at": { "type": "string", "format": "date-time" }, "finished_at": { "type": "string", "format": "date-time" },
-    "mode": { "enum": ["published", "smoke"] }, "scale": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
-    "slate_version": { "type": "string" }, "slate_commit": { "type": "string" },
-    "runner_version": { "type": "string" }, "runner_commit": { "type": "string" }, "lockfile_sha256": { "type": "string" },
-    "resolved_configuration": { "type": "object" },
-    "results": { "type": "array", "items": { "type": "string" }, "minItems": 1 }
+    "golden_id": { "type": "string", "minLength": 1 },
+    "started_at": { "type": "string", "format": "date-time" },
+    "finished_at": { "type": "string", "format": "date-time" },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "slate_version",
+        "slate_commit",
+        "runner_version",
+        "runner_commit",
+        "lockfile_sha256"
+      ],
+      "properties": {
+        "slate_version": { "type": "string", "minLength": 1 },
+        "slate_commit": { "type": "string", "minLength": 1 },
+        "runner_version": { "type": "string", "minLength": 1 },
+        "runner_commit": { "type": "string", "minLength": 1 },
+        "lockfile_sha256": { "type": "string", "minLength": 1 }
+      }
+    },
+    "preparation_runner_commits": {
+      "type": "object",
+      "required": ["bulk-load", "full-compaction"],
+      "additionalProperties": false,
+      "properties": {
+        "bulk-load": { "type": "string", "minLength": 1 },
+        "full-compaction": { "type": "string", "minLength": 1 }
+      }
+    },
+    "resolved_configuration": {
+      "type": "object",
+      "minProperties": 12,
+      "maxProperties": 12,
+      "propertyNames": {
+        "enum": [
+          "bulk-load",
+          "full-compaction",
+          "idle",
+          "point-read-uniform",
+          "point-read-skewed",
+          "point-read-missing",
+          "read-heavy",
+          "balanced",
+          "update-heavy",
+          "range-scan",
+          "sustained-ingest",
+          "transaction-contention"
+        ]
+      },
+      "additionalProperties": { "type": "object" }
+    },
+    "max_parallel": { "type": "integer", "minimum": 1 },
+    "results": {
+      "type": "object",
+      "minProperties": 12,
+      "maxProperties": 12,
+      "propertyNames": {
+        "pattern": "^(preparation/(bulk-load|full-compaction)|workload/(idle|point-read-uniform|point-read-skewed|point-read-missing|read-heavy|balanced|update-heavy|range-scan|sustained-ingest|transaction-contention))/result\\.json$"
+      },
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$"
+      }
+    }
   }
 }

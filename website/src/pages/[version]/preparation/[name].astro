@@ -1,0 +1,98 @@
+---
+import Base from '../../../layouts/Base.astro';
+import ConfigurationTable from '../../../components/ConfigurationTable.astro';
+import ResultContext from '../../../components/ResultContext.astro';
+import SiteHeader from '../../../components/SiteHeader.astro';
+import {
+  loadPreparationResults,
+  loadWorkloadResults,
+  type PreparationResult,
+  type ResultRoute,
+} from '../../../lib/results';
+
+export async function getStaticPaths() {
+  const preparations = await loadPreparationResults();
+  const routes = [...preparations, ...await loadWorkloadResults()];
+  return preparations.map((route) => ({
+    params: { version: route.version, name: route.name },
+    props: { route, routes },
+  }));
+}
+
+const { route, routes } = Astro.props as {
+  route: ResultRoute<PreparationResult>;
+  routes: ResultRoute<unknown>[];
+};
+const result = route.result;
+const bytes = (value: number) => {
+  const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+  let amount = value;
+  let index = 0;
+  while (amount >= 1024 && index < units.length - 1) {
+    amount /= 1024;
+    index += 1;
+  }
+  return `${amount.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${units[index]}`;
+};
+const checkpointRows = [
+  ['Checkpoint ID', result.checkpoint.checkpoint_id],
+  ['Manifest ID', result.checkpoint.manifest_id.toLocaleString('en-US')],
+  ['LSM digest', result.checkpoint.lsm_digest_sha256],
+  ['Database path', result.checkpoint.database_path],
+];
+if (result.source_checkpoint) {
+  checkpointRows.push(['Source checkpoint', result.source_checkpoint.checkpoint_id]);
+}
+---
+
+<Base title={`${route.name} · SlateDB ${route.version}`}>
+  <SiteHeader scaled={result.configuration.scale !== 1} />
+  <main class="result-shell">
+    <ResultContext
+      version={route.version}
+      kind="preparation"
+      name={route.name}
+      goldenId={result.golden_id}
+      source={result.source}
+      timestamp={result.timestamp}
+      routes={routes}
+    />
+    <article class="result-content">
+      <header class="page-heading">
+        <p class="eyebrow">Dataset preparation</p>
+        <h1>{route.name}</h1>
+      </header>
+
+      <section class="metric-section">
+        <div class="section-heading"><h2>Golden dataset</h2></div>
+        <div class="table-scroll">
+          <table>
+            <tbody>
+              <tr><th scope="row">Records</th><td>{result.dataset.record_count.toLocaleString('en-US')}</td></tr>
+              <tr><th scope="row">Key bytes</th><td>{result.dataset.key_bytes.toLocaleString('en-US')}</td></tr>
+              <tr><th scope="row">Value bytes</th><td>{result.dataset.value_bytes.toLocaleString('en-US')}</td></tr>
+              <tr><th scope="row">Logical data</th><td>{bytes(result.dataset.logical_bytes)}</td></tr>
+              <tr><th scope="row">Live SST data</th><td>{bytes(result.dataset.live_sst_bytes)}</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="metric-section">
+        <div class="section-heading"><h2>Checkpoint</h2></div>
+        <div class="table-scroll">
+          <table><tbody>
+            {checkpointRows.map(([label, value]) => (
+              <tr><th scope="row">{label}</th><td><code>{value}</code></td></tr>
+            ))}
+          </tbody></table>
+        </div>
+      </section>
+
+      <section class="metric-section">
+        <div class="section-heading"><h2>Configuration</h2></div>
+        <ConfigurationTable configuration={result.configuration} />
+      </section>
+    </article>
+  </main>
+</Base>

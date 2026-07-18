@@ -1,15 +1,13 @@
-use crate::database_size::live_database_size_bytes;
 use crate::histogram::HistogramSet;
-use crate::instrumented_store::StoreMetrics;
+use crate::instrumented_store::{StoreMetrics, StoreSnapshot};
 use crate::model::{
-    ApplicationWindow, Environment, MetricHistogramValue, MetricSeries, MetricSeriesValue,
-    MetricSnapshot, MetricValue, MetricValueType, ResourceUse, TimeseriesFile, TimeseriesSample,
+    ApplicationMetrics, DistributionSummary, Environment, MachineStatistics, ObjectStoreMetrics,
+    ProcessStatistics, RateSummary, ThroughputSummary,
 };
-use anyhow::{bail, ensure, Result};
-use slatedb::Db;
+use anyhow::Result;
 use slatedb_common::metrics::{
-    CounterFn, DefaultMetricsRecorder, GaugeFn, HistogramFn, MetricValue as SlateMetricValue,
-    Metrics, MetricsRecorder, UpDownCounterFn,
+    CounterFn, DefaultMetricsRecorder, GaugeFn, HistogramFn, Metrics, MetricsRecorder,
+    UpDownCounterFn,
 };
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -18,7 +16,7 @@ use std::future::Future;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use sysinfo::{Disks, Networks, Pid, ProcessRefreshKind, ProcessesToUpdate, System};
-use tokio::sync::watch;
+use tokio::sync::{oneshot, watch};
 
 tokio::task_local! {
     static BACKPRESSURE_MEASUREMENT: RefCell<BackpressureMeasurement>;
@@ -53,7 +51,6 @@ impl BackpressureMeasurement {
     }
 }
 
-/// The default SlateDB recorder plus runner-side backpressure timing.
 pub struct BenchmarkMetricsRecorder {
     inner: DefaultMetricsRecorder,
 }
@@ -172,306 +169,426 @@ where
         .await
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct OperationDelta {
+    pub calls: u64,
+    pub logical_bytes: u64,
+    pub errors: u64,
+}
+
+impl OperationDelta {
+    fn merge(&mut self, other: &Self) {
+        self.calls = self.calls.saturating_add(other.calls);
+        self.logical_bytes = self.logical_bytes.saturating_add(other.logical_bytes);
+        self.errors = self.errors.saturating_add(other.errors);
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ApplicationWindow {
+    pub duration: Duration,
+    pub operations: BTreeMap<String, OperationDelta>,
+}
+
 #[derive(Debug, Default)]
-struct ApplicationWindowDelta {
-    completed_operations: u64,
-    successful_operations: u64,
-    errors: u64,
-    read_payload_bytes: u64,
-    write_payload_bytes: u64,
-    read_hits: u64,
-    read_misses: u64,
+struct ApplicationDelta {
+    operations: BTreeMap<String, OperationDelta>,
     histograms: HistogramSet,
 }
 
-impl ApplicationWindowDelta {
+impl ApplicationDelta {
     fn merge(&mut self, other: &Self) -> Result<()> {
-        self.completed_operations = self
-            .completed_operations
-            .saturating_add(other.completed_operations);
-        self.successful_operations = self
-            .successful_operations
-            .saturating_add(other.successful_operations);
-        self.errors = self.errors.saturating_add(other.errors);
-        self.read_payload_bytes = self
-            .read_payload_bytes
-            .saturating_add(other.read_payload_bytes);
-        self.write_payload_bytes = self
-            .write_payload_bytes
-            .saturating_add(other.write_payload_bytes);
-        self.read_hits = self.read_hits.saturating_add(other.read_hits);
-        self.read_misses = self.read_misses.saturating_add(other.read_misses);
+        for (name, operation) in &other.operations {
+            self.operations
+                .entry(name.clone())
+                .or_default()
+                .merge(operation);
+        }
         self.histograms.merge(&other.histograms)
     }
 
     fn reset(&mut self) {
-        self.completed_operations = 0;
-        self.successful_operations = 0;
-        self.errors = 0;
-        self.read_payload_bytes = 0;
-        self.write_payload_bytes = 0;
-        self.read_hits = 0;
-        self.read_misses = 0;
+        self.operations.clear();
         self.histograms.reset();
     }
 }
 
 #[derive(Debug, Default)]
-struct ApplicationWindowShard {
-    active: ApplicationWindowDelta,
-    spare: Option<ApplicationWindowDelta>,
+struct ApplicationShard {
+    active: ApplicationDelta,
+    spare: Option<ApplicationDelta>,
 }
 
 #[derive(Debug, Clone)]
-pub struct ApplicationWindowRecorder {
-    inner: Arc<Mutex<ApplicationWindowShard>>,
+pub struct ApplicationRecorder {
+    inner: Arc<Mutex<ApplicationShard>>,
 }
 
-pub(crate) struct SuccessfulOperation<'a> {
-    pub(crate) operation: &'a str,
-    pub(crate) latency: Duration,
-    pub(crate) read_payload_bytes: u64,
-    pub(crate) write_payload_bytes: u64,
-    pub(crate) read_hits: u64,
-    pub(crate) read_misses: u64,
-}
-
-impl ApplicationWindowRecorder {
-    fn update(&self, record: impl FnOnce(&mut ApplicationWindowDelta)) {
-        let mut shard = self.inner.lock().expect("application window lock poisoned");
-        record(&mut shard.active);
+impl ApplicationRecorder {
+    pub fn record_success(&self, api: &str, latency: Duration, logical_bytes: u64) {
+        self.record(api, latency, logical_bytes, false);
     }
 
-    pub fn record_success(
-        &self,
-        operation: &str,
-        latency: Duration,
-        read_payload_bytes: u64,
-        write_payload_bytes: u64,
-        read_hits: u64,
-        read_misses: u64,
-    ) {
-        self.record_success_internal(
-            SuccessfulOperation {
-                operation,
-                latency,
-                read_payload_bytes,
-                write_payload_bytes,
-                read_hits,
-                read_misses,
-            },
-            true,
-        );
+    pub fn record_error(&self, api: &str, latency: Duration) {
+        self.record(api, latency, 0, true);
     }
 
-    pub(crate) fn record_success_n(&self, operation: SuccessfulOperation<'_>, count: u64) {
-        self.update(|window| {
-            window.completed_operations = window.completed_operations.saturating_add(count);
-            window.successful_operations = window.successful_operations.saturating_add(count);
-            window.read_payload_bytes = window
-                .read_payload_bytes
-                .saturating_add(operation.read_payload_bytes);
-            window.write_payload_bytes = window
-                .write_payload_bytes
-                .saturating_add(operation.write_payload_bytes);
-            window.read_hits = window.read_hits.saturating_add(operation.read_hits);
-            window.read_misses = window.read_misses.saturating_add(operation.read_misses);
-            window
-                .histograms
-                .record_n("return", operation.latency, count);
-            window.histograms.record_n(
-                format!("return/{}", operation.operation),
-                operation.latency,
-                count,
-            );
-        });
-    }
-
-    pub fn record_background_success(
-        &self,
-        operation: &str,
-        latency: Duration,
-        read_payload_bytes: u64,
-        write_payload_bytes: u64,
-        read_hits: u64,
-        read_misses: u64,
-    ) {
-        self.record_success_internal(
-            SuccessfulOperation {
-                operation,
-                latency,
-                read_payload_bytes,
-                write_payload_bytes,
-                read_hits,
-                read_misses,
-            },
-            false,
-        );
-    }
-
-    fn record_success_internal(
-        &self,
-        operation: SuccessfulOperation<'_>,
-        include_in_headline: bool,
-    ) {
-        self.update(|window| {
-            if include_in_headline {
-                window.completed_operations = window.completed_operations.saturating_add(1);
-                window.successful_operations = window.successful_operations.saturating_add(1);
-                window.read_payload_bytes = window
-                    .read_payload_bytes
-                    .saturating_add(operation.read_payload_bytes);
-                window.write_payload_bytes = window
-                    .write_payload_bytes
-                    .saturating_add(operation.write_payload_bytes);
-                window.read_hits = window.read_hits.saturating_add(operation.read_hits);
-                window.read_misses = window.read_misses.saturating_add(operation.read_misses);
-                window.histograms.record("return", operation.latency);
-            }
-            window
-                .histograms
-                .record(format!("return/{}", operation.operation), operation.latency);
-        });
-    }
-
-    pub fn record_error(&self, operation: &str, latency: Duration) {
-        self.record_error_internal(operation, latency, true);
-    }
-
-    pub fn record_error_n(&self, operation: &str, latency: Duration, count: u64) {
-        self.update(|window| {
-            window.completed_operations = window.completed_operations.saturating_add(count);
-            window.errors = window.errors.saturating_add(count);
-            window.histograms.record_n("return", latency, count);
-            window
-                .histograms
-                .record_n(format!("return/{operation}"), latency, count);
-        });
-    }
-
-    pub fn record_background_error(&self, operation: &str, latency: Duration) {
-        self.record_error_internal(operation, latency, false);
-    }
-
-    fn record_error_internal(&self, operation: &str, latency: Duration, include_in_headline: bool) {
-        self.update(|window| {
-            window.completed_operations = window.completed_operations.saturating_add(1);
-            window.errors = window.errors.saturating_add(1);
-            if include_in_headline {
-                window.histograms.record("return", latency);
-            }
-            window
-                .histograms
-                .record(format!("return/{operation}"), latency);
-        });
-    }
-
-    pub fn record_completion(&self, operation: &str, latency: Duration) {
-        self.update(|window| {
-            window.completed_operations = window.completed_operations.saturating_add(1);
-            window.histograms.record("return", latency);
-            window
-                .histograms
-                .record(format!("return/{operation}"), latency);
-        });
-    }
-
-    pub fn record_batch_latency(&self, latency: Duration) {
-        self.update(|window| window.histograms.record("batch", latency));
-    }
-
-    pub fn record_api_latency(&self, api: &str, latency: Duration) {
-        self.update(|window| window.histograms.record(format!("api/{api}"), latency));
+    fn record(&self, api: &str, latency: Duration, logical_bytes: u64, error: bool) {
+        let mut shard = self.inner.lock().expect("application recorder lock");
+        let operation = shard.active.operations.entry(api.to_string()).or_default();
+        operation.calls = operation.calls.saturating_add(1);
+        operation.logical_bytes = operation.logical_bytes.saturating_add(logical_bytes);
+        operation.errors = operation.errors.saturating_add(u64::from(error));
+        shard
+            .active
+            .histograms
+            .record(format!("api/{api}"), latency);
     }
 }
 
-#[derive(Debug)]
-pub struct ApplicationWindowRegistry {
-    window_shards: Mutex<Vec<Arc<Mutex<ApplicationWindowShard>>>>,
+#[derive(Debug, Default)]
+pub struct ApplicationRegistry {
+    shards: Mutex<Vec<Arc<Mutex<ApplicationShard>>>>,
 }
 
-impl Default for ApplicationWindowRegistry {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl ApplicationWindowRegistry {
-    pub fn new() -> Self {
-        Self {
-            window_shards: Mutex::new(Vec::new()),
-        }
-    }
-
-    pub fn register_window_recorder(&self) -> ApplicationWindowRecorder {
-        let inner = Arc::new(Mutex::new(ApplicationWindowShard::default()));
-        self.window_shards
+impl ApplicationRegistry {
+    pub fn recorder(&self) -> ApplicationRecorder {
+        let inner = Arc::new(Mutex::new(ApplicationShard::default()));
+        self.shards
             .lock()
-            .expect("application shard registry lock poisoned")
+            .expect("application registry lock")
             .push(Arc::clone(&inner));
-        ApplicationWindowRecorder { inner }
+        ApplicationRecorder { inner }
     }
 
-    fn drain_window(
-        &self,
-        start_offset_ns: u64,
-        duration_ns: u64,
-    ) -> Result<(ApplicationWindow, HistogramSet)> {
+    fn drain(&self) -> Result<ApplicationDelta> {
         let shards = self
-            .window_shards
+            .shards
             .lock()
-            .expect("application shard registry lock poisoned")
+            .expect("application registry lock")
             .clone();
-        let mut merged = ApplicationWindowDelta::default();
+        let mut merged = ApplicationDelta::default();
         for shard in shards {
             let mut delta = {
-                let mut shard = shard.lock().expect("application window lock poisoned");
+                let mut shard = shard.lock().expect("application recorder lock");
                 let replacement = shard.spare.take().unwrap_or_default();
                 std::mem::replace(&mut shard.active, replacement)
             };
-            let merge = merged.merge(&delta);
+            merged.merge(&delta)?;
             delta.reset();
             let previous = shard
                 .lock()
-                .expect("application window lock poisoned")
+                .expect("application recorder lock")
                 .spare
                 .replace(delta);
-            debug_assert!(
-                previous.is_none(),
-                "application window drained concurrently"
-            );
-            merge?;
+            debug_assert!(previous.is_none());
         }
-        let summary = |name: &str| {
-            merged
-                .histograms
-                .get(name)
-                .filter(|histogram| !histogram.is_empty())
-                .map(|histogram| histogram.summary())
-        };
-        let window = ApplicationWindow {
-            start_offset_ns,
-            duration_ns,
-            completed_operations: merged.completed_operations,
-            successful_operations: merged.successful_operations,
-            errors: merged.errors,
-            read_payload_bytes: merged.read_payload_bytes,
-            write_payload_bytes: merged.write_payload_bytes,
-            read_hits: merged.read_hits,
-            read_misses: merged.read_misses,
-            return_latency: summary("return"),
-            return_latency_by_operation: merged.histograms.summaries_with_prefix("return/"),
-            api_latency: merged.histograms.summaries_with_prefix("api/"),
-            batch_latency: summary("batch"),
-        };
-        Ok((window, merged.histograms))
+        Ok(merged)
     }
 }
 
-pub struct SampledTimeseries {
-    pub samples: Vec<TimeseriesSample>,
-    pub application_windows: Vec<ApplicationWindow>,
-    pub histograms: HistogramSet,
+#[derive(Debug, Clone)]
+struct ResourceWindow {
+    process_cpu_cores: f64,
+    process_rss_bytes: f64,
+    machine_cpu_percent: f64,
+    network_receive_bytes_per_second: f64,
+    network_send_bytes_per_second: f64,
+    disk_read_bytes_per_second: f64,
+    disk_write_bytes_per_second: f64,
+    disk_read_operations_per_second: f64,
+    disk_write_operations_per_second: f64,
+}
+
+#[derive(Debug, Clone)]
+struct StoreWindow {
+    duration: Duration,
+    delta: StoreSnapshot,
+}
+
+pub struct SampledMeasurement {
+    elapsed: Duration,
+    application_total: ApplicationDelta,
+    application_windows: Vec<ApplicationWindow>,
+    store_start: StoreSnapshot,
+    store_end: StoreSnapshot,
+    store_windows: Vec<StoreWindow>,
+    resources: Vec<ResourceWindow>,
+}
+
+impl SampledMeasurement {
+    pub fn elapsed(&self) -> Duration {
+        self.elapsed
+    }
+
+    pub fn operation_total(&self, name: &str) -> u64 {
+        self.application_total
+            .operations
+            .get(name)
+            .map_or(0, |operation| operation.calls)
+    }
+
+    pub fn errors(&self) -> u64 {
+        self.application_total
+            .operations
+            .values()
+            .map(|operation| operation.errors)
+            .sum::<u64>()
+            .saturating_add(self.store_end.difference(&self.store_start).errors())
+    }
+
+    pub fn add_latency_histogram(
+        &mut self,
+        name: &str,
+        histogram: crate::histogram::LatencyHistogram,
+    ) {
+        self.application_total
+            .histograms
+            .insert(format!("api/{name}"), histogram);
+    }
+
+    pub fn application(&self) -> ApplicationMetrics {
+        let elapsed = self.elapsed();
+        let mut operations = BTreeMap::new();
+        let mut throughput = BTreeMap::new();
+        for (name, total) in &self.application_total.operations {
+            let call_windows = self
+                .application_windows
+                .iter()
+                .map(|window| {
+                    let calls = window
+                        .operations
+                        .get(name)
+                        .map_or(0, |operation| operation.calls);
+                    rate(calls, window.duration)
+                })
+                .collect::<Vec<_>>();
+            operations.insert(
+                name.clone(),
+                rate_summary(total.calls, elapsed, &call_windows),
+            );
+            if total.logical_bytes > 0 {
+                let byte_windows = self
+                    .application_windows
+                    .iter()
+                    .map(|window| {
+                        let bytes = window
+                            .operations
+                            .get(name)
+                            .map_or(0, |operation| operation.logical_bytes);
+                        rate(bytes, window.duration)
+                    })
+                    .collect::<Vec<_>>();
+                throughput.insert(
+                    name.clone(),
+                    throughput_summary(total.logical_bytes, elapsed, &byte_windows),
+                );
+            }
+        }
+        ApplicationMetrics {
+            operations,
+            throughput,
+            latency: self
+                .application_total
+                .histograms
+                .summaries_with_prefix("api/"),
+        }
+    }
+
+    pub fn object_store(&self) -> ObjectStoreMetrics {
+        let elapsed = self.elapsed();
+        let total = self.store_end.difference(&self.store_start);
+        let mut requests = BTreeMap::new();
+        let mut throughput = BTreeMap::new();
+        for (method, count) in &total.requests {
+            if *count == 0 {
+                continue;
+            }
+            let windows = self
+                .store_windows
+                .iter()
+                .map(|window| {
+                    rate(
+                        window.delta.requests.get(method).copied().unwrap_or(0),
+                        window.duration,
+                    )
+                })
+                .collect::<Vec<_>>();
+            requests.insert(method.clone(), rate_summary(*count, elapsed, &windows));
+            let bytes = total.body_bytes(method);
+            if bytes > 0 {
+                let byte_windows = self
+                    .store_windows
+                    .iter()
+                    .map(|window| rate(window.delta.body_bytes(method), window.duration))
+                    .collect::<Vec<_>>();
+                throughput.insert(
+                    method.clone(),
+                    throughput_summary(bytes, elapsed, &byte_windows),
+                );
+            }
+        }
+        ObjectStoreMetrics {
+            requests,
+            throughput,
+        }
+    }
+
+    pub fn process(&self) -> ProcessStatistics {
+        ProcessStatistics {
+            cpu_cores: summarize_values(
+                self.resources
+                    .iter()
+                    .map(|window| window.process_cpu_cores)
+                    .collect(),
+            ),
+            rss_bytes: summarize_values(
+                self.resources
+                    .iter()
+                    .map(|window| window.process_rss_bytes)
+                    .collect(),
+            ),
+        }
+    }
+
+    pub fn machine(&self) -> MachineStatistics {
+        let values = |select: fn(&ResourceWindow) -> f64| {
+            summarize_values(self.resources.iter().map(select).collect())
+        };
+        MachineStatistics {
+            cpu_percent: values(|window| window.machine_cpu_percent),
+            rss_bytes: values(|window| window.process_rss_bytes),
+            network_receive_bytes_per_second: values(|window| {
+                window.network_receive_bytes_per_second
+            }),
+            network_send_bytes_per_second: values(|window| window.network_send_bytes_per_second),
+            disk_read_bytes_per_second: values(|window| window.disk_read_bytes_per_second),
+            disk_write_bytes_per_second: values(|window| window.disk_write_bytes_per_second),
+            disk_read_operations_per_second: values(|window| {
+                window.disk_read_operations_per_second
+            }),
+            disk_write_operations_per_second: values(|window| {
+                window.disk_write_operations_per_second
+            }),
+        }
+    }
+}
+
+pub async fn sample_until_stopped(
+    registry: Arc<ApplicationRegistry>,
+    store_metrics: Arc<StoreMetrics>,
+    mut stop: watch::Receiver<bool>,
+    ready: Option<oneshot::Sender<()>>,
+) -> Result<SampledMeasurement> {
+    let mut host = HostSampler::new();
+    let mut previous_host = host.snapshot();
+    let started = Instant::now();
+    let store_start = store_metrics.snapshot();
+    let mut previous_store = store_start.clone();
+    let mut previous_at = started;
+    let mut application_total = ApplicationDelta::default();
+    let mut application_windows = Vec::new();
+    let mut store_windows = Vec::new();
+    let mut resources = Vec::new();
+    let mut interval = tokio::time::interval(Duration::from_secs(1));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    interval.tick().await;
+    if let Some(ready) = ready {
+        let _ = ready.send(());
+    }
+    while !*stop.borrow() {
+        tokio::select! {
+            _ = interval.tick() => {
+                let now = Instant::now();
+                let duration = now.saturating_duration_since(previous_at);
+                let application = registry.drain()?;
+                let store = store_metrics.snapshot();
+                let host_snapshot = host.snapshot();
+                application_total.merge(&application)?;
+                application_windows.push(ApplicationWindow {
+                    duration,
+                    operations: application.operations,
+                });
+                store_windows.push(StoreWindow {
+                    duration,
+                    delta: store.difference(&previous_store),
+                });
+                resources.push(host_snapshot.window(&previous_host, duration));
+                previous_at = now;
+                previous_store = store;
+                previous_host = host_snapshot;
+            }
+            changed = stop.changed() => {
+                if changed.is_err() || *stop.borrow() {
+                    break;
+                }
+            }
+        }
+    }
+    let application = registry.drain()?;
+    application_total.merge(&application)?;
+    Ok(SampledMeasurement {
+        elapsed: started.elapsed(),
+        application_total,
+        application_windows,
+        store_start,
+        store_end: store_metrics.snapshot(),
+        store_windows,
+        resources,
+    })
+}
+
+fn rate(value: u64, duration: Duration) -> f64 {
+    value as f64 / duration.as_secs_f64().max(f64::EPSILON)
+}
+
+fn rate_summary(total: u64, elapsed: Duration, windows: &[f64]) -> RateSummary {
+    let distribution = summarize_values(windows.to_vec());
+    RateSummary {
+        total,
+        avg_per_second: rate(total, elapsed),
+        p50_per_second: distribution.p50,
+        p95_per_second: distribution.p95,
+        p99_per_second: distribution.p99,
+        p999_per_second: distribution.p999,
+        min_per_second: distribution.min,
+        max_per_second: distribution.max,
+    }
+}
+
+fn throughput_summary(total_bytes: u64, elapsed: Duration, windows: &[f64]) -> ThroughputSummary {
+    let distribution = summarize_values(windows.to_vec());
+    ThroughputSummary {
+        total_bytes,
+        avg_bytes_per_second: rate(total_bytes, elapsed),
+        p50_bytes_per_second: distribution.p50,
+        p95_bytes_per_second: distribution.p95,
+        p99_bytes_per_second: distribution.p99,
+        p999_bytes_per_second: distribution.p999,
+        min_bytes_per_second: distribution.min,
+        max_bytes_per_second: distribution.max,
+    }
+}
+
+fn summarize_values(mut values: Vec<f64>) -> DistributionSummary {
+    values.retain(|value| value.is_finite());
+    if values.is_empty() {
+        return DistributionSummary::default();
+    }
+    values.sort_by(f64::total_cmp);
+    let percentile = |quantile: f64| {
+        let index = (quantile * (values.len().saturating_sub(1)) as f64).round() as usize;
+        values[index]
+    };
+    DistributionSummary {
+        avg: values.iter().sum::<f64>() / values.len() as f64,
+        p50: percentile(0.5),
+        p95: percentile(0.95),
+        p99: percentile(0.99),
+        p999: percentile(0.999),
+        min: values[0],
+        max: values[values.len() - 1],
+    }
 }
 
 fn is_tigris_endpoint(endpoint: &str) -> bool {
@@ -526,14 +643,10 @@ pub fn inspect_environment(provider: &str, endpoint: &str, region: &str) -> Envi
     }
 }
 
-pub fn verify_environment(environment: &Environment, relaxed: bool) -> anyhow::Result<()> {
-    if relaxed {
-        return Ok(());
-    }
+pub fn verify_environment(environment: &Environment) -> Result<()> {
     anyhow::ensure!(
         environment.runner_type == "warp-ubuntu-latest-x64-16x",
-        "published runs require warp-ubuntu-latest-x64-16x, found {}",
-        environment.runner_type
+        "published runs require warp-ubuntu-latest-x64-16x"
     );
     anyhow::ensure!(
         environment.cpu_cores == 16,
@@ -558,203 +671,55 @@ pub fn verify_environment(environment: &Environment, relaxed: bool) -> anyhow::R
     Ok(())
 }
 
-pub(crate) async fn sample_until_stopped(
-    started: Instant,
-    windows: Arc<ApplicationWindowRegistry>,
-    store_metrics: Arc<StoreMetrics>,
-    slate_metrics: Arc<BenchmarkMetricsRecorder>,
-    db: Arc<Db>,
-    mut stop: watch::Receiver<bool>,
-) -> Result<SampledTimeseries> {
-    let mut sampler = HostSampler::new();
-    let mut samples = vec![sampler.sample(
-        started,
-        &store_metrics,
-        &slate_metrics,
-        live_database_size_bytes(&db.manifest()),
-    )];
-    let mut application_windows = Vec::new();
-    let mut histograms = HistogramSet::default();
-    let mut window_start_ns = 0_u64;
-    let mut interval = tokio::time::interval(Duration::from_secs(1));
-    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    interval.tick().await;
-    loop {
-        tokio::select! {
-            _ = interval.tick() => {
-                let sample = sampler.sample(
-                    started,
-                    &store_metrics,
-                    &slate_metrics,
-                    live_database_size_bytes(&db.manifest()),
-                );
-                if sample.offset_ns > window_start_ns {
-                    let (window, window_histograms) = windows.drain_window(
-                        window_start_ns,
-                        sample.offset_ns.saturating_sub(window_start_ns),
-                    )?;
-                    histograms.merge(&window_histograms)?;
-                    application_windows.push(window);
-                    window_start_ns = sample.offset_ns;
-                }
-                samples.push(sample);
-            }
-            changed = stop.changed() => {
-                if changed.is_err() || *stop.borrow() {
-                    let sample = sampler.sample(
-                        started,
-                        &store_metrics,
-                        &slate_metrics,
-                        live_database_size_bytes(&db.manifest()),
-                    );
-                    if sample.offset_ns > window_start_ns {
-                        let (window, window_histograms) = windows.drain_window(
-                            window_start_ns,
-                            sample.offset_ns.saturating_sub(window_start_ns),
-                        )?;
-                        histograms.merge(&window_histograms)?;
-                        application_windows.push(window);
-                    }
-                    samples.push(sample);
-                    break;
-                }
-            }
-        }
-    }
-    Ok(SampledTimeseries {
-        samples,
-        application_windows,
-        histograms,
-    })
+#[derive(Clone, Default)]
+struct HostSnapshot {
+    process_cpu_cores: f64,
+    process_rss_bytes: u64,
+    machine_cpu_percent: f64,
+    network_received: u64,
+    network_sent: u64,
+    disk_read_bytes: u64,
+    disk_write_bytes: u64,
+    disk_read_operations: u64,
+    disk_write_operations: u64,
 }
 
-pub fn compact_timeseries(mut samples: Vec<TimeseriesSample>) -> Result<TimeseriesFile> {
-    let mut series = Vec::<MetricSeries>::new();
-    for (sample_index, sample) in samples.iter_mut().enumerate() {
-        for metric_series in &mut series {
-            metric_series.values.push(None);
+impl HostSnapshot {
+    fn window(&self, previous: &Self, duration: Duration) -> ResourceWindow {
+        let seconds = duration.as_secs_f64().max(f64::EPSILON);
+        ResourceWindow {
+            process_cpu_cores: self.process_cpu_cores,
+            process_rss_bytes: self.process_rss_bytes as f64,
+            machine_cpu_percent: self.machine_cpu_percent,
+            network_receive_bytes_per_second: self
+                .network_received
+                .saturating_sub(previous.network_received)
+                as f64
+                / seconds,
+            network_send_bytes_per_second: self.network_sent.saturating_sub(previous.network_sent)
+                as f64
+                / seconds,
+            disk_read_bytes_per_second: self
+                .disk_read_bytes
+                .saturating_sub(previous.disk_read_bytes)
+                as f64
+                / seconds,
+            disk_write_bytes_per_second: self
+                .disk_write_bytes
+                .saturating_sub(previous.disk_write_bytes)
+                as f64
+                / seconds,
+            disk_read_operations_per_second: self
+                .disk_read_operations
+                .saturating_sub(previous.disk_read_operations)
+                as f64
+                / seconds,
+            disk_write_operations_per_second: self
+                .disk_write_operations
+                .saturating_sub(previous.disk_write_operations)
+                as f64
+                / seconds,
         }
-        for metric in std::mem::take(&mut sample.slatedb_metrics) {
-            let (value_type, boundaries, value) = compact_metric_value(metric.value);
-            if let Some(existing) = series
-                .iter_mut()
-                .find(|existing| existing.name == metric.name && existing.labels == metric.labels)
-            {
-                ensure_metric_definition(existing, &metric.description, value_type, &boundaries)?;
-                if existing.values[sample_index].is_some() {
-                    bail!(
-                        "duplicate SlateDB metric {} with labels {:?}",
-                        metric.name,
-                        metric.labels
-                    );
-                }
-                existing.values[sample_index] = Some(value);
-            } else {
-                let mut values = vec![None; sample_index + 1];
-                values[sample_index] = Some(value);
-                series.push(MetricSeries {
-                    name: metric.name,
-                    description: metric.description,
-                    labels: metric.labels,
-                    value_type,
-                    boundaries,
-                    values,
-                });
-            }
-        }
-    }
-    Ok(TimeseriesFile {
-        interval_ns: 1_000_000_000,
-        samples,
-        application_windows: Vec::new(),
-        durability_windows: None,
-        slatedb_metrics: series,
-    })
-}
-
-pub fn append_timeseries(target: &mut TimeseriesFile, mut phase: TimeseriesFile) -> Result<()> {
-    ensure!(
-        target.interval_ns == phase.interval_ns,
-        "cannot append time series with different intervals"
-    );
-    let existing_samples = target.samples.len();
-    let phase_samples = phase.samples.len();
-    for metric_series in &mut target.slatedb_metrics {
-        ensure!(
-            metric_series.values.len() == existing_samples,
-            "SlateDB metric series length does not match existing sample count"
-        );
-        metric_series
-            .values
-            .resize(existing_samples.saturating_add(phase_samples), None);
-    }
-    for phase_series in phase.slatedb_metrics {
-        if let Some(existing) = target.slatedb_metrics.iter_mut().find(|existing| {
-            existing.name == phase_series.name && existing.labels == phase_series.labels
-        }) {
-            ensure_metric_definition(
-                existing,
-                &phase_series.description,
-                phase_series.value_type,
-                &phase_series.boundaries,
-            )?;
-            ensure!(
-                phase_series.values.len() == phase_samples,
-                "SlateDB metric series length does not match phase sample count"
-            );
-            existing.values[existing_samples..].clone_from_slice(&phase_series.values);
-        } else {
-            let mut phase_series = phase_series;
-            ensure!(
-                phase_series.values.len() == phase_samples,
-                "SlateDB metric series length does not match phase sample count"
-            );
-            let mut values = vec![None; existing_samples];
-            values.append(&mut phase_series.values);
-            phase_series.values = values;
-            target.slatedb_metrics.push(phase_series);
-        }
-    }
-    target
-        .application_windows
-        .append(&mut phase.application_windows);
-    if let Some(mut phase_windows) = phase.durability_windows {
-        target
-            .durability_windows
-            .get_or_insert_with(Vec::new)
-            .append(&mut phase_windows);
-    }
-    target.samples.append(&mut phase.samples);
-    Ok(())
-}
-
-pub fn summarize_resources(samples: &[TimeseriesSample]) -> ResourceUse {
-    if samples.is_empty() {
-        return ResourceUse::default();
-    }
-    let first = &samples[0];
-    let last = &samples[samples.len() - 1];
-    ResourceUse {
-        average_cpu_percent: samples.iter().map(|s| s.cpu_percent).sum::<f64>()
-            / samples.len() as f64,
-        peak_cpu_percent: samples.iter().map(|s| s.cpu_percent).fold(0.0, f64::max),
-        peak_rss_bytes: samples.iter().map(|s| s.rss_bytes).max().unwrap_or(0),
-        network_bytes_sent: last
-            .network_bytes_sent
-            .saturating_sub(first.network_bytes_sent),
-        network_bytes_received: last
-            .network_bytes_received
-            .saturating_sub(first.network_bytes_received),
-        disk_bytes_read: last.disk_bytes_read.saturating_sub(first.disk_bytes_read),
-        disk_bytes_written: last
-            .disk_bytes_written
-            .saturating_sub(first.disk_bytes_written),
-        disk_read_operations: last
-            .disk_read_operations
-            .saturating_sub(first.disk_read_operations),
-        disk_write_operations: last
-            .disk_write_operations
-            .saturating_sub(first.disk_write_operations),
     }
 }
 
@@ -773,470 +738,114 @@ impl HostSampler {
         }
     }
 
-    fn sample(
-        &mut self,
-        started: Instant,
-        store_metrics: &StoreMetrics,
-        slate_metrics: &BenchmarkMetricsRecorder,
-        database_size_bytes: u64,
-    ) -> TimeseriesSample {
+    fn snapshot(&mut self) -> HostSnapshot {
+        self.system.refresh_cpu_usage();
         self.system.refresh_processes_specifics(
             ProcessesToUpdate::Some(&[self.pid]),
             true,
             ProcessRefreshKind::everything(),
         );
         self.networks.refresh(true);
-        let (cpu_percent, rss_bytes, disk_bytes_read, disk_bytes_written) = self
+        let (process_cpu_cores, process_rss_bytes) = self
             .system
             .process(self.pid)
-            .map(|process| {
-                let disk = process.disk_usage();
-                (
-                    process.cpu_usage() as f64,
-                    process.memory(),
-                    disk.total_read_bytes,
-                    disk.total_written_bytes,
-                )
-            })
+            .map(|process| (process.cpu_usage() as f64 / 100.0, process.memory()))
             .unwrap_or_default();
-        let (network_bytes_received, network_bytes_sent) =
-            self.networks
-                .iter()
-                .fold((0_u64, 0_u64), |(received, sent), (_, data)| {
-                    (
-                        received.saturating_add(data.total_received()),
-                        sent.saturating_add(data.total_transmitted()),
-                    )
-                });
-        let (disk_read_operations, disk_write_operations) = linux_io_operations(self.pid);
-        TimeseriesSample {
-            offset_ns: duration_ns(started.elapsed()),
-            cpu_percent,
-            rss_bytes,
-            network_bytes_sent,
-            network_bytes_received,
-            disk_bytes_read,
-            disk_bytes_written,
-            disk_read_operations,
-            disk_write_operations,
-            database_size_bytes,
-            object_store: store_metrics.snapshot(),
-            slatedb_metrics: slate_metrics
-                .snapshot()
-                .all()
-                .iter()
-                .map(convert_metric)
-                .collect(),
+        let (network_received, network_sent) = self
+            .networks
+            .iter()
+            .filter(|(name, _)| *name != "lo")
+            .fold((0_u64, 0_u64), |(received, sent), (_, data)| {
+                (
+                    received.saturating_add(data.total_received()),
+                    sent.saturating_add(data.total_transmitted()),
+                )
+            });
+        let disk = linux_disk_totals();
+        HostSnapshot {
+            process_cpu_cores,
+            process_rss_bytes,
+            machine_cpu_percent: self.system.global_cpu_usage() as f64,
+            network_received,
+            network_sent,
+            disk_read_bytes: disk.0,
+            disk_write_bytes: disk.1,
+            disk_read_operations: disk.2,
+            disk_write_operations: disk.3,
         }
     }
 }
 
-fn linux_io_operations(pid: Pid) -> (u64, u64) {
-    let path = format!("/proc/{}/io", pid.as_u32());
-    let Ok(contents) = fs::read_to_string(path) else {
-        return (0, 0);
+fn linux_disk_totals() -> (u64, u64, u64, u64) {
+    let Ok(contents) = fs::read_to_string("/proc/diskstats") else {
+        return (0, 0, 0, 0);
     };
-    let mut reads = 0;
-    let mut writes = 0;
+    let mut total = (0_u64, 0_u64, 0_u64, 0_u64);
     for line in contents.lines() {
-        let mut fields = line.split_ascii_whitespace();
-        match (fields.next(), fields.next()) {
-            (Some("syscr:"), Some(value)) => reads = value.parse().unwrap_or(0),
-            (Some("syscw:"), Some(value)) => writes = value.parse().unwrap_or(0),
-            _ => {}
+        let fields = line.split_ascii_whitespace().collect::<Vec<_>>();
+        if fields.len() < 14 || !is_physical_disk(fields[2]) {
+            continue;
         }
+        let read_ops = fields[3].parse::<u64>().unwrap_or(0);
+        let read_sectors = fields[5].parse::<u64>().unwrap_or(0);
+        let write_ops = fields[7].parse::<u64>().unwrap_or(0);
+        let write_sectors = fields[9].parse::<u64>().unwrap_or(0);
+        total.0 = total.0.saturating_add(read_sectors.saturating_mul(512));
+        total.1 = total.1.saturating_add(write_sectors.saturating_mul(512));
+        total.2 = total.2.saturating_add(read_ops);
+        total.3 = total.3.saturating_add(write_ops);
     }
-    (reads, writes)
+    total
 }
 
-fn convert_metric(metric: &slatedb_common::metrics::Metric) -> MetricSnapshot {
-    let labels = metric.labels.iter().cloned().collect::<BTreeMap<_, _>>();
-    let value = match &metric.value {
-        SlateMetricValue::Counter(value) => MetricValue::Counter(*value),
-        SlateMetricValue::Gauge(value) => MetricValue::Gauge(*value),
-        SlateMetricValue::UpDownCounter(value) => MetricValue::UpDownCounter(*value),
-        SlateMetricValue::Histogram {
-            count,
-            sum,
-            min,
-            max,
-            boundaries,
-            bucket_counts,
-        } => MetricValue::Histogram {
-            count: *count,
-            sum: finite_or_zero(*sum),
-            min: finite_or_zero(*min),
-            max: finite_or_zero(*max),
-            boundaries: boundaries.clone(),
-            bucket_counts: bucket_counts.clone(),
-        },
-    };
-    MetricSnapshot {
-        name: metric.name.clone(),
-        description: metric.description.clone(),
-        labels,
-        value,
+fn is_physical_disk(name: &str) -> bool {
+    if name.starts_with("loop") || name.starts_with("ram") || name.starts_with("dm-") {
+        return false;
     }
+    if name.starts_with("nvme") || name.starts_with("mmcblk") {
+        return !name.contains('p');
+    }
+    if name.starts_with("sd") || name.starts_with("vd") || name.starts_with("xvd") {
+        return !name.ends_with(|character: char| character.is_ascii_digit());
+    }
+    true
 }
 
-fn compact_metric_value(
-    value: MetricValue,
-) -> (MetricValueType, Option<Vec<f64>>, MetricSeriesValue) {
-    match value {
-        MetricValue::Counter(value) => (
-            MetricValueType::Counter,
-            None,
-            MetricSeriesValue::Scalar(value.into()),
-        ),
-        MetricValue::Gauge(value) => (
-            MetricValueType::Gauge,
-            None,
-            MetricSeriesValue::Scalar(value.into()),
-        ),
-        MetricValue::UpDownCounter(value) => (
-            MetricValueType::UpDownCounter,
-            None,
-            MetricSeriesValue::Scalar(value.into()),
-        ),
-        MetricValue::Histogram {
-            count,
-            sum,
-            min,
-            max,
-            boundaries,
-            bucket_counts,
-        } => (
-            MetricValueType::Histogram,
-            Some(boundaries),
-            MetricSeriesValue::Histogram(MetricHistogramValue {
-                count,
-                sum,
-                min,
-                max,
-                bucket_counts,
-            }),
-        ),
-    }
-}
-
-fn ensure_metric_definition(
-    series: &MetricSeries,
-    description: &str,
-    value_type: MetricValueType,
-    boundaries: &Option<Vec<f64>>,
-) -> Result<()> {
-    ensure!(
-        series.description == description
-            && series.value_type == value_type
-            && series.boundaries == *boundaries,
-        "SlateDB metric {} changed its definition during sampling",
-        series.name
-    );
-    Ok(())
-}
-
-fn finite_or_zero(value: f64) -> f64 {
-    if value.is_finite() {
-        value
-    } else {
-        0.0
-    }
+pub fn counter_value(metrics: &Metrics, name: &str) -> u64 {
+    metrics
+        .by_name(name)
+        .iter()
+        .filter_map(|metric| match metric.value {
+            slatedb_common::metrics::MetricValue::Counter(value) => Some(value),
+            _ => None,
+        })
+        .sum()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        append_timeseries, compact_timeseries, is_tigris_endpoint, measure_backpressure,
-        ApplicationWindowRegistry, BenchmarkMetricsRecorder, SuccessfulOperation,
-    };
-    use crate::model::{
-        MetricSnapshot, MetricValue, MetricValueType, TimeseriesFile, TimeseriesSample,
-    };
-    use slatedb_common::metrics::{MetricValue as SlateMetricValue, MetricsRecorder};
-    use std::collections::BTreeMap;
+    use super::{summarize_values, ApplicationRegistry};
     use std::time::Duration;
 
     #[test]
-    fn recognizes_current_tigris_endpoint() {
-        assert!(is_tigris_endpoint("https://t3.storage.dev"));
+    fn distribution_contains_the_published_columns() {
+        let summary = summarize_values(vec![1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(summary.avg, 2.5);
+        assert_eq!(summary.min, 1.0);
+        assert_eq!(summary.max, 4.0);
+        assert_eq!(summary.p50, 3.0);
     }
 
     #[test]
-    fn drains_application_measurements_into_one_window() {
-        let windows = ApplicationWindowRegistry::new();
-        let worker = windows.register_window_recorder();
-        worker.record_success(
-            "read-modify-write",
-            Duration::from_millis(2),
-            1024,
-            256,
-            1,
-            0,
-        );
-        worker.record_background_success("writer-update", Duration::from_secs(1), 0, 128, 0, 0);
-        worker.record_error("read", Duration::from_millis(4));
-        worker.record_api_latency("get", Duration::from_millis(3));
+    fn application_recorder_tracks_each_api_separately() {
+        let registry = ApplicationRegistry::default();
+        let recorder = registry.recorder();
+        recorder.record_success("get", Duration::from_millis(1), 420);
+        recorder.record_success("put", Duration::from_millis(2), 420);
+        let delta = registry.drain().expect("drain");
 
-        let (window, histograms) = windows
-            .drain_window(0, 1_000_000_000)
-            .expect("drain application window");
-
-        assert_eq!(window.completed_operations, 2);
-        assert_eq!(window.successful_operations, 1);
-        assert_eq!(window.errors, 1);
-        assert_eq!(window.read_payload_bytes, 1024);
-        assert_eq!(window.write_payload_bytes, 256);
-        assert_eq!(window.read_hits, 1);
-        assert_eq!(window.read_misses, 0);
-        assert_eq!(window.return_latency.expect("return latency").count, 2);
-        assert_eq!(window.return_latency_by_operation["writer-update"].count, 1);
-        assert_eq!(window.api_latency["get"].count, 1);
-        assert_eq!(histograms.get("return").expect("return histogram").len(), 2);
-        assert_eq!(
-            histograms
-                .get("return/writer-update")
-                .expect("writer return histogram")
-                .len(),
-            1
-        );
-        assert_eq!(histograms.get("api/get").expect("API histogram").len(), 1);
-    }
-
-    #[test]
-    fn records_weighted_batch_completions() {
-        let windows = ApplicationWindowRegistry::new();
-        let worker = windows.register_window_recorder();
-        worker.record_success_n(
-            SuccessfulOperation {
-                operation: "insert",
-                latency: Duration::from_millis(2),
-                read_payload_bytes: 0,
-                write_payload_bytes: 420 * 1_024,
-                read_hits: 0,
-                read_misses: 0,
-            },
-            1_024,
-        );
-        worker.record_error_n("insert", Duration::from_millis(3), 26);
-
-        let (window, histograms) = windows
-            .drain_window(0, 1_000_000_000)
-            .expect("drain application window");
-
-        assert_eq!(window.completed_operations, 1_050);
-        assert_eq!(window.successful_operations, 1_024);
-        assert_eq!(window.errors, 26);
-        assert_eq!(window.write_payload_bytes, 420 * 1_024);
-        assert_eq!(window.return_latency.expect("return latency").count, 1_050);
-        assert_eq!(window.return_latency_by_operation["insert"].count, 1_050);
-        assert_eq!(
-            histograms.get("return").expect("return histogram").len(),
-            1_050
-        );
-    }
-
-    #[test]
-    fn resets_reusable_window_buffers() {
-        let windows = ApplicationWindowRegistry::new();
-        let worker = windows.register_window_recorder();
-        worker.record_success("read", Duration::from_millis(2), 1024, 0, 1, 0);
-
-        let (first, first_histograms) = windows
-            .drain_window(0, 1_000_000_000)
-            .expect("drain first application window");
-        assert_eq!(first.completed_operations, 1);
-        assert_eq!(first.successful_operations, 1);
-        assert_eq!(first.errors, 0);
-        assert_eq!(first.read_payload_bytes, 1024);
-        assert_eq!(first.read_hits, 1);
-        assert_eq!(first.read_misses, 0);
-        assert_eq!(first.return_latency.expect("return latency").count, 1);
-        assert_eq!(
-            first_histograms
-                .get("return/read")
-                .expect("read return histogram")
-                .len(),
-            1
-        );
-
-        worker.record_error("read", Duration::from_millis(4));
-        let (second, _) = windows
-            .drain_window(1_000_000_000, 1_000_000_000)
-            .expect("drain second application window");
-        assert_eq!(second.completed_operations, 1);
-        assert_eq!(second.successful_operations, 0);
-        assert_eq!(second.errors, 1);
-        assert_eq!(second.read_payload_bytes, 0);
-        assert_eq!(second.read_hits, 0);
-        assert_eq!(second.read_misses, 0);
-
-        let (empty, empty_histograms) = windows
-            .drain_window(2_000_000_000, 1_000_000_000)
-            .expect("drain empty application window");
-        assert_eq!(empty.completed_operations, 0);
-        assert!(empty.return_latency.is_none());
-        assert!(empty_histograms.get("return").is_none());
-    }
-
-    #[tokio::test]
-    async fn measures_backpressure_between_counter_and_memory_recheck() {
-        let recorder = BenchmarkMetricsRecorder::new();
-        let counter = recorder.register_counter(
-            slatedb::db_stats::BACKPRESSURE_COUNT,
-            "backpressure events",
-            &[],
-        );
-        let gauge = recorder.register_gauge(
-            slatedb::db_stats::TOTAL_MEM_SIZE_BYTES,
-            "unflushed bytes",
-            &[],
-        );
-
-        let ((), elapsed) = measure_backpressure(async {
-            gauge.set(100);
-            counter.increment(1);
-            tokio::time::sleep(Duration::from_millis(5)).await;
-            gauge.set(50);
-        })
-        .await;
-
-        assert!(elapsed >= Duration::from_millis(5));
-        let snapshot = recorder.snapshot();
-        assert!(snapshot
-            .by_name(slatedb::db_stats::BACKPRESSURE_COUNT)
-            .iter()
-            .any(|metric| matches!(&metric.value, SlateMetricValue::Counter(1))));
-        assert!(snapshot
-            .by_name(slatedb::db_stats::TOTAL_MEM_SIZE_BYTES)
-            .iter()
-            .any(|metric| matches!(&metric.value, SlateMetricValue::Gauge(50))));
-    }
-
-    #[test]
-    fn compacts_and_appends_metric_series_by_identity() {
-        let mut first = compact_timeseries(vec![
-            sample(0, vec![counter("writes", 1)]),
-            sample(1, vec![counter("writes", 2)]),
-        ])
-        .expect("first phase");
-        let second = compact_timeseries(vec![
-            sample(2, vec![counter("writes", 3), gauge("queue", 7)]),
-            sample(3, vec![counter("writes", 4), gauge("queue", 5)]),
-        ])
-        .expect("second phase");
-
-        append_timeseries(&mut first, second).expect("append phase");
-
-        assert_eq!(first.samples.len(), 4);
-        assert_eq!(first.slatedb_metrics.len(), 2);
-        let writes = series(&first, "writes");
-        assert_eq!(writes.values.len(), 4);
-        assert!(writes.values.iter().all(Option::is_some));
-        let queue = series(&first, "queue");
-        assert_eq!(queue.value_type, MetricValueType::Gauge);
-        assert_eq!(queue.values.len(), 4);
-        assert!(queue.values[..2].iter().all(Option::is_none));
-        assert!(queue.values[2..].iter().all(Option::is_some));
-
-        let encoded = serde_json::to_vec(&first).expect("serialize time series");
-        let decoded: TimeseriesFile =
-            serde_json::from_slice(&encoded).expect("deserialize time series");
-        assert_eq!(decoded.samples.len(), 4);
-        assert_eq!(decoded.slatedb_metrics.len(), 2);
-        let value = serde_json::to_value(&decoded).expect("time series value");
-        assert!(value["samples"]
-            .as_array()
-            .expect("samples")
-            .iter()
-            .all(|sample| sample.get("slatedb_metrics").is_none()));
-    }
-
-    #[test]
-    fn ninety_minute_columnar_metrics_fit_below_github_limit() {
-        let mut metrics = Vec::new();
-        for index in 0..95 {
-            metrics.push(counter(&format!("counter-{index}"), index));
-        }
-        for index in 0..9 {
-            metrics.push(gauge(&format!("gauge-{index}"), index as i64));
-        }
-        metrics.push(MetricSnapshot {
-            name: "running-compactions".to_string(),
-            description: "A representative up/down counter description".to_string(),
-            labels: BTreeMap::from([("worker".to_string(), "local".to_string())]),
-            value: MetricValue::UpDownCounter(1),
-        });
-        for index in 0..20 {
-            metrics.push(histogram(&format!("histogram-{index}")));
-        }
-        let mut timeseries = compact_timeseries(vec![
-            sample(0, metrics.clone()),
-            sample(1_000_000_000, metrics),
-        ])
-        .expect("compact representative metrics");
-        let sample = timeseries.samples[1].clone();
-        timeseries.samples.resize(5_402, sample);
-        for metric in &mut timeseries.slatedb_metrics {
-            let value = metric.values[1].clone();
-            metric.values.resize(5_402, value);
-        }
-
-        let encoded = serde_json::to_vec(&timeseries).expect("serialize projected time series");
-        assert!(encoded.len() < 100 * 1024 * 1024);
-        let text = std::str::from_utf8(&encoded).expect("JSON is UTF-8");
-        assert_eq!(
-            text.matches("\"description\"").count(),
-            timeseries.slatedb_metrics.len()
-        );
-    }
-
-    fn sample(offset_ns: u64, slatedb_metrics: Vec<MetricSnapshot>) -> TimeseriesSample {
-        TimeseriesSample {
-            offset_ns,
-            slatedb_metrics,
-            ..Default::default()
-        }
-    }
-
-    fn counter(name: &str, value: u64) -> MetricSnapshot {
-        MetricSnapshot {
-            name: name.to_string(),
-            description: "A representative counter description".to_string(),
-            labels: BTreeMap::new(),
-            value: MetricValue::Counter(value),
-        }
-    }
-
-    fn gauge(name: &str, value: i64) -> MetricSnapshot {
-        MetricSnapshot {
-            name: name.to_string(),
-            description: "A representative gauge description".to_string(),
-            labels: BTreeMap::new(),
-            value: MetricValue::Gauge(value),
-        }
-    }
-
-    fn histogram(name: &str) -> MetricSnapshot {
-        MetricSnapshot {
-            name: name.to_string(),
-            description: "A representative histogram description".to_string(),
-            labels: BTreeMap::new(),
-            value: MetricValue::Histogram {
-                count: 1_000,
-                sum: 50_000.0,
-                min: 1.0,
-                max: 100.0,
-                boundaries: (0..12).map(|value| value as f64 * 10.0).collect(),
-                bucket_counts: vec![77; 13],
-            },
-        }
-    }
-
-    fn series<'a>(timeseries: &'a TimeseriesFile, name: &str) -> &'a crate::model::MetricSeries {
-        timeseries
-            .slatedb_metrics
-            .iter()
-            .find(|metric| metric.name == name)
-            .expect("metric series")
+        assert_eq!(delta.operations["get"].calls, 1);
+        assert_eq!(delta.operations["put"].calls, 1);
+        assert_eq!(delta.histograms.summaries_with_prefix("api/").len(), 2);
     }
 }

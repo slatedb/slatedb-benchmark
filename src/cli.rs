@@ -1,6 +1,16 @@
-use crate::config::BenchmarkScale;
+use crate::config::{BenchmarkScale, Task};
 use clap::{Args, Parser, Subcommand};
 use std::path::PathBuf;
+
+const RUN_EXAMPLES: &str = r#"Examples:
+  slatedb-benchmark run --task bulk-load --golden slatedb-v0.14.1-001 \
+    --scale 1.0 --output .runs/bulk-load
+
+  slatedb-benchmark run --task full-compaction --golden slatedb-v0.14.1-001 \
+    --scale 1.0 --output .runs/full-compaction
+
+  slatedb-benchmark run --task balanced --golden slatedb-v0.14.1-001 \
+    --session github-123456 --scale 1.0 --output .runs/balanced"#;
 
 #[derive(Debug, Parser)]
 #[command(name = "slatedb-benchmark")]
@@ -12,7 +22,7 @@ use std::path::PathBuf;
     env!("BENCHMARK_SLATE_COMMIT"),
     ")"
 ))]
-#[command(about = "Run and publish SlateDB benchmark suites")]
+#[command(about = "Run SlateDB benchmarks")]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
@@ -20,129 +30,57 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Run one preparation phase or workload.
     Run(RunArgs),
-    Validate(ValidateArgs),
-    Catalog(CatalogArgs),
-    #[command(hide = true)]
-    Worker(WorkerArgs),
 }
 
 #[derive(Debug, Clone, Args)]
+#[command(after_help = RUN_EXAMPLES)]
 pub struct RunArgs {
+    /// Preparation task or workload from BENCHMARKS.md.
+    #[arg(long, value_enum)]
+    pub task: Task,
+    /// Golden data name, for example slatedb-v0.14.1-001.
+    #[arg(long, value_name = "GOLDEN_ID")]
+    pub golden: String,
+    /// Benchmark session name; required for workload tasks.
     #[arg(long)]
-    pub suite: String,
-    /// Stable name used to create or resume a suite in object storage.
-    #[arg(long)]
-    pub session: String,
-    #[arg(long)]
-    pub workload: Option<String>,
-    #[arg(long)]
-    pub output: PathBuf,
-    #[arg(long, default_value = "config")]
-    pub config_dir: PathBuf,
-    /// Fraction or percentage of configured data, time, and caches to execute.
-    #[arg(long, default_value = "1")]
+    pub session: Option<String>,
+    /// Decimal scale factor greater than 0 and at most 1.0.
+    #[arg(long, default_value = "1.0", value_name = "FACTOR")]
     pub scale: BenchmarkScale,
-}
-
-#[derive(Debug, Args)]
-pub struct ValidateArgs {
-    #[arg(long)]
+    /// Local result and diagnostic directory.
+    #[arg(long, value_name = "PATH")]
     pub output: PathBuf,
-}
-
-#[derive(Debug, Args)]
-pub struct CatalogArgs {
-    #[arg(long)]
-    pub suite: Option<String>,
-    #[arg(long, default_value = "config")]
-    pub config_dir: PathBuf,
-}
-
-#[derive(Debug, Clone, Args)]
-pub struct WorkerArgs {
-    #[arg(long)]
-    pub suite: String,
-    #[arg(long)]
-    pub workload: String,
-    #[arg(long)]
-    pub variant: String,
-    #[arg(long)]
-    pub database_path: String,
-    #[arg(long)]
-    pub expected_lsm_digest: String,
-    #[arg(long)]
-    pub object_store_cache_root: Option<PathBuf>,
-    #[arg(long)]
-    pub output: PathBuf,
-    #[arg(long, default_value = "config")]
-    pub config_dir: PathBuf,
-    #[arg(long, default_value = "1")]
-    pub scale: BenchmarkScale,
 }
 
 #[cfg(test)]
 mod tests {
     use super::{Cli, Command};
+    use crate::config::Task;
     use clap::Parser;
 
     #[test]
-    fn resumable_session_can_select_a_whole_suite() {
+    fn parses_the_documented_workload_command() {
         let cli = Cli::try_parse_from([
             "slatedb-benchmark",
             "run",
-            "--suite",
-            "rocksdb",
+            "--task",
+            "balanced",
+            "--golden",
+            "slatedb-v0.14.1-001",
             "--session",
-            "release-123",
-            "--output",
-            ".runs/rocksdb",
-        ])
-        .expect("parse suite session");
-
-        let Command::Run(args) = cli.command else {
-            panic!("expected run command");
-        };
-        assert_eq!(args.suite, "rocksdb");
-        assert_eq!(args.session, "release-123");
-        assert!(args.workload.is_none());
-        assert!(args.scale.is_full());
-    }
-
-    #[test]
-    fn scale_accepts_factors_and_percentages() {
-        for value in ["0.01", "1%"] {
-            let cli = Cli::try_parse_from([
-                "slatedb-benchmark",
-                "run",
-                "--suite",
-                "ycsb",
-                "--session",
-                "scaled",
-                "--output",
-                ".runs/scaled",
-                "--scale",
-                value,
-            ])
-            .expect("parse scale");
-            let Command::Run(args) = cli.command else {
-                panic!("expected run command");
-            };
-            assert_eq!(args.scale.factor(), 0.01);
-        }
-
-        assert!(Cli::try_parse_from([
-            "slatedb-benchmark",
-            "run",
-            "--suite",
-            "ycsb",
-            "--session",
-            "scaled",
-            "--output",
-            ".runs/scaled",
+            "github-123456",
             "--scale",
-            "0",
+            "0.01",
+            "--output",
+            ".runs/balanced",
         ])
-        .is_err());
+        .expect("parse command");
+
+        let Command::Run(args) = cli.command;
+        assert_eq!(args.task, Task::Balanced);
+        assert_eq!(args.session.as_deref(), Some("github-123456"));
+        assert_eq!(args.scale.factor(), 0.01);
     }
 }

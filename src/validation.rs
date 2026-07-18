@@ -1,751 +1,554 @@
 use crate::model::{
-    ApplicationPerformance, HistogramsFile, LatencySummary, MetricSeriesValue, MetricValueType,
-    ResultRecord, RunManifest, TimeseriesFile,
+    DistributionSummary, LatencySummary, PreparationResult, RateSummary, ResultConfiguration,
+    SourceIdentity, ThroughputSummary, WorkloadResult,
 };
-use anyhow::{bail, Context, Result};
-use base64::engine::general_purpose::STANDARD;
-use base64::Engine;
-use hdrhistogram::serialization::Deserializer;
-use hdrhistogram::Histogram;
-use serde::de::DeserializeOwned;
-use serde_json::Value;
-use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
-use std::io::Cursor;
-use std::path::{Path, PathBuf};
+use anyhow::{bail, ensure, Result};
+use std::collections::BTreeSet;
 
-pub(crate) fn validate_result(
-    result: &ResultRecord,
-    histograms: &HistogramsFile,
-    timeseries: &TimeseriesFile,
-) -> Result<()> {
-    validate_contract_values(result, histograms, timeseries)?;
-    validate_invariants(result, histograms, timeseries)?;
-    reject_secrets(&serde_json::to_value(result)?, "result")?;
-    reject_secrets(&serde_json::to_value(histograms)?, "histograms")?;
-    reject_secrets(&serde_json::to_value(timeseries)?, "timeseries")?;
-    Ok(())
-}
-
-pub(crate) fn validate_run(run: &RunManifest) -> Result<()> {
-    if run.status != "ok" {
-        bail!("run status must be ok");
-    }
-    validate_mode(&run.mode)?;
-    validate_scale(run.scale, &run.mode)?;
-    validate_timestamp(&run.started_at, "run start")?;
-    validate_timestamp(&run.finished_at, "run finish")?;
-    if run.results.is_empty() {
-        bail!("run contains no results");
-    }
-    let value = serde_json::to_value(run)?;
-    reject_secrets(&value, "run")
-}
-
-pub fn validate_output(output: &Path) -> Result<()> {
-    let run_path = output.join("run.json");
-    let run: RunManifest = read_json(&run_path)?;
-    validate_run(&run)?;
-    let manifest_paths = run.results.iter().collect::<BTreeSet<_>>();
-    if manifest_paths.len() != run.results.len() {
-        bail!("run manifest contains duplicate result paths");
-    }
-    let result_paths = find_named(output, "result.json")?;
-    if result_paths.len() != run.results.len() {
-        bail!(
-            "run manifest lists {} results but output contains {}",
-            run.results.len(),
-            result_paths.len()
-        );
-    }
-    validate_result_bundle(output, &run.results, run.scale)
-}
-
-pub(crate) fn validate_result_bundle(
-    output: &Path,
-    results: &[String],
-    expected_scale: f64,
-) -> Result<()> {
-    for relative in results {
-        let result_path = output.join(relative);
-        if !result_path.is_file() {
-            bail!(
-                "run manifest result {} does not exist",
-                result_path.display()
-            );
-        }
-        let directory = result_path.parent().context("result has no parent")?;
-        let result: ResultRecord = read_json(&result_path)?;
-        if result.configuration.scale.to_bits() != expected_scale.to_bits() {
-            bail!(
-                "result scale {} does not match run scale {expected_scale}",
-                result.configuration.scale
-            );
-        }
-        let expected_path = PathBuf::from("results")
-            .join(&result.identity.slate_version)
-            .join(&result.identity.suite)
-            .join(&result.identity.workload)
-            .join(&result.identity.variant)
-            .join("result.json");
-        if Path::new(relative) != expected_path {
-            bail!(
-                "result identity resolves to {} but manifest lists {}",
-                expected_path.display(),
-                relative
-            );
-        }
-        let histograms: HistogramsFile = read_json(&directory.join("histograms.json"))?;
-        let timeseries: TimeseriesFile = read_json(&directory.join("timeseries.json"))?;
-        validate_result(&result, &histograms, &timeseries)
-            .with_context(|| format!("validating {}", result_path.display()))?;
-    }
-    Ok(())
-}
-
-fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T> {
-    serde_json::from_slice(&fs::read(path).with_context(|| format!("reading {}", path.display()))?)
-        .with_context(|| format!("parsing {}", path.display()))
-}
-
-fn validate_contract_values(
-    result: &ResultRecord,
-    histograms: &HistogramsFile,
-    timeseries: &TimeseriesFile,
-) -> Result<()> {
-    validate_mode(&result.identity.mode)?;
-    validate_scale(result.configuration.scale, &result.identity.mode)?;
-    validate_timestamp(&result.identity.timestamp, "result timestamp")?;
-    if result.identity.suite.is_empty()
-        || result.identity.workload.is_empty()
-        || result.identity.variant.is_empty()
-    {
-        bail!("result identity contains an empty suite, workload, or variant");
-    }
-    if result.environment.cpu_cores == 0 || result.environment.ram_bytes == 0 {
-        bail!("result environment has no CPU cores or memory");
-    }
-    if result.configuration.clients == 0
-        || result.configuration.key_bytes == 0
-        || result.configuration.value_bytes == 0
-    {
-        bail!("result configuration has zero clients, key bytes, or value bytes");
-    }
-    if !(result.configuration.value_compression_ratio.is_finite()
-        && 0.0 < result.configuration.value_compression_ratio
-        && result.configuration.value_compression_ratio <= 1.0)
-    {
-        bail!("result configuration has an invalid value compression ratio");
-    }
-    for (name, value) in [
-        (
-            "application payload throughput",
-            result.application.payload_mib_per_second,
-        ),
-        ("average CPU", result.resources.average_cpu_percent),
-        ("peak CPU", result.resources.peak_cpu_percent),
-    ] {
-        validate_nonnegative_finite(value, name)?;
-    }
-    validate_background_writer_throughput(
-        &result.identity.workload,
-        result.application.background_writer_target_mib_per_second,
-        result.application.background_writer_achieved_mib_per_second,
-    )?;
-    if result.source_files.histograms != "histograms.json"
-        || result.source_files.timeseries != "timeseries.json"
-    {
-        bail!("result source file names do not match the workload bundle");
-    }
-    if histograms.encoding != "hdrhistogram-v2-deflate-base64" || histograms.significant_digits != 3
-    {
-        bail!("histogram encoding metadata is unsupported");
-    }
-    for (name, histogram) in &histograms.histograms {
-        if histogram.unit != "microseconds" {
-            bail!("histogram {name} has unsupported unit {}", histogram.unit);
-        }
-    }
-    if timeseries.interval_ns != 1_000_000_000 {
-        bail!("time-series interval must be one second");
-    }
-    for sample in &timeseries.samples {
-        validate_nonnegative_finite(sample.cpu_percent, "time-series CPU")?;
-    }
-    Ok(())
-}
-
-fn validate_background_writer_throughput(
-    workload: &str,
-    target: Option<f64>,
-    achieved: Option<f64>,
-) -> Result<()> {
-    let is_while_writing = matches!(
-        workload,
-        "read-while-writing" | "forward-range-while-writing" | "reverse-range-while-writing"
+pub fn validate_preparation_result(result: &PreparationResult) -> Result<()> {
+    ensure!(result.status == "ok", "preparation status must be ok");
+    ensure!(
+        result.task.is_preparation(),
+        "preparation result has a workload task"
     );
-    match (is_while_writing, target, achieved) {
-        (true, Some(target), Some(achieved)) => {
-            validate_nonnegative_finite(target, "background writer target throughput")?;
-            validate_nonnegative_finite(achieved, "background writer achieved throughput")?;
-            if target != 2.0 {
-                bail!("while-writing workload has {target} MiB/s writer target, expected 2 MiB/s");
-            }
+    ensure!(!result.golden_id.is_empty(), "golden ID is empty");
+    validate_timestamp(&result.timestamp)?;
+    validate_source(&result.source)?;
+    validate_configuration(&result.configuration, result.task)?;
+    ensure!(
+        result.dataset.record_count > 0,
+        "prepared dataset has no records"
+    );
+    ensure!(
+        result.dataset.key_bytes > 0,
+        "prepared keys have zero bytes"
+    );
+    ensure!(
+        result.dataset.value_bytes > 0,
+        "prepared values have zero bytes"
+    );
+    ensure!(
+        result.dataset.logical_bytes
+            == result.dataset.record_count.saturating_mul(
+                u64::try_from(
+                    result
+                        .dataset
+                        .key_bytes
+                        .saturating_add(result.dataset.value_bytes)
+                )
+                .unwrap_or(u64::MAX)
+            ),
+        "prepared logical byte count is inconsistent"
+    );
+    validate_checkpoint(&result.checkpoint)?;
+    ensure!(
+        result.checkpoint.live_sst_bytes > 0,
+        "prepared checkpoint has no SST data"
+    );
+    ensure!(
+        result.dataset.live_sst_bytes == result.checkpoint.live_sst_bytes,
+        "prepared dataset size does not match its checkpoint"
+    );
+    match result.task {
+        crate::config::Task::BulkLoad => ensure!(
+            result.source_checkpoint.is_none(),
+            "bulk load must not have a source checkpoint"
+        ),
+        crate::config::Task::FullCompaction => {
+            let source = result
+                .source_checkpoint
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("full compaction has no source checkpoint"))?;
+            validate_checkpoint(source)?;
+            ensure!(
+                source.checkpoint_id != result.checkpoint.checkpoint_id,
+                "full compaction reused its source checkpoint"
+            );
         }
-        (true, _, _) => {
-            bail!("while-writing workload does not report writer target and achieved throughput");
-        }
-        (false, None, None) => {}
-        (false, _, _) => {
-            bail!("non-while-writing workload reports background writer throughput");
-        }
+        _ => unreachable!("checked preparation task"),
     }
+    ensure!(
+        result.configuration.dataset.record_count == result.dataset.record_count
+            && result.configuration.dataset.key_bytes == result.dataset.key_bytes
+            && result.configuration.dataset.value_bytes == result.dataset.value_bytes,
+        "preparation dataset metadata differs from its configuration"
+    );
     Ok(())
 }
 
-fn validate_mode(mode: &str) -> Result<()> {
-    if !matches!(mode, "published" | "smoke") {
-        bail!("unsupported benchmark mode {mode}");
-    }
-    Ok(())
-}
-
-fn validate_scale(scale: f64, mode: &str) -> Result<()> {
-    if !(scale.is_finite() && scale > 0.0 && scale <= 1.0) {
-        bail!("benchmark scale must be greater than 0 and no more than 1");
-    }
-    if mode == "published" && scale.to_bits() != 1.0f64.to_bits() {
-        bail!("scaled benchmark results cannot use published mode");
-    }
-    Ok(())
-}
-
-fn validate_timestamp(timestamp: &str, name: &str) -> Result<()> {
-    chrono::DateTime::parse_from_rfc3339(timestamp)
-        .with_context(|| format!("{name} is not an RFC 3339 timestamp"))?;
-    Ok(())
-}
-
-fn validate_nonnegative_finite(value: f64, name: &str) -> Result<()> {
-    if !value.is_finite() || value < 0.0 {
-        bail!("{name} must be a finite nonnegative number");
-    }
-    Ok(())
-}
-
-fn validate_invariants(
-    result: &ResultRecord,
-    histograms: &HistogramsFile,
-    timeseries: &TimeseriesFile,
-) -> Result<()> {
-    let return_count = histograms
-        .histograms
-        .get("return")
-        .map(|histogram| histogram.count)
-        .unwrap_or(0);
-    let background_returns =
-        background_return_count(&result.application.return_latency_by_operation);
-    let expected_headline_returns =
-        validate_return_histogram_count(&result.application, return_count)?;
-    let expected_operation_returns = expected_headline_returns.saturating_add(background_returns);
-    if result.application.return_latency.count != return_count {
-        bail!("return latency summary does not match encoded histogram count");
-    }
-    validate_histogram_summary(histograms, "return", &result.application.return_latency)?;
-    for (operation, summary) in &result.application.return_latency_by_operation {
-        validate_histogram_summary(histograms, &format!("return/{operation}"), summary)?;
-    }
-    let operation_returns = result
-        .application
-        .return_latency_by_operation
-        .values()
-        .map(|summary| summary.count)
-        .sum::<u64>();
-    if operation_returns != expected_operation_returns {
-        bail!(
-            "per-operation return histograms contain {operation_returns} observations for {expected_operation_returns} foreground and background operations"
+pub fn validate_workload_result(result: &WorkloadResult) -> Result<()> {
+    ensure!(result.status == "ok", "workload status must be ok");
+    ensure!(
+        !result.task.is_preparation(),
+        "workload result has a preparation task"
+    );
+    ensure!(!result.golden_id.is_empty(), "golden ID is empty");
+    ensure!(!result.session.is_empty(), "session is empty");
+    validate_timestamp(&result.timestamp)?;
+    validate_source(&result.source)?;
+    validate_configuration(&result.configuration, result.task)?;
+    validate_environment(result)?;
+    ensure!(
+        result.recorded_interval_ns
+            >= result
+                .client_measurement_ns
+                .saturating_add(result.durability_drain_ns),
+        "recorded interval does not cover client measurement and durability drain"
+    );
+    ensure!(
+        result.recorded_interval_ns > 0,
+        "recorded interval is empty"
+    );
+    if result.task.may_write() {
+        ensure!(
+            result.durability_drain_ns > 0,
+            "write workload has no durability drain"
+        );
+    } else {
+        ensure!(
+            result.durability_drain_ns == 0,
+            "read-only workload has a durability drain"
         );
     }
-    let histogram_apis = histograms
-        .histograms
-        .keys()
-        .filter_map(|name| name.strip_prefix("api/"))
+    validate_initial_state(result)?;
+    for (api, operations) in &result.application.operations {
+        ensure!(!api.is_empty(), "application API name is empty");
+        validate_rate(operations)?;
+        let latency = result
+            .application
+            .latency
+            .get(api)
+            .ok_or_else(|| anyhow::anyhow!("application API {api} has no latency row"))?;
+        validate_latency(latency)?;
+        ensure!(
+            latency.count == operations.total,
+            "application API {api} count differs between operations and latency"
+        );
+        validate_average_rate(
+            operations.total,
+            operations.avg_per_second,
+            result.recorded_interval_ns,
+        )?;
+    }
+    for (api, throughput) in &result.application.throughput {
+        ensure!(
+            result.application.operations.contains_key(api),
+            "application throughput {api} has no operations row"
+        );
+        validate_throughput(throughput)?;
+        validate_average_rate(
+            throughput.total_bytes,
+            throughput.avg_bytes_per_second,
+            result.recorded_interval_ns,
+        )?;
+    }
+    for (name, latency) in &result.application.latency {
+        validate_latency(latency)?;
+        ensure!(
+            name == "durable" || result.application.operations.contains_key(name),
+            "application latency {name} has no operations row"
+        );
+    }
+    validate_application_rows(result)?;
+    for (method, requests) in &result.object_store.requests {
+        ensure!(
+            matches!(
+                method.as_str(),
+                "GET" | "PUT" | "HEAD" | "DELETE" | "POST" | "OTHER"
+            ),
+            "unknown HTTP method {method}"
+        );
+        validate_rate(requests)?;
+        validate_average_rate(
+            requests.total,
+            requests.avg_per_second,
+            result.recorded_interval_ns,
+        )?;
+    }
+    for (method, throughput) in &result.object_store.throughput {
+        ensure!(
+            result.object_store.requests.contains_key(method),
+            "object-store throughput {method} has no request row"
+        );
+        validate_throughput(throughput)?;
+        validate_average_rate(
+            throughput.total_bytes,
+            throughput.avg_bytes_per_second,
+            result.recorded_interval_ns,
+        )?;
+    }
+    validate_distribution(&result.process.cpu_cores)?;
+    validate_distribution(&result.process.rss_bytes)?;
+    validate_distribution(&result.machine.cpu_percent)?;
+    validate_distribution(&result.machine.rss_bytes)?;
+    validate_distribution(&result.machine.network_receive_bytes_per_second)?;
+    validate_distribution(&result.machine.network_send_bytes_per_second)?;
+    validate_distribution(&result.machine.disk_read_bytes_per_second)?;
+    validate_distribution(&result.machine.disk_write_bytes_per_second)?;
+    validate_distribution(&result.machine.disk_read_operations_per_second)?;
+    validate_distribution(&result.machine.disk_write_operations_per_second)?;
+    Ok(())
+}
+
+fn validate_source(source: &SourceIdentity) -> Result<()> {
+    for (name, value) in [
+        ("SlateDB version", source.slate_version.as_str()),
+        ("SlateDB commit", source.slate_commit.as_str()),
+        ("runner version", source.runner_version.as_str()),
+        ("runner commit", source.runner_commit.as_str()),
+        ("lockfile digest", source.lockfile_sha256.as_str()),
+    ] {
+        ensure!(!value.is_empty(), "{name} is empty");
+    }
+    Ok(())
+}
+
+fn validate_timestamp(timestamp: &str) -> Result<()> {
+    chrono::DateTime::parse_from_rfc3339(timestamp)
+        .map(|_| ())
+        .map_err(anyhow::Error::from)
+}
+
+fn validate_configuration(
+    configuration: &ResultConfiguration,
+    task: crate::config::Task,
+) -> Result<()> {
+    ensure!(
+        configuration.task.task == task,
+        "configuration belongs to another task"
+    );
+    ensure!(
+        configuration.scale.is_finite() && configuration.scale > 0.0 && configuration.scale <= 1.0,
+        "configuration scale is invalid"
+    );
+    ensure!(
+        configuration.dataset.record_count > 0,
+        "configuration has no records"
+    );
+    ensure!(
+        configuration.dataset.key_bytes > 0,
+        "configuration has zero-byte keys"
+    );
+    ensure!(
+        configuration.dataset.value_bytes > 0,
+        "configuration has zero-byte values"
+    );
+    ensure!(configuration.caches.block_bytes > 0, "block cache is empty");
+    ensure!(
+        configuration.caches.metadata_bytes > 0,
+        "metadata cache is empty"
+    );
+    ensure!(
+        configuration.caches.object_store_bytes > 0,
+        "object-store cache is empty"
+    );
+    ensure!(
+        configuration.slate_settings.is_object(),
+        "SlateDB settings are not an object"
+    );
+    ensure!(
+        matches!(configuration.build_profile.as_str(), "debug" | "release"),
+        "build profile is invalid"
+    );
+    let unique_features = configuration
+        .enabled_features
+        .iter()
         .collect::<BTreeSet<_>>();
-    let result_apis = result
+    ensure!(
+        unique_features.len() == configuration.enabled_features.len(),
+        "enabled features contain duplicates"
+    );
+    Ok(())
+}
+
+fn validate_environment(result: &WorkloadResult) -> Result<()> {
+    ensure!(
+        result.environment.cpu_cores > 0,
+        "environment has no CPU cores"
+    );
+    ensure!(result.environment.ram_bytes > 0, "environment has no RAM");
+    for (name, value) in [
+        ("runner type", result.environment.runner_type.as_str()),
+        ("hostname", result.environment.hostname.as_str()),
+        ("CPU model", result.environment.cpu_model.as_str()),
+        ("operating system", result.environment.os.as_str()),
+        ("kernel", result.environment.kernel.as_str()),
+        ("object store", result.environment.object_store.as_str()),
+        (
+            "object-store endpoint",
+            result.environment.endpoint.as_str(),
+        ),
+        ("object-store region", result.environment.region.as_str()),
+    ] {
+        ensure!(!value.is_empty(), "environment {name} is empty");
+    }
+    Ok(())
+}
+
+fn validate_initial_state(result: &WorkloadResult) -> Result<()> {
+    let should_be_empty = result.task == crate::config::Task::SustainedIngest;
+    if should_be_empty {
+        ensure!(
+            result.initial_state.kind == "empty",
+            "sustained ingest did not start empty"
+        );
+        ensure!(
+            result.initial_state.checkpoint_id.is_none()
+                && result.initial_state.manifest_id.is_none(),
+            "empty initial state contains a checkpoint"
+        );
+    } else {
+        ensure!(
+            result.initial_state.kind == "golden",
+            "golden workload did not start from golden data"
+        );
+        ensure!(
+            result.initial_state.checkpoint_id.is_some(),
+            "golden initial state has no checkpoint ID"
+        );
+        ensure!(
+            result.initial_state.manifest_id.is_some(),
+            "golden initial state has no manifest ID"
+        );
+    }
+    ensure!(
+        is_sha256(&result.initial_state.lsm_digest_sha256),
+        "initial LSM digest is invalid"
+    );
+    Ok(())
+}
+
+fn validate_application_rows(result: &WorkloadResult) -> Result<()> {
+    use crate::config::Task;
+
+    let expected: &[&str] = match result.task {
+        Task::Idle => &[],
+        Task::PointReadUniform | Task::PointReadSkewed | Task::PointReadMissing => &["get"],
+        Task::ReadHeavy | Task::Balanced | Task::UpdateHeavy => &["get", "put", "flush"],
+        Task::RangeScan => &["scan"],
+        Task::SustainedIngest => &["put", "flush"],
+        Task::TransactionContention => &[
+            "transaction.get",
+            "transaction.put",
+            "transaction.commit",
+            "flush",
+        ],
+        Task::BulkLoad | Task::FullCompaction => unreachable!("checked workload task"),
+    };
+    let actual = result
         .application
-        .api_latency
+        .operations
         .keys()
         .map(String::as_str)
         .collect::<BTreeSet<_>>();
-    if histogram_apis != result_apis {
-        bail!("API latency summaries do not match encoded histograms");
+    let expected = expected.iter().copied().collect::<BTreeSet<_>>();
+    ensure!(
+        actual == expected,
+        "application operation rows do not match the workload"
+    );
+
+    let latency = result
+        .application
+        .latency
+        .keys()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let mut expected_latency = expected;
+    if result.task.may_write() {
+        expected_latency.insert("durable");
     }
-    for (api, summary) in &result.application.api_latency {
-        validate_histogram_summary(histograms, &format!("api/{api}"), summary)?;
-    }
-    for (name, summary) in [
-        ("batch", result.application.batch_latency.as_ref()),
-        ("durability_lag", result.durability.lag.as_ref()),
-    ] {
-        if let Some(summary) = summary {
-            validate_histogram_summary(histograms, name, summary)?;
-        }
-    }
-    validate_application_windows(result, histograms, timeseries, expected_headline_returns)?;
-    validate_durability_windows(result, timeseries)?;
-    if result.application.errors != 0 {
-        bail!(
-            "result contains {} operation errors",
-            result.application.errors
+    ensure!(
+        latency == expected_latency,
+        "application latency rows do not match the workload"
+    );
+    if result.task.may_write() {
+        ensure!(
+            result.application.operations["flush"].total == 1,
+            "write workload must record exactly one final flush"
         );
-    }
-    if let Some(last_write) = result.durability.last_measured_sequence {
-        let final_durable = result
-            .durability
-            .final_durable_sequence
-            .context("write workload has no final durable sequence")?;
-        if final_durable < last_write {
-            bail!("durable frontier {final_durable} does not cover write {last_write}");
-        }
-    }
-    if timeseries.samples.len() < 2 {
-        bail!("resource samples do not span the measurement window");
-    }
-    let mut metric_identities = BTreeSet::new();
-    for metric in &timeseries.slatedb_metrics {
-        if !metric_identities.insert((metric.name.as_str(), serde_json::to_string(&metric.labels)?))
-        {
-            bail!("duplicate SlateDB metric series {}", metric.name);
-        }
-        if metric.values.len() != timeseries.samples.len() {
-            bail!(
-                "SlateDB metric {} has {} values for {} samples",
-                metric.name,
-                metric.values.len(),
-                timeseries.samples.len()
-            );
-        }
-        match metric.value_type {
-            MetricValueType::Histogram => {
-                let boundaries = metric
-                    .boundaries
-                    .as_ref()
-                    .context("histogram metric has no bucket boundaries")?;
-                for value in metric.values.iter().flatten() {
-                    let MetricSeriesValue::Histogram(value) = value else {
-                        bail!("histogram metric {} contains a scalar value", metric.name);
-                    };
-                    if value.bucket_counts.len() != boundaries.len().saturating_add(1) {
-                        bail!(
-                            "histogram metric {} has the wrong number of bucket counts",
-                            metric.name
-                        );
-                    }
-                }
+        let durable = result.application.latency["durable"].count;
+        match result.task {
+            Task::ReadHeavy | Task::Balanced | Task::UpdateHeavy | Task::SustainedIngest => {
+                ensure!(
+                    durable == result.application.operations["put"].total,
+                    "durability count does not match accepted puts"
+                );
             }
-            MetricValueType::Counter | MetricValueType::Gauge | MetricValueType::UpDownCounter => {
-                if metric.boundaries.is_some() {
-                    bail!("scalar metric {} has histogram boundaries", metric.name);
-                }
-                for value in metric.values.iter().flatten() {
-                    let MetricSeriesValue::Scalar(value) = value else {
-                        bail!("scalar metric {} contains a histogram value", metric.name);
-                    };
-                    if metric.value_type == MetricValueType::Counter && value.as_u64().is_none() {
-                        bail!("counter metric {} contains a negative value", metric.name);
-                    }
-                    if metric.value_type != MetricValueType::Counter
-                        && value.as_i64().is_none()
-                        && value.as_u64().is_none()
-                    {
-                        bail!("scalar metric {} contains a non-integer value", metric.name);
-                    }
-                }
+            Task::TransactionContention => {
+                let commits = result.application.operations["transaction.commit"].total;
+                ensure!(
+                    result.application.operations["transaction.get"].total
+                        == commits.saturating_mul(5)
+                        && result.application.operations["transaction.put"].total
+                            == commits.saturating_mul(5),
+                    "transaction API counts do not match five reads and five updates"
+                );
+                ensure!(
+                    durable <= commits,
+                    "durability count exceeds transaction commits"
+                );
             }
+            _ => unreachable!("checked write workload"),
         }
     }
-    let last_offset = timeseries
-        .samples
-        .last()
-        .map(|sample| sample.offset_ns)
-        .unwrap_or(0);
-    if last_offset < result.configuration.measurement_ns {
-        bail!("resource samples end before the measurement window");
-    }
-    if result.initial_state.lsm_digest_sha256.is_empty() {
-        bail!("initial LSM digest is missing");
-    }
-    if result.initial_state.lsm_digest_sha256.len() != 64
-        || !result
-            .initial_state
-            .lsm_digest_sha256
+    Ok(())
+}
+
+fn validate_checkpoint(checkpoint: &crate::model::CheckpointReference) -> Result<()> {
+    ensure!(
+        !checkpoint.database_path.is_empty(),
+        "checkpoint path is empty"
+    );
+    ensure!(
+        !checkpoint.checkpoint_id.is_empty(),
+        "checkpoint ID is empty"
+    );
+    checkpoint
+        .checkpoint_id
+        .parse::<uuid::Uuid>()
+        .map_err(anyhow::Error::from)?;
+    ensure!(
+        is_sha256(&checkpoint.lsm_digest_sha256),
+        "checkpoint LSM digest is invalid"
+    );
+    Ok(())
+}
+
+fn validate_rate(summary: &RateSummary) -> Result<()> {
+    ensure!(summary.total > 0, "rate row has no operations");
+    validate_ordered([
+        summary.min_per_second,
+        summary.p50_per_second,
+        summary.p95_per_second,
+        summary.p99_per_second,
+        summary.p999_per_second,
+        summary.max_per_second,
+    ])?;
+    validate_nonnegative([
+        summary.avg_per_second,
+        summary.p50_per_second,
+        summary.p95_per_second,
+        summary.p99_per_second,
+        summary.p999_per_second,
+        summary.min_per_second,
+        summary.max_per_second,
+    ])
+}
+
+fn validate_average_rate(total: u64, average: f64, elapsed_ns: u64) -> Result<()> {
+    let expected = total as f64 / (elapsed_ns as f64 / 1_000_000_000.0);
+    let tolerance = expected.abs().max(1.0) * 1e-9;
+    ensure!(
+        (average - expected).abs() <= tolerance,
+        "summary average does not match its total and interval"
+    );
+    Ok(())
+}
+
+fn validate_throughput(summary: &ThroughputSummary) -> Result<()> {
+    ensure!(summary.total_bytes > 0, "throughput row has zero bytes");
+    validate_ordered([
+        summary.min_bytes_per_second,
+        summary.p50_bytes_per_second,
+        summary.p95_bytes_per_second,
+        summary.p99_bytes_per_second,
+        summary.p999_bytes_per_second,
+        summary.max_bytes_per_second,
+    ])?;
+    validate_nonnegative([
+        summary.avg_bytes_per_second,
+        summary.p50_bytes_per_second,
+        summary.p95_bytes_per_second,
+        summary.p99_bytes_per_second,
+        summary.p999_bytes_per_second,
+        summary.min_bytes_per_second,
+        summary.max_bytes_per_second,
+    ])
+}
+
+fn validate_latency(summary: &LatencySummary) -> Result<()> {
+    ensure!(summary.count > 0, "latency row has no calls");
+    ensure!(
+        summary.avg_ns.is_finite() && summary.avg_ns >= 0.0,
+        "latency average is invalid"
+    );
+    ensure!(
+        summary.min_ns <= summary.max_ns,
+        "latency bounds are reversed"
+    );
+    ensure!(
+        summary.min_ns <= summary.p50_ns
+            && summary.p50_ns <= summary.p95_ns
+            && summary.p95_ns <= summary.p99_ns
+            && summary.p99_ns <= summary.p999_ns
+            && summary.p999_ns <= summary.max_ns,
+        "latency percentiles are not ordered"
+    );
+    Ok(())
+}
+
+fn validate_distribution(summary: &DistributionSummary) -> Result<()> {
+    validate_nonnegative([
+        summary.avg,
+        summary.p50,
+        summary.p95,
+        summary.p99,
+        summary.p999,
+        summary.min,
+        summary.max,
+    ])?;
+    ensure!(
+        summary.min <= summary.max,
+        "distribution bounds are reversed"
+    );
+    validate_ordered([
+        summary.min,
+        summary.p50,
+        summary.p95,
+        summary.p99,
+        summary.p999,
+        summary.max,
+    ])?;
+    Ok(())
+}
+
+fn validate_ordered<const N: usize>(values: [f64; N]) -> Result<()> {
+    validate_nonnegative(values)?;
+    ensure!(
+        values.windows(2).all(|pair| pair[0] <= pair[1]),
+        "summary percentiles are not ordered"
+    );
+    Ok(())
+}
+
+fn is_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
             .bytes()
-            .all(|byte| byte.is_ascii_hexdigit())
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+
+fn validate_nonnegative<const N: usize>(values: [f64; N]) -> Result<()> {
+    if values
+        .iter()
+        .any(|value| !value.is_finite() || *value < 0.0)
     {
-        bail!("initial LSM digest is not a SHA-256 hex digest");
+        bail!("summary contains a negative or non-finite value");
     }
     Ok(())
-}
-
-fn validate_application_windows(
-    result: &ResultRecord,
-    histograms: &HistogramsFile,
-    timeseries: &TimeseriesFile,
-    expected_headline_returns: u64,
-) -> Result<()> {
-    if timeseries.application_windows.is_empty() {
-        bail!("application time series contains no windows");
-    }
-    validate_window_layout(
-        timeseries
-            .application_windows
-            .iter()
-            .map(|window| (window.start_offset_ns, window.duration_ns)),
-        "application",
-    )?;
-    let completed = timeseries
-        .application_windows
-        .iter()
-        .map(|window| window.completed_operations)
-        .sum::<u64>();
-    let successful = timeseries
-        .application_windows
-        .iter()
-        .map(|window| window.successful_operations)
-        .sum::<u64>();
-    let errors = timeseries
-        .application_windows
-        .iter()
-        .map(|window| window.errors)
-        .sum::<u64>();
-    let read_hits = timeseries
-        .application_windows
-        .iter()
-        .map(|window| window.read_hits)
-        .sum::<u64>();
-    let read_misses = timeseries
-        .application_windows
-        .iter()
-        .map(|window| window.read_misses)
-        .sum::<u64>();
-    let return_windows = timeseries
-        .application_windows
-        .iter()
-        .filter_map(|window| window.return_latency.as_ref())
-        .map(|latency| latency.count)
-        .sum::<u64>();
-    if completed != expected_headline_returns || return_windows != expected_headline_returns {
-        bail!(
-            "application windows contain {completed} completions and {return_windows} headline return latencies for {expected_headline_returns} foreground operations"
-        );
-    }
-    if successful != result.application.successful_operations {
-        bail!(
-            "application windows contain {successful} successful operations but result reports {}",
-            result.application.successful_operations
-        );
-    }
-    if errors != result.application.errors {
-        bail!(
-            "application windows contain {errors} errors but result reports {}",
-            result.application.errors
-        );
-    }
-    match (result.application.read_hits, result.application.read_misses) {
-        (Some(expected_hits), Some(expected_misses))
-            if expected_hits == read_hits && expected_misses == read_misses => {}
-        (None, None) if read_hits == 0 && read_misses == 0 => {}
-        (expected_hits, expected_misses) => {
-            bail!(
-                "application windows contain {read_hits} read hits and {read_misses} read misses but result reports {expected_hits:?} hits and {expected_misses:?} misses"
-            );
-        }
-    }
-
-    for window in &timeseries.application_windows {
-        let returns = window
-            .return_latency
-            .as_ref()
-            .map(|latency| latency.count)
-            .unwrap_or(0);
-        let operation_returns = window
-            .return_latency_by_operation
-            .values()
-            .map(|latency| latency.count)
-            .sum::<u64>();
-        let background_returns = background_return_count(&window.return_latency_by_operation);
-        let expected_operation_returns = window
-            .completed_operations
-            .saturating_add(background_returns);
-        if operation_returns != expected_operation_returns {
-            bail!(
-                "application window contains {operation_returns} per-operation return latencies for {expected_operation_returns} foreground and background operations"
-            );
-        }
-        if returns != window.completed_operations {
-            bail!(
-                "application window contains {returns} headline return latencies for {} foreground operations",
-                window.completed_operations
-            );
-        }
-        if window.successful_operations > window.completed_operations {
-            bail!("application window has more successful operations than completions");
-        }
-    }
-
-    for name in ["return", "batch"] {
-        let expected = histograms
-            .histograms
-            .get(name)
-            .map(|histogram| histogram.count)
-            .unwrap_or(0);
-        let actual = timeseries
-            .application_windows
-            .iter()
-            .filter_map(|window| match name {
-                "return" => window.return_latency.as_ref(),
-                "batch" => window.batch_latency.as_ref(),
-                _ => None,
-            })
-            .map(|latency| latency.count)
-            .sum::<u64>();
-        if actual != expected {
-            bail!("application window {name} count {actual} does not match histogram count {expected}");
-        }
-    }
-    for (api, summary) in &result.application.api_latency {
-        let actual = timeseries
-            .application_windows
-            .iter()
-            .filter_map(|window| window.api_latency.get(api))
-            .map(|latency| latency.count)
-            .sum::<u64>();
-        if actual != summary.count {
-            bail!(
-                "application window api/{api} count {actual} does not match histogram count {}",
-                summary.count
-            );
-        }
-    }
-    for api in timeseries
-        .application_windows
-        .iter()
-        .flat_map(|window| window.api_latency.keys())
-    {
-        if !result.application.api_latency.contains_key(api) {
-            bail!("application window contains unknown API latency {api}");
-        }
-    }
-    Ok(())
-}
-
-fn validate_durability_windows(result: &ResultRecord, timeseries: &TimeseriesFile) -> Result<()> {
-    let Some(windows) = &timeseries.durability_windows else {
-        if result.durability.lag.is_some() {
-            bail!("durability lag has no time-series windows");
-        }
-        return Ok(());
-    };
-    validate_window_layout(
-        windows
-            .iter()
-            .map(|window| (window.start_offset_ns, window.duration_ns)),
-        "durability",
-    )?;
-    let count = windows
-        .iter()
-        .filter_map(|window| window.durability_lag.as_ref())
-        .map(|latency| latency.count)
-        .sum::<u64>();
-    let expected = result
-        .durability
-        .lag
-        .as_ref()
-        .map(|latency| latency.count)
-        .unwrap_or(0);
-    for window in windows {
-        let latency_count = window
-            .durability_lag
-            .as_ref()
-            .map(|latency| latency.count)
-            .unwrap_or(0);
-        if latency_count != window.writes_made_durable {
-            bail!(
-                "durability window contains {latency_count} lag observations for {} durable writes",
-                window.writes_made_durable
-            );
-        }
-    }
-    if count != expected {
-        bail!("durability windows contain {count} writes but result reports {expected}");
-    }
-    Ok(())
-}
-
-fn validate_window_layout(windows: impl Iterator<Item = (u64, u64)>, name: &str) -> Result<()> {
-    let mut expected_start = 0_u64;
-    for (start, duration) in windows {
-        if duration == 0 {
-            bail!("{name} time-series window has zero duration");
-        }
-        if start != expected_start {
-            bail!("{name} time-series window starts at {start}, expected {expected_start}");
-        }
-        expected_start = start.saturating_add(duration);
-    }
-    Ok(())
-}
-
-fn validate_return_histogram_count(
-    application: &ApplicationPerformance,
-    return_count: u64,
-) -> Result<u64> {
-    let expected_headline_returns = application.total_operations;
-    if return_count != expected_headline_returns {
-        bail!(
-            "return histogram count {return_count} does not match headline operation count {expected_headline_returns}"
-        );
-    }
-    Ok(expected_headline_returns)
-}
-
-fn background_return_count(summaries: &BTreeMap<String, LatencySummary>) -> u64 {
-    summaries
-        .get("writer-update")
-        .map(|summary| summary.count)
-        .unwrap_or(0)
-}
-
-fn validate_histogram_summary(
-    histograms: &HistogramsFile,
-    name: &str,
-    expected: &crate::model::LatencySummary,
-) -> Result<()> {
-    let encoded = histograms
-        .histograms
-        .get(name)
-        .with_context(|| format!("missing encoded {name} histogram"))?;
-    let bytes = STANDARD
-        .decode(&encoded.data)
-        .with_context(|| format!("decoding {name} histogram"))?;
-    let histogram: Histogram<u64> = Deserializer::new()
-        .deserialize(&mut Cursor::new(bytes))
-        .with_context(|| format!("deserializing {name} histogram"))?;
-    let actual = crate::model::LatencySummary {
-        count: histogram.len(),
-        p50_ns: histogram.value_at_quantile(0.50).saturating_mul(1_000),
-        p95_ns: histogram.value_at_quantile(0.95).saturating_mul(1_000),
-        p99_ns: histogram.value_at_quantile(0.99).saturating_mul(1_000),
-        p999_ns: histogram.value_at_quantile(0.999).saturating_mul(1_000),
-        max_ns: histogram.max().saturating_mul(1_000),
-    };
-    if &actual != expected {
-        bail!("{name} summary does not match its encoded histogram");
-    }
-    Ok(())
-}
-
-fn reject_secrets(value: &Value, path: &str) -> Result<()> {
-    match value {
-        Value::Object(values) => {
-            for (key, value) in values {
-                let lower = key.to_ascii_lowercase();
-                if ["secret", "credential", "access_key", "signed_url", "token"]
-                    .iter()
-                    .any(|needle| lower.contains(needle))
-                {
-                    bail!("secret-like field rejected at {path}.{key}");
-                }
-                reject_secrets(value, &format!("{path}.{key}"))?;
-            }
-        }
-        Value::Array(values) => {
-            for (index, value) in values.iter().enumerate() {
-                reject_secrets(value, &format!("{path}[{index}]"))?;
-            }
-        }
-        Value::String(value) => {
-            let lower = value.to_ascii_lowercase();
-            if lower.contains("x-amz-signature=") || lower.contains("aws_secret_access_key") {
-                bail!("secret-like value rejected at {path}");
-            }
-        }
-        _ => {}
-    }
-    Ok(())
-}
-
-fn find_named(root: &Path, name: &str) -> Result<Vec<PathBuf>> {
-    let mut found = Vec::new();
-    let mut pending = vec![root.to_path_buf()];
-    while let Some(path) = pending.pop() {
-        for entry in fs::read_dir(&path).with_context(|| format!("reading {}", path.display()))? {
-            let entry = entry?;
-            let file_type = entry.file_type()?;
-            if file_type.is_dir() {
-                pending.push(entry.path());
-            } else if entry.file_name() == name {
-                found.push(entry.path());
-            }
-        }
-    }
-    Ok(found)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        validate_background_writer_throughput, validate_return_histogram_count, validate_scale,
-    };
-    use crate::model::{ApplicationPerformance, LatencySummary};
+    use super::validate_distribution;
+    use crate::model::DistributionSummary;
 
     #[test]
-    fn background_operations_are_excluded_from_headline_return_count() {
-        let application = ApplicationPerformance {
-            total_operations: 10,
+    fn rejects_non_finite_published_values() {
+        let summary = DistributionSummary {
+            avg: f64::NAN,
             ..Default::default()
         };
-
-        assert_eq!(
-            validate_return_histogram_count(&application, 10)
-                .expect("valid background return count"),
-            10
-        );
-    }
-
-    #[test]
-    fn while_writing_workloads_require_target_and_achieved_throughput() {
-        validate_background_writer_throughput("read-while-writing", Some(2.0), Some(1.98))
-            .expect("valid writer throughput");
-        assert!(
-            validate_background_writer_throughput("read-while-writing", Some(2.0), None).is_err()
-        );
-        assert!(
-            validate_background_writer_throughput("random-read", Some(2.0), Some(2.0)).is_err()
-        );
-    }
-
-    #[test]
-    fn artifact_models_reject_unknown_fields() {
-        let error = serde_json::from_value::<LatencySummary>(serde_json::json!({
-            "count": 1,
-            "p50_ns": 1,
-            "p95_ns": 1,
-            "p99_ns": 1,
-            "p999_ns": 1,
-            "max_ns": 1,
-            "unexpected": true
-        }))
-        .expect_err("unknown artifact field should fail");
-
-        assert!(error.to_string().contains("unknown field"));
-    }
-
-    #[test]
-    fn only_full_scale_results_can_be_published() {
-        validate_scale(1.0, "published").expect("full scale is publishable");
-        validate_scale(0.01, "smoke").expect("scaled smoke output is valid");
-        assert!(validate_scale(0.01, "published").is_err());
-        assert!(validate_scale(0.0, "smoke").is_err());
+        assert!(validate_distribution(&summary).is_err());
     }
 }

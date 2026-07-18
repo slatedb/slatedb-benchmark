@@ -1,1012 +1,434 @@
 use super::durability::DurabilitySender;
-use super::stats::{Payload, WorkerStats};
-use super::util::{
-    ordered_key_for_id, prefix_key, random_unique_key, rocksdb_key_for_id, ycsb_key_for_id,
-    KeySelector, ValueGenerator, YcsbLatestSelector,
-};
-use crate::config::{KeyDistribution, VariantConfig, WorkloadKind};
+use super::stats::{record_error, record_success, WorkerStats};
+use super::util::{key_for_id, missing_key_for_id, KeySelector, ValueGenerator};
+use crate::config::{ResolvedConfig, Task};
 use crate::instrumented_store::StoreMetrics;
 use crate::system::{
-    duration_ns, measure_backpressure, ApplicationWindowRegistry, BenchmarkMetricsRecorder,
+    counter_value, duration_ns, measure_backpressure, ApplicationRecorder, ApplicationRegistry,
+    BenchmarkMetricsRecorder,
 };
 use anyhow::{Context, Result};
-use bytes::Bytes;
-use futures::future::join_all;
-use futures::stream::{FuturesUnordered, StreamExt};
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
-use slatedb::config::{PutOptions, ScanOptions, WriteOptions};
-use slatedb::{Db, ErrorKind, IsolationLevel, IterationOrder, WriteBatch, WriteHandle};
-use std::collections::BTreeSet;
+use slatedb::config::{PutOptions, WriteOptions};
+use slatedb::{Db, ErrorKind, IsolationLevel, WriteBatch};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 
-fn key_for_suite(suite: &str, id: u64, size: usize) -> bytes::Bytes {
-    match suite {
-        "ycsb" => ycsb_key_for_id(id, size),
-        "rocksdb" => rocksdb_key_for_id(id, size),
-        _ => ordered_key_for_id(id, size),
-    }
-}
-
-fn key_for_variant(variant: &VariantConfig, id: u64) -> bytes::Bytes {
-    key_for_suite(&variant.suite.name, id, variant.key_bytes())
-}
-
-fn point_payload_bytes(variant: &VariantConfig, key_bytes: usize, value_bytes: usize) -> u64 {
-    let key_bytes = if variant.suite.name == "rocksdb" {
-        key_bytes
-    } else {
-        0
-    };
-    key_bytes.saturating_add(value_bytes) as u64
-}
-
-fn truncate_log_float(value: f64) -> f64 {
-    (value * 100.0).trunc() / 100.0
-}
-
-#[derive(Clone)]
-pub struct ClosedLoopState {
-    next_insert: Arc<AtomicU64>,
-    acknowledged_insert: Arc<AtomicU64>,
-    completed_inserts: Arc<Mutex<BTreeSet<u64>>>,
-}
-
-impl ClosedLoopState {
-    pub fn new(next_insert: u64) -> Self {
-        Self {
-            next_insert: Arc::new(AtomicU64::new(next_insert)),
-            acknowledged_insert: Arc::new(AtomicU64::new(next_insert)),
-            completed_inserts: Arc::new(Mutex::new(BTreeSet::new())),
-        }
-    }
-
-    fn allocate_insert(&self) -> u64 {
-        self.next_insert.fetch_add(1, Ordering::Relaxed)
-    }
-
-    fn acknowledge_insert(&self, id: u64) {
-        let mut completed = self
-            .completed_inserts
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let mut frontier = self.acknowledged_insert.load(Ordering::Relaxed);
-        if id < frontier {
-            return;
-        }
-        completed.insert(id);
-        while completed.remove(&frontier) {
-            frontier = frontier.saturating_add(1);
-        }
-        self.acknowledged_insert.store(frontier, Ordering::Release);
-    }
-
-    fn acknowledged_insert(&self) -> u64 {
-        self.acknowledged_insert.load(Ordering::Acquire)
-    }
-}
-
-pub async fn run_closed_phase(
+pub async fn run_phase(
     db: Arc<Db>,
-    variant: &VariantConfig,
+    config: &ResolvedConfig,
     duration: Duration,
+    registry: Option<Arc<ApplicationRegistry>>,
     durability: Option<DurabilitySender>,
-    windows: Option<Arc<ApplicationWindowRegistry>>,
-    state: &ClosedLoopState,
 ) -> Result<WorkerStats> {
-    if variant.workload.kind.while_writing_read_kind().is_some() {
-        return run_with_capped_writer(db, variant, duration, durability, windows, state).await;
+    if config.task.task == Task::Idle {
+        tokio::time::sleep(duration).await;
+        return Ok(WorkerStats::default());
     }
-
-    let clients = variant.clients;
+    let next_insert = Arc::new(AtomicU64::new(0));
     let deadline = Instant::now() + duration;
     let mut tasks = JoinSet::new();
-    for _ in 0..clients {
+    for _ in 0..config.task.clients {
         let db = Arc::clone(&db);
-        let variant = variant.clone();
+        let config = config.clone();
+        let recorder = registry.as_ref().map(|registry| registry.recorder());
         let durability = durability.clone();
-        let windows = windows.clone();
-        let state = state.clone();
-        tasks.spawn(
-            async move { worker_loop(db, variant, deadline, durability, windows, state).await },
-        );
-    }
-    merge_tasks(tasks).await
-}
-
-async fn worker_loop(
-    db: Arc<Db>,
-    variant: VariantConfig,
-    deadline: Instant,
-    durability: Option<DurabilitySender>,
-    windows: Option<Arc<ApplicationWindowRegistry>>,
-    state: ClosedLoopState,
-) -> Result<WorkerStats> {
-    let mut rng = StdRng::from_os_rng();
-    let selector = match variant.workload.kind.key_distribution() {
-        KeyDistribution::Uniform => KeySelector::uniform(variant.record_count()),
-        KeyDistribution::Zipfian if variant.workload.kind == WorkloadKind::YcsbE => {
-            KeySelector::ycsb_insert_aware(variant.record_count())
-        }
-        KeyDistribution::Zipfian => KeySelector::zipfian(variant.record_count()),
-    };
-    let mut latest_selector = (variant.workload.kind == WorkloadKind::YcsbD)
-        .then(|| YcsbLatestSelector::new(variant.record_count()));
-    let write_options = WriteOptions {
-        await_durable: variant.workload.await_durable,
-        ..Default::default()
-    };
-    let mut values = ValueGenerator::new(variant.value_compression_ratio());
-    let mut stats = WorkerStats::with_window_recorder(
-        windows
-            .as_ref()
-            .map(|windows| windows.register_window_recorder()),
-    );
-    let operation_context = OperationContext {
-        db: &db,
-        variant: &variant,
-        write_options: &write_options,
-    };
-    while Instant::now() < deadline {
-        let (completion, backpressure) = measure_backpressure(execute_operation(
-            &operation_context,
-            &selector,
-            &mut latest_selector,
-            &state,
-            &mut rng,
-            &mut values,
-            &mut stats,
-        ))
-        .await;
-        stats.record_backpressure(backpressure);
-        match completion.result {
-            Ok(outcome) => {
-                let returned_at = Instant::now();
-                stats.record_success(outcome.name, completion.latency, outcome.payload);
-                stats.batch_keys = stats.batch_keys.saturating_add(outcome.batch_keys);
-                if outcome.batch_keys > 0 {
-                    stats.record_batch_latency(completion.latency);
-                }
-                if outcome.transaction_commit {
-                    stats.transaction_commits += 1;
-                }
-                if let Some(handle) = outcome.write_handle {
-                    stats.record_write(returned_at, handle.seqnum());
-                    if let Some(tracker) = &durability {
-                        tracker.accepted(handle.seqnum(), returned_at);
-                    }
-                }
-            }
-            Err(OperationError::TransactionConflict) => {
-                stats.record_transaction_conflict(completion.latency);
-            }
-            Err(OperationError::Other(error)) => {
-                stats.record_error(
-                    variant.workload.kind.default_operation_name(),
-                    completion.latency,
-                );
-                tracing::debug!(%error, "benchmark operation failed");
-            }
-        }
-    }
-    Ok(stats)
-}
-
-struct OperationOutcome {
-    name: &'static str,
-    payload: Payload,
-    batch_keys: u64,
-    write_handle: Option<WriteHandle>,
-    transaction_commit: bool,
-}
-
-struct OperationCompletion {
-    result: std::result::Result<OperationOutcome, OperationError>,
-    latency: Duration,
-}
-
-enum OperationError {
-    TransactionConflict,
-    Other(anyhow::Error),
-}
-
-impl From<anyhow::Error> for OperationError {
-    fn from(value: anyhow::Error) -> Self {
-        Self::Other(value)
-    }
-}
-
-struct OperationContext<'a> {
-    db: &'a Db,
-    variant: &'a VariantConfig,
-    write_options: &'a WriteOptions,
-}
-
-async fn execute_operation(
-    context: &OperationContext<'_>,
-    selector: &KeySelector,
-    latest_selector: &mut Option<YcsbLatestSelector>,
-    state: &ClosedLoopState,
-    rng: &mut StdRng,
-    values: &mut ValueGenerator,
-    stats: &mut WorkerStats,
-) -> OperationCompletion {
-    let started = Instant::now();
-    let db = context.db;
-    let variant = context.variant;
-    let write_options = context.write_options;
-    let kind = variant.workload.kind;
-    let result = match kind {
-        WorkloadKind::YcsbA => {
-            if rng.random_bool(0.5) {
-                read(db, variant, selector.sample(rng), "read", stats).await
-            } else {
-                update(context, selector.sample(rng), rng, values, "update", stats).await
-            }
-        }
-        WorkloadKind::YcsbB => {
-            if rng.random_bool(0.95) {
-                read(db, variant, selector.sample(rng), "read", stats).await
-            } else {
-                update(context, selector.sample(rng), rng, values, "update", stats).await
-            }
-        }
-        WorkloadKind::YcsbC | WorkloadKind::ColdRead | WorkloadKind::RandomRead => {
-            read(db, variant, selector.sample(rng), "read", stats).await
-        }
-        WorkloadKind::YcsbD => {
-            if rng.random_bool(0.95) {
-                let latest = state.acknowledged_insert().max(1);
-                let id = latest_selector
-                    .as_mut()
-                    .expect("YCSB D latest selector")
-                    .sample(latest, rng);
-                read(db, variant, id, "read", stats).await
-            } else {
-                return ycsb_insert(context, state, rng, values, stats).await;
-            }
-        }
-        WorkloadKind::YcsbE => {
-            if rng.random_bool(0.95) {
-                let length = rng.random_range(1..=100);
-                scan(
-                    db,
-                    variant,
-                    selector.sample_existing(state.acknowledged_insert(), rng),
-                    length,
-                    false,
-                    "scan",
-                    stats,
-                )
-                .await
-            } else {
-                return ycsb_insert(context, state, rng, values, stats).await;
-            }
-        }
-        WorkloadKind::YcsbF => {
-            async {
-                if rng.random_bool(0.5) {
-                    read(db, variant, selector.sample(rng), "read", stats).await
-                } else {
-                    let id = selector.sample(rng);
-                    let key = key_for_variant(variant, id);
-                    let previous = stats
-                        .measure_api("get", db.get(key.clone()))
-                        .await
-                        .map_err(|error| OperationError::Other(error.into()))?
-                        .context("read-modify-write key not found")
-                        .map_err(OperationError::Other)?;
-                    let value = values.generate(variant.value_bytes(), rng);
-                    let handle = stats
-                        .measure_api(
-                            "put",
-                            db.put_with_options(
-                                key,
-                                value.clone(),
-                                &PutOptions::default(),
-                                write_options,
-                            ),
-                        )
-                        .await
-                        .map_err(|error| OperationError::Other(error.into()))?;
-                    Ok(OperationOutcome {
-                        name: "read-modify-write",
-                        payload: Payload::read_write(previous.len() as u64, value.len() as u64),
-                        batch_keys: 0,
-                        write_handle: Some(handle),
-                        transaction_commit: false,
-                    })
-                }
-            }
-            .await
-        }
-        WorkloadKind::MultiRandomRead => multi_read(db, variant, selector, rng, stats).await,
-        WorkloadKind::ForwardRange => {
-            scan(db, variant, selector.sample(rng), 10, false, "scan", stats).await
-        }
-        WorkloadKind::ReverseRange => {
-            scan(db, variant, selector.sample(rng), 10, true, "scan", stats).await
-        }
-        WorkloadKind::Overwrite => {
-            update(context, selector.sample(rng), rng, values, "update", stats).await
-        }
-        WorkloadKind::SustainedIngest => {
-            async {
-                let id = state.next_insert.fetch_add(1, Ordering::Relaxed);
-                let key = random_unique_key(id, variant.key_bytes(), rng);
-                let value = values.generate(variant.value_bytes(), rng);
-                let handle = stats
-                    .measure_api(
-                        "put",
-                        db.put_with_options(
-                            key,
-                            value.clone(),
-                            &PutOptions::default(),
-                            write_options,
-                        ),
-                    )
-                    .await
-                    .map_err(|error| OperationError::Other(error.into()))?;
-                Ok(OperationOutcome {
-                    name: "insert",
-                    payload: Payload::write(value.len() as u64),
-                    batch_keys: 0,
-                    write_handle: Some(handle),
-                    transaction_commit: false,
-                })
-            }
-            .await
-        }
-        WorkloadKind::TransactionContention => {
-            transaction(db, variant, write_options, rng, values, stats).await
-        }
-        WorkloadKind::PrefixScan => prefix_scan(db, variant, rng, stats).await,
-        other => Err(OperationError::Other(anyhow::anyhow!(
-            "unsupported closed-loop operation {other:?}"
-        ))),
-    };
-    OperationCompletion {
-        result,
-        latency: started.elapsed(),
-    }
-}
-
-async fn ycsb_insert(
-    context: &OperationContext<'_>,
-    state: &ClosedLoopState,
-    rng: &mut StdRng,
-    values: &mut ValueGenerator,
-    stats: &mut WorkerStats,
-) -> OperationCompletion {
-    let started = Instant::now();
-    let id = state.allocate_insert();
-    let result = update(context, id, rng, values, "insert", stats).await;
-    state.acknowledge_insert(id);
-    OperationCompletion {
-        result,
-        latency: started.elapsed(),
-    }
-}
-
-async fn read(
-    db: &Db,
-    variant: &VariantConfig,
-    id: u64,
-    name: &'static str,
-    stats: &mut WorkerStats,
-) -> std::result::Result<OperationOutcome, OperationError> {
-    let key = key_for_variant(variant, id);
-    let key_bytes = key.len();
-    let value = stats
-        .measure_api("get", db.get(key))
-        .await
-        .map_err(|error| OperationError::Other(error.into()))?;
-    let payload = match value {
-        Some(value) => Payload::read_hit(point_payload_bytes(variant, key_bytes, value.len())),
-        None => Payload::read_miss(),
-    };
-    Ok(OperationOutcome {
-        name,
-        payload,
-        batch_keys: 0,
-        write_handle: None,
-        transaction_commit: false,
-    })
-}
-
-async fn update(
-    context: &OperationContext<'_>,
-    id: u64,
-    rng: &mut StdRng,
-    values: &mut ValueGenerator,
-    name: &'static str,
-    stats: &mut WorkerStats,
-) -> std::result::Result<OperationOutcome, OperationError> {
-    let db = context.db;
-    let variant = context.variant;
-    let key = key_for_variant(variant, id);
-    let value = values.generate(variant.value_bytes(), rng);
-    let payload_bytes = point_payload_bytes(variant, key.len(), value.len());
-    let handle = stats
-        .measure_api(
-            "put",
-            db.put_with_options(
-                key,
-                value.clone(),
-                &PutOptions::default(),
-                context.write_options,
-            ),
-        )
-        .await
-        .map_err(|error| OperationError::Other(error.into()))?;
-    Ok(OperationOutcome {
-        name,
-        payload: Payload::write(payload_bytes),
-        batch_keys: 0,
-        write_handle: Some(handle),
-        transaction_commit: false,
-    })
-}
-
-async fn multi_read(
-    db: &Db,
-    variant: &VariantConfig,
-    selector: &KeySelector,
-    rng: &mut StdRng,
-    stats: &mut WorkerStats,
-) -> std::result::Result<OperationOutcome, OperationError> {
-    let keys = (0..10)
-        .map(|_| key_for_variant(variant, selector.sample(rng)))
-        .collect::<Vec<_>>();
-    let values = join_all(keys.into_iter().map(|key| async {
-        let key_bytes = key.len();
-        let started = Instant::now();
-        let result = db.get(key).await;
-        (result, started.elapsed(), key_bytes)
-    }))
-    .await;
-    let mut bytes = 0_u64;
-    let mut hits = 0_u64;
-    let mut misses = 0_u64;
-    for (value, latency, key_bytes) in values {
-        stats.record_api_latency("get", latency);
-        match value.map_err(|error| OperationError::Other(error.into()))? {
-            Some(value) => {
-                hits = hits.saturating_add(1);
-                bytes = bytes.saturating_add(point_payload_bytes(variant, key_bytes, value.len()));
-            }
-            None => misses = misses.saturating_add(1),
-        }
-    }
-    Ok(OperationOutcome {
-        name: "batch-read",
-        payload: Payload::read_batch(bytes, hits, misses),
-        batch_keys: 10,
-        write_handle: None,
-        transaction_commit: false,
-    })
-}
-
-async fn scan(
-    db: &Db,
-    variant: &VariantConfig,
-    start_id: u64,
-    limit: usize,
-    reverse: bool,
-    name: &'static str,
-    stats: &mut WorkerStats,
-) -> std::result::Result<OperationOutcome, OperationError> {
-    let started = Instant::now();
-    let result = async {
-        let key = key_for_variant(variant, start_id);
-        let mut iterator = if reverse {
-            db.scan_with_options(
-                ..=key,
-                &ScanOptions::default().with_order(IterationOrder::Descending),
-            )
-            .await
-        } else {
-            db.scan(key..).await
-        }
-        .map_err(|error| OperationError::Other(error.into()))?;
-        let mut bytes = 0_u64;
-        let mut keys = 0_u64;
-        while keys < limit as u64 {
-            match iterator
-                .next()
-                .await
-                .map_err(|error| OperationError::Other(error.into()))?
-            {
-                Some(value) => {
-                    bytes = bytes.saturating_add((value.key.len() + value.value.len()) as u64);
-                    keys += 1;
-                }
-                None => break,
-            }
-        }
-        Ok(OperationOutcome {
-            name,
-            payload: Payload::read(bytes),
-            batch_keys: keys,
-            write_handle: None,
-            transaction_commit: false,
-        })
-    }
-    .await;
-    stats.record_api_latency("scan", started.elapsed());
-    result
-}
-
-async fn prefix_scan(
-    db: &Db,
-    variant: &VariantConfig,
-    rng: &mut StdRng,
-    stats: &mut WorkerStats,
-) -> std::result::Result<OperationOutcome, OperationError> {
-    let started = Instant::now();
-    let result = async {
-        let prefix_count = (variant.record_count() / 10).max(1);
-        let prefix = rng.random_range(0..prefix_count).to_be_bytes();
-        let mut iterator = db
-            .scan_prefix(prefix, ..)
-            .await
-            .map_err(|error| OperationError::Other(error.into()))?;
-        let mut keys = 0_u64;
-        let mut bytes = 0_u64;
-        while let Some(value) = iterator
-            .next()
-            .await
-            .map_err(|error| OperationError::Other(error.into()))?
-        {
-            keys += 1;
-            bytes = bytes.saturating_add((value.key.len() + value.value.len()) as u64);
-        }
-        if keys != 10 {
-            return Err(OperationError::Other(anyhow::anyhow!(
-                "prefix scan returned {keys} records instead of 10"
-            )));
-        }
-        Ok(OperationOutcome {
-            name: "prefix-scan",
-            payload: Payload::read(bytes),
-            batch_keys: keys,
-            write_handle: None,
-            transaction_commit: false,
-        })
-    }
-    .await;
-    stats.record_api_latency("scan", started.elapsed());
-    result
-}
-
-async fn transaction(
-    db: &Db,
-    variant: &VariantConfig,
-    write_options: &WriteOptions,
-    rng: &mut StdRng,
-    values: &mut ValueGenerator,
-    stats: &mut WorkerStats,
-) -> std::result::Result<OperationOutcome, OperationError> {
-    let transaction = stats
-        .measure_api(
-            "transaction.begin",
-            db.begin(IsolationLevel::SerializableSnapshot),
-        )
-        .await
-        .map_err(|error| OperationError::Other(error.into()))?;
-    let mut read_payload_bytes = 0_u64;
-    let mut write_payload_bytes = 0_u64;
-    let mut operations = [
-        true, true, true, true, true, false, false, false, false, false,
-    ];
-    operations.shuffle(rng);
-    for read_operation in operations {
-        let id = rng.random_range(0..variant.record_count().max(1));
-        let key = key_for_variant(variant, id);
-        if read_operation {
-            let value = stats
-                .measure_api("transaction.get", transaction.get(key))
-                .await
-                .map_err(|error| OperationError::Other(error.into()))?
-                .context("transaction read key not found")
-                .map_err(OperationError::Other)?;
-            read_payload_bytes = read_payload_bytes.saturating_add(value.len() as u64);
-        } else {
-            let value = values.generate(variant.value_bytes(), rng);
-            write_payload_bytes = write_payload_bytes.saturating_add(value.len() as u64);
-            stats
-                .measure_api_sync("transaction.put", || transaction.put(key, value))
-                .map_err(|error| OperationError::Other(error.into()))?;
-        }
-    }
-    match stats
-        .measure_api(
-            "transaction.commit",
-            transaction.commit_with_options(write_options),
-        )
-        .await
-    {
-        Ok(handle) => Ok(OperationOutcome {
-            name: "transaction",
-            payload: Payload::read_write(read_payload_bytes, write_payload_bytes),
-            batch_keys: 10,
-            write_handle: handle,
-            transaction_commit: true,
-        }),
-        Err(error) if error.kind() == ErrorKind::Transaction => {
-            Err(OperationError::TransactionConflict)
-        }
-        Err(error) => Err(OperationError::Other(error.into())),
-    }
-}
-
-pub(super) async fn run_bulk_load(
-    db: Arc<Db>,
-    variant: &VariantConfig,
-    durability: Option<DurabilitySender>,
-    windows: Option<Arc<ApplicationWindowRegistry>>,
-) -> Result<WorkerStats> {
-    const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
-    // db_bench's fillrandom issues individual puts. SlateDB's async call overhead
-    // dominates this 900M-record setup, so batch independent puts while preserving
-    // fillrandom sampling and record-level accounting.
-    const BATCH_RECORDS: u64 = 1_024;
-
-    let mut rng = StdRng::from_os_rng();
-    let mut values = ValueGenerator::new(variant.value_compression_ratio());
-    let count = variant.record_count();
-    let write_options = WriteOptions {
-        await_durable: false,
-        ..Default::default()
-    };
-    let put_options = PutOptions::default();
-    let mut stats = WorkerStats::with_window_recorder(
-        windows
-            .as_ref()
-            .map(|windows| windows.register_window_recorder()),
-    );
-    let load_started = Instant::now();
-    let mut last_reported_at = load_started;
-    let mut last_reported_records = 0_u64;
-    let mut last_reported_backpressure_ns = 0_u64;
-    let logical_bytes_per_record = variant.key_bytes().saturating_add(variant.value_bytes()) as f64;
-    let mut heartbeat = tokio::time::interval(HEARTBEAT_INTERVAL);
-    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    heartbeat.tick().await;
-
-    let mut completed_records = 0_u64;
-    while completed_records < count {
-        let batch_records = count.saturating_sub(completed_records).min(BATCH_RECORDS);
-        let mut batch = WriteBatch::new();
-        let mut payload_bytes = 0_u64;
-        for _ in 0..batch_records {
-            let id = rng.random_range(0..count);
-            let key = key_for_variant(variant, id);
-            let value = values.generate(variant.value_bytes(), &mut rng);
-            payload_bytes =
-                payload_bytes.saturating_add(point_payload_bytes(variant, key.len(), value.len()));
-            batch.put_bytes_with_options(key, value, &put_options);
-        }
-        let started = Instant::now();
-        let mut write = Box::pin(measure_backpressure(
-            db.write_with_options(batch, &write_options),
-        ));
-        let (result, backpressure) = loop {
-            tokio::select! {
-                result = &mut write => break result,
-                _ = heartbeat.tick() => {
-                    let now = Instant::now();
-                    let interval = now.saturating_duration_since(last_reported_at);
-                    let elapsed = now.saturating_duration_since(load_started);
-                    let records = completed_records;
-                    let recent_records = records.saturating_sub(last_reported_records);
-                    let recent_puts_per_second =
-                        recent_records as f64 / interval.as_secs_f64().max(f64::EPSILON);
-                    let average_puts_per_second =
-                        records as f64 / elapsed.as_secs_f64().max(f64::EPSILON);
-                    let recent_backpressure_ns = stats
-                        .backpressure_ns
-                        .saturating_sub(last_reported_backpressure_ns);
-                    let backpressure_percent = (recent_backpressure_ns as f64 / 1e9
-                        / interval.as_secs_f64().max(f64::EPSILON)
-                        * 100.0)
-                        .min(100.0);
-                    let progress_percent = if count == 0 {
-                        100.0
-                    } else {
-                        records as f64 / count as f64 * 100.0
-                    };
-                    let eta_seconds = if recent_puts_per_second > 0.0 {
-                        count.saturating_sub(records) as f64 / recent_puts_per_second
-                    } else {
-                        -1.0
-                    };
-                    tracing::info!(
-                        records_completed = records,
-                        successful_records = stats.successful,
-                        total_records = count,
-                        errors = stats.errors,
-                        progress_percent = truncate_log_float(progress_percent),
-                        recent_puts_per_second = truncate_log_float(recent_puts_per_second),
-                        average_puts_per_second = truncate_log_float(average_puts_per_second),
-                        logical_mib_per_second = truncate_log_float(
-                            recent_puts_per_second * logical_bytes_per_record / (1024.0 * 1024.0)
-                        ),
-                        backpressure_percent = truncate_log_float(backpressure_percent),
-                        elapsed_seconds = truncate_log_float(elapsed.as_secs_f64()),
-                        eta_seconds = truncate_log_float(eta_seconds),
-                        "bulk-load progress"
-                    );
-                    last_reported_at = now;
-                    last_reported_records = records;
-                    last_reported_backpressure_ns = stats.backpressure_ns;
-                }
-            }
-        };
-        let return_latency = started.elapsed();
-        stats.record_api_latency("write", return_latency);
-        stats.record_batch_latency(return_latency);
-        stats.record_backpressure(backpressure);
-        match result {
-            Ok(handle) => {
-                let returned_at = Instant::now();
-                stats.record_success_n(
-                    "insert",
-                    return_latency,
-                    Payload::write(payload_bytes),
-                    batch_records,
-                );
-                stats.record_write(returned_at, handle.seqnum());
-                if let Some(tracker) = &durability {
-                    tracker.accepted(handle.seqnum(), returned_at);
-                }
-            }
-            Err(error) => {
-                stats.record_error_n("insert", return_latency, batch_records);
-                tracing::debug!(%error, batch_records, "bulk-load batch write failed");
-            }
-        }
-        completed_records = completed_records.saturating_add(batch_records);
-    }
-    let elapsed = load_started.elapsed();
-    let average_puts_per_second = count as f64 / elapsed.as_secs_f64().max(f64::EPSILON);
-    tracing::info!(
-        records_completed = count,
-        successful_records = stats.successful,
-        total_records = count,
-        errors = stats.errors,
-        progress_percent = truncate_log_float(100.0),
-        average_puts_per_second = truncate_log_float(average_puts_per_second),
-        logical_mib_per_second = truncate_log_float(
-            average_puts_per_second * logical_bytes_per_record / (1024.0 * 1024.0)
-        ),
-        backpressure_percent = truncate_log_float(
-            (stats.backpressure_ns as f64 / 1e9 / elapsed.as_secs_f64().max(f64::EPSILON) * 100.0)
-                .min(100.0)
-        ),
-        elapsed_seconds = truncate_log_float(elapsed.as_secs_f64()),
-        "bulk-load insert phase complete"
-    );
-    Ok(stats)
-}
-
-async fn run_with_capped_writer(
-    db: Arc<Db>,
-    variant: &VariantConfig,
-    duration: Duration,
-    durability: Option<DurabilitySender>,
-    windows: Option<Arc<ApplicationWindowRegistry>>,
-    state: &ClosedLoopState,
-) -> Result<WorkerStats> {
-    let clients = variant.clients;
-    let deadline = Instant::now() + duration;
-    let read_kind = variant
-        .workload
-        .kind
-        .while_writing_read_kind()
-        .context("invalid while-writing workload")?;
-    let mut tasks = JoinSet::new();
-    for _ in 0..clients {
-        let db = Arc::clone(&db);
-        let mut reader_variant = variant.clone();
-        reader_variant.workload.kind = read_kind;
-        reader_variant.workload.await_durable = false;
-        let windows = windows.clone();
-        let state = state.clone();
+        let next_insert = Arc::clone(&next_insert);
         tasks.spawn(async move {
-            worker_loop(db, reader_variant, deadline, None, windows, state).await
+            worker_loop(db, config, deadline, recorder, durability, next_insert).await
         });
     }
-    let writer_db = db;
-    let writer_variant = variant.clone();
-    tasks.spawn(async move {
-        capped_writer(writer_db, writer_variant, deadline, durability, windows).await
-    });
-    merge_tasks(tasks).await
-}
-
-async fn capped_writer(
-    db: Arc<Db>,
-    variant: VariantConfig,
-    deadline: Instant,
-    durability: Option<DurabilitySender>,
-    windows: Option<Arc<ApplicationWindowRegistry>>,
-) -> Result<WorkerStats> {
-    const TARGET_BYTES_PER_SECOND: u64 = 2 * 1024 * 1024;
-    const MAX_IN_FLIGHT: usize = 1024;
-
-    let logical_bytes_per_write = variant.key_bytes().saturating_add(variant.value_bytes()) as u64;
-    let period =
-        Duration::from_secs_f64(logical_bytes_per_write as f64 / TARGET_BYTES_PER_SECOND as f64);
-    let mut ticker = tokio::time::interval(period);
-    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    let selector = KeySelector::uniform(variant.record_count());
-    let mut rng = StdRng::from_os_rng();
-    let mut values = ValueGenerator::new(variant.value_compression_ratio());
-    let mut stats = WorkerStats::with_window_recorder(
-        windows
-            .as_ref()
-            .map(|windows| windows.register_window_recorder()),
-    );
-    stats.background_writer_target_bytes_per_second = Some(TARGET_BYTES_PER_SECOND);
-    let mut in_flight = FuturesUnordered::new();
-    let tokio_deadline = tokio::time::Instant::from_std(deadline);
-
-    loop {
-        if Instant::now() >= deadline {
-            break;
-        }
-        if in_flight.len() >= MAX_IN_FLIGHT {
-            let completion = in_flight
-                .next()
-                .await
-                .context("capped writer pipeline unexpectedly became empty")?;
-            record_capped_write(&mut stats, completion, durability.as_ref());
-            continue;
-        }
-
-        tokio::select! {
-            _ = ticker.tick() => {
-                let key = key_for_variant(&variant, selector.sample(&mut rng));
-                let value = values.generate(variant.value_bytes(), &mut rng);
-                in_flight.push(execute_capped_write(
-                    Arc::clone(&db),
-                    key,
-                    value,
-                    Instant::now(),
-                ));
-            }
-            completion = in_flight.next(), if !in_flight.is_empty() => {
-                if let Some(completion) = completion {
-                    record_capped_write(&mut stats, completion, durability.as_ref());
-                }
-            }
-            _ = tokio::time::sleep_until(tokio_deadline) => break,
-        }
-    }
-
-    while let Some(completion) = in_flight.next().await {
-        record_capped_write(&mut stats, completion, durability.as_ref());
-    }
-    Ok(stats)
-}
-
-struct CappedWriteCompletion {
-    result: std::result::Result<WriteHandle, slatedb::Error>,
-    return_latency: Duration,
-    api_latency: Duration,
-    backpressure: Duration,
-    value_bytes: u64,
-    logical_bytes: u64,
-}
-
-async fn execute_capped_write(
-    db: Arc<Db>,
-    key: Bytes,
-    value: Bytes,
-    started: Instant,
-) -> CappedWriteCompletion {
-    let value_bytes = value.len() as u64;
-    let logical_bytes = key.len().saturating_add(value.len()) as u64;
-    let options = WriteOptions {
-        await_durable: true,
-        ..Default::default()
-    };
-    let api_started = Instant::now();
-    let (result, backpressure) =
-        measure_backpressure(db.put_with_options(key, value, &PutOptions::default(), &options))
-            .await;
-    CappedWriteCompletion {
-        result,
-        return_latency: started.elapsed(),
-        api_latency: api_started.elapsed(),
-        backpressure,
-        value_bytes,
-        logical_bytes,
-    }
-}
-
-fn record_capped_write(
-    stats: &mut WorkerStats,
-    completion: CappedWriteCompletion,
-    durability: Option<&DurabilitySender>,
-) {
-    stats.record_api_latency("put", completion.api_latency);
-    stats.record_backpressure(completion.backpressure);
-    match completion.result {
-        Ok(handle) => {
-            let returned_at = Instant::now();
-            stats.record_background_writer_success(
-                "writer-update",
-                completion.return_latency,
-                Payload::write(completion.value_bytes),
-                completion.logical_bytes,
-            );
-            stats.record_write(returned_at, handle.seqnum());
-            if let Some(tracker) = durability {
-                tracker.accepted(handle.seqnum(), returned_at);
-            }
-        }
-        Err(error) => {
-            stats.record_background_error("writer-update", completion.return_latency);
-            tracing::debug!(%error, "capped writer failed");
-        }
-    }
-}
-
-async fn merge_tasks(mut tasks: JoinSet<Result<WorkerStats>>) -> Result<WorkerStats> {
     let mut merged = WorkerStats::default();
     while let Some(result) = tasks.join_next().await {
-        merged.merge(&result.context("joining benchmark client")??)?;
+        merged.merge(&result.context("joining benchmark client")??);
     }
     Ok(merged)
 }
 
-const DATASET_BATCH_RECORDS: u64 = 1_024;
-const DATASET_BATCH_PIPELINE_DEPTH: usize = 16;
+async fn worker_loop(
+    db: Arc<Db>,
+    config: ResolvedConfig,
+    deadline: Instant,
+    recorder: Option<ApplicationRecorder>,
+    durability: Option<DurabilitySender>,
+    next_insert: Arc<AtomicU64>,
+) -> Result<WorkerStats> {
+    let mut rng = StdRng::from_os_rng();
+    let selector = if matches!(
+        config.task.task,
+        Task::PointReadSkewed | Task::ReadHeavy | Task::Balanced | Task::UpdateHeavy
+    ) {
+        KeySelector::zipfian(config.dataset.record_count)
+    } else {
+        KeySelector::uniform(config.dataset.record_count)
+    };
+    let mut values = ValueGenerator::new();
+    let mut stats = WorkerStats::default();
+    while Instant::now() < deadline {
+        match config.task.task {
+            Task::PointReadUniform | Task::PointReadSkewed => {
+                get(
+                    &db,
+                    &config,
+                    selector.sample(&mut rng),
+                    false,
+                    recorder.as_ref(),
+                    &mut stats,
+                )
+                .await;
+            }
+            Task::PointReadMissing => {
+                get(
+                    &db,
+                    &config,
+                    selector.sample(&mut rng),
+                    true,
+                    recorder.as_ref(),
+                    &mut stats,
+                )
+                .await;
+            }
+            Task::ReadHeavy => {
+                if rng.random_bool(0.95) {
+                    get(
+                        &db,
+                        &config,
+                        selector.sample(&mut rng),
+                        false,
+                        recorder.as_ref(),
+                        &mut stats,
+                    )
+                    .await;
+                } else {
+                    put(
+                        &db,
+                        &config,
+                        selector.sample(&mut rng),
+                        recorder.as_ref(),
+                        durability.as_ref(),
+                        &mut rng,
+                        &mut values,
+                        &mut stats,
+                    )
+                    .await;
+                }
+            }
+            Task::Balanced => {
+                if rng.random_bool(0.5) {
+                    get(
+                        &db,
+                        &config,
+                        selector.sample(&mut rng),
+                        false,
+                        recorder.as_ref(),
+                        &mut stats,
+                    )
+                    .await;
+                } else {
+                    put(
+                        &db,
+                        &config,
+                        selector.sample(&mut rng),
+                        recorder.as_ref(),
+                        durability.as_ref(),
+                        &mut rng,
+                        &mut values,
+                        &mut stats,
+                    )
+                    .await;
+                }
+            }
+            Task::UpdateHeavy => {
+                if rng.random_bool(0.05) {
+                    get(
+                        &db,
+                        &config,
+                        selector.sample(&mut rng),
+                        false,
+                        recorder.as_ref(),
+                        &mut stats,
+                    )
+                    .await;
+                } else {
+                    put(
+                        &db,
+                        &config,
+                        selector.sample(&mut rng),
+                        recorder.as_ref(),
+                        durability.as_ref(),
+                        &mut rng,
+                        &mut values,
+                        &mut stats,
+                    )
+                    .await;
+                }
+            }
+            Task::RangeScan => {
+                scan(
+                    &db,
+                    &config,
+                    selector.sample(&mut rng),
+                    recorder.as_ref(),
+                    &mut stats,
+                )
+                .await;
+            }
+            Task::SustainedIngest => {
+                let id = next_insert.fetch_add(1, Ordering::Relaxed);
+                put(
+                    &db,
+                    &config,
+                    id,
+                    recorder.as_ref(),
+                    durability.as_ref(),
+                    &mut rng,
+                    &mut values,
+                    &mut stats,
+                )
+                .await;
+            }
+            Task::TransactionContention => {
+                transaction(
+                    &db,
+                    &config,
+                    recorder.as_ref(),
+                    durability.as_ref(),
+                    &mut rng,
+                    &mut values,
+                    &mut stats,
+                )
+                .await;
+            }
+            Task::BulkLoad | Task::FullCompaction | Task::Idle => {
+                anyhow::bail!("{} is not an active workload", config.task.task);
+            }
+        }
+    }
+    Ok(stats)
+}
 
-pub(crate) struct DatasetLoadMetrics {
+async fn get(
+    db: &Db,
+    config: &ResolvedConfig,
+    id: u64,
+    missing: bool,
+    recorder: Option<&ApplicationRecorder>,
+    stats: &mut WorkerStats,
+) {
+    let key = if missing {
+        missing_key_for_id(id, config.dataset.key_bytes)
+    } else {
+        key_for_id(id, config.dataset.key_bytes)
+    };
+    let started = Instant::now();
+    match db.get(key.clone()).await {
+        Ok(value) => {
+            let bytes = u64::try_from(key.len()).unwrap_or(u64::MAX).saturating_add(
+                value
+                    .as_ref()
+                    .map_or(0, |value| u64::try_from(value.len()).unwrap_or(u64::MAX)),
+            );
+            record_success(recorder, "get", started.elapsed(), bytes);
+            if value.is_some() {
+                stats.read_hits = stats.read_hits.saturating_add(1);
+            } else {
+                stats.read_misses = stats.read_misses.saturating_add(1);
+            }
+        }
+        Err(error) => {
+            record_error(stats, recorder, "get", started.elapsed());
+            tracing::debug!(%error, "get failed");
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn put(
+    db: &Db,
+    config: &ResolvedConfig,
+    id: u64,
+    recorder: Option<&ApplicationRecorder>,
+    durability: Option<&DurabilitySender>,
+    rng: &mut StdRng,
+    values: &mut ValueGenerator,
+    stats: &mut WorkerStats,
+) {
+    let key = key_for_id(id, config.dataset.key_bytes);
+    let value = values.generate(config.dataset.value_bytes, rng);
+    let logical_bytes = u64::try_from(key.len().saturating_add(value.len())).unwrap_or(u64::MAX);
+    let options = WriteOptions {
+        await_durable: false,
+        ..Default::default()
+    };
+    let started = Instant::now();
+    match db
+        .put_with_options(key, value, &PutOptions::default(), &options)
+        .await
+    {
+        Ok(handle) => {
+            let returned_at = Instant::now();
+            record_success(recorder, "put", started.elapsed(), logical_bytes);
+            stats.record_write(&handle, returned_at, durability);
+        }
+        Err(error) => {
+            record_error(stats, recorder, "put", started.elapsed());
+            tracing::debug!(%error, "put failed");
+        }
+    }
+}
+
+async fn scan(
+    db: &Db,
+    config: &ResolvedConfig,
+    start_id: u64,
+    recorder: Option<&ApplicationRecorder>,
+    stats: &mut WorkerStats,
+) {
+    let key = key_for_id(start_id, config.dataset.key_bytes);
+    let Ok(mut iterator) = db.scan(key..).await else {
+        record_error(stats, recorder, "scan", Duration::ZERO);
+        return;
+    };
+    let limit = config.task.scan_limit.unwrap_or(10);
+    let expected = usize::try_from(config.dataset.record_count.saturating_sub(start_id))
+        .unwrap_or(usize::MAX)
+        .min(limit);
+    let mut returned = 0_usize;
+    while returned < limit {
+        let started = Instant::now();
+        match iterator.next().await {
+            Ok(Some(entry)) => {
+                let bytes = u64::try_from(entry.key.len().saturating_add(entry.value.len()))
+                    .unwrap_or(u64::MAX);
+                record_success(recorder, "scan", started.elapsed(), bytes);
+                returned += 1;
+                stats.scan_records = stats.scan_records.saturating_add(1);
+            }
+            Ok(None) => {
+                record_success(recorder, "scan", started.elapsed(), 0);
+                stats.scan_end_calls = stats.scan_end_calls.saturating_add(1);
+                break;
+            }
+            Err(error) => {
+                record_error(stats, recorder, "scan", started.elapsed());
+                tracing::debug!(%error, "scan next failed");
+                return;
+            }
+        }
+    }
+    if returned != expected {
+        stats.errors = stats.errors.saturating_add(1);
+        tracing::debug!(
+            start_id,
+            expected,
+            returned,
+            "scan returned an unexpected record count"
+        );
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn transaction(
+    db: &Db,
+    config: &ResolvedConfig,
+    recorder: Option<&ApplicationRecorder>,
+    durability: Option<&DurabilitySender>,
+    rng: &mut StdRng,
+    values: &mut ValueGenerator,
+    stats: &mut WorkerStats,
+) {
+    stats.transaction_attempts = stats.transaction_attempts.saturating_add(1);
+    let transaction = match db.begin(IsolationLevel::SerializableSnapshot).await {
+        Ok(transaction) => transaction,
+        Err(error) => {
+            stats.errors = stats.errors.saturating_add(1);
+            tracing::debug!(%error, "transaction begin failed");
+            return;
+        }
+    };
+    let hot_keys = config.task.transaction_hot_keys.unwrap_or(10_000).max(1);
+    let mut operations = [
+        true, true, true, true, true, false, false, false, false, false,
+    ];
+    operations.shuffle(rng);
+    for read in operations {
+        let id = rng.random_range(0..hot_keys);
+        let key = key_for_id(id, config.dataset.key_bytes);
+        if read {
+            let started = Instant::now();
+            match transaction.get(key.clone()).await {
+                Ok(Some(value)) => {
+                    let bytes =
+                        u64::try_from(key.len().saturating_add(value.len())).unwrap_or(u64::MAX);
+                    record_success(recorder, "transaction.get", started.elapsed(), bytes);
+                }
+                Ok(None) => {
+                    record_success(recorder, "transaction.get", started.elapsed(), 0);
+                    stats.errors = stats.errors.saturating_add(1);
+                }
+                Err(error) => {
+                    record_error(stats, recorder, "transaction.get", started.elapsed());
+                    tracing::debug!(%error, "transaction get failed");
+                    return;
+                }
+            }
+        } else {
+            let value = values.generate(config.dataset.value_bytes, rng);
+            let bytes = u64::try_from(key.len().saturating_add(value.len())).unwrap_or(u64::MAX);
+            let started = Instant::now();
+            match transaction.put(key, value) {
+                Ok(()) => record_success(recorder, "transaction.put", started.elapsed(), bytes),
+                Err(error) => {
+                    record_error(stats, recorder, "transaction.put", started.elapsed());
+                    tracing::debug!(%error, "transaction put failed");
+                    return;
+                }
+            }
+        }
+    }
+    let options = WriteOptions {
+        await_durable: false,
+        ..Default::default()
+    };
+    let started = Instant::now();
+    match transaction.commit_with_options(&options).await {
+        Ok(Some(handle)) => {
+            let returned_at = Instant::now();
+            record_success(recorder, "transaction.commit", started.elapsed(), 0);
+            stats.transaction_commits = stats.transaction_commits.saturating_add(1);
+            stats.record_write(&handle, returned_at, durability);
+        }
+        Ok(None) => {
+            record_error(stats, recorder, "transaction.commit", started.elapsed());
+            tracing::debug!("write transaction committed without a write handle");
+        }
+        Err(error) if error.kind() == ErrorKind::Transaction => {
+            record_success(recorder, "transaction.commit", started.elapsed(), 0);
+            stats.transaction_conflicts = stats.transaction_conflicts.saturating_add(1);
+        }
+        Err(error) => {
+            record_error(stats, recorder, "transaction.commit", started.elapsed());
+            tracing::debug!(%error, "transaction commit failed");
+        }
+    }
+}
+
+const DATASET_BATCH_RECORDS: u64 = 1_024;
+const DATASET_BATCH_QUEUE_DEPTH: usize = 16;
+
+pub struct DatasetLoadMetrics {
     store: Arc<StoreMetrics>,
     slate: Arc<BenchmarkMetricsRecorder>,
 }
 
 impl DatasetLoadMetrics {
-    pub(crate) fn new(store: Arc<StoreMetrics>, slate: Arc<BenchmarkMetricsRecorder>) -> Self {
+    pub fn new(store: Arc<StoreMetrics>, slate: Arc<BenchmarkMetricsRecorder>) -> Self {
         Self { store, slate }
-    }
-}
-
-pub(crate) struct DatasetLoadSpec {
-    suite: String,
-    record_count: u64,
-    key_bytes: usize,
-    value_bytes: usize,
-    value_compression_ratio: f64,
-    prefix_layout: bool,
-}
-
-impl DatasetLoadSpec {
-    pub(crate) fn new(
-        suite: &str,
-        record_count: u64,
-        key_bytes: usize,
-        value_bytes: usize,
-        value_compression_ratio: f64,
-        prefix_layout: bool,
-    ) -> Self {
-        Self {
-            suite: suite.to_string(),
-            record_count,
-            key_bytes,
-            value_bytes,
-            value_compression_ratio,
-            prefix_layout,
-        }
     }
 }
 
@@ -1016,507 +438,256 @@ struct DatasetBatch {
     batch: WriteBatch,
 }
 
-struct DatasetLoadProgress {
-    metrics: DatasetLoadMetrics,
-    started_at: Instant,
-    last_reported_at: Instant,
-    last_reported_records: u64,
-    last_reported_backpressure_ns: u64,
-    initial_physical_upload_bytes: u64,
-    last_reported_physical_upload_bytes: u64,
-    initial_l0_flush_bytes: u64,
-    last_reported_l0_flush_bytes: u64,
-}
-
-impl DatasetLoadProgress {
-    fn new(metrics: DatasetLoadMetrics) -> Self {
-        let now = Instant::now();
-        let physical_upload_bytes = metrics.store.snapshot().bytes_written;
-        let l0_flush_bytes =
-            super::counter_value(&metrics.slate.snapshot(), slatedb::db_stats::L0_FLUSH_BYTES);
-        Self {
-            metrics,
-            started_at: now,
-            last_reported_at: now,
-            last_reported_records: 0,
-            last_reported_backpressure_ns: 0,
-            initial_physical_upload_bytes: physical_upload_bytes,
-            last_reported_physical_upload_bytes: physical_upload_bytes,
-            initial_l0_flush_bytes: l0_flush_bytes,
-            last_reported_l0_flush_bytes: l0_flush_bytes,
-        }
-    }
-
-    fn report(
-        &mut self,
-        suite: &str,
-        phase: &str,
-        records_completed: u64,
-        total_records: u64,
-        backpressure_ns: u64,
-        logical_bytes_per_record: f64,
-    ) {
-        let now = Instant::now();
-        let interval = now.saturating_duration_since(self.last_reported_at);
-        let elapsed = now.saturating_duration_since(self.started_at);
-        let physical_upload_bytes = self.metrics.store.snapshot().bytes_written;
-        let l0_flush_bytes = super::counter_value(
-            &self.metrics.slate.snapshot(),
-            slatedb::db_stats::L0_FLUSH_BYTES,
-        );
-        let recent_records = records_completed.saturating_sub(self.last_reported_records);
-        let recent_puts_per_second =
-            recent_records as f64 / interval.as_secs_f64().max(f64::EPSILON);
-        let average_puts_per_second =
-            records_completed as f64 / elapsed.as_secs_f64().max(f64::EPSILON);
-        let recent_backpressure_ns =
-            backpressure_ns.saturating_sub(self.last_reported_backpressure_ns);
-        let backpressure_percent =
-            (recent_backpressure_ns as f64 / 1e9 / interval.as_secs_f64().max(f64::EPSILON)
-                * 100.0)
-                .min(100.0);
-        let physical_upload_mib_per_second = bytes_per_second_as_mib(
-            physical_upload_bytes.saturating_sub(self.last_reported_physical_upload_bytes),
-            interval,
-        );
-        let l0_flush_mib_per_second = bytes_per_second_as_mib(
-            l0_flush_bytes.saturating_sub(self.last_reported_l0_flush_bytes),
-            interval,
-        );
-        let progress_percent = if total_records == 0 {
-            100.0
-        } else {
-            records_completed as f64 / total_records as f64 * 100.0
-        };
-        let eta_seconds = if records_completed >= total_records {
-            0.0
-        } else if recent_puts_per_second > 0.0 {
-            total_records.saturating_sub(records_completed) as f64 / recent_puts_per_second
-        } else {
-            -1.0
-        };
-        tracing::info!(
-            suite,
-            phase,
-            records_completed,
-            successful_records = records_completed,
-            total_records,
-            errors = 0_u64,
-            progress_percent = truncate_log_float(progress_percent),
-            recent_puts_per_second = truncate_log_float(recent_puts_per_second),
-            average_puts_per_second = truncate_log_float(average_puts_per_second),
-            logical_mib_per_second = truncate_log_float(
-                recent_puts_per_second * logical_bytes_per_record / (1024.0 * 1024.0)
-            ),
-            physical_upload_mib_per_second = truncate_log_float(physical_upload_mib_per_second),
-            l0_flush_mib_per_second = truncate_log_float(l0_flush_mib_per_second),
-            backpressure_percent = truncate_log_float(backpressure_percent),
-            elapsed_seconds = truncate_log_float(elapsed.as_secs_f64()),
-            eta_seconds = truncate_log_float(eta_seconds),
-            "golden dataset preparation progress"
-        );
-        self.last_reported_at = now;
-        self.last_reported_records = records_completed;
-        self.last_reported_backpressure_ns = backpressure_ns;
-        self.last_reported_physical_upload_bytes = physical_upload_bytes;
-        self.last_reported_l0_flush_bytes = l0_flush_bytes;
-    }
-
-    fn finish(
-        &self,
-        suite: &str,
-        records_completed: u64,
-        total_records: u64,
-        backpressure_ns: u64,
-        logical_bytes_per_record: f64,
-    ) {
-        let elapsed = self.started_at.elapsed();
-        let average_puts_per_second =
-            records_completed as f64 / elapsed.as_secs_f64().max(f64::EPSILON);
-        let physical_upload_bytes = self.metrics.store.snapshot().bytes_written;
-        let l0_flush_bytes = super::counter_value(
-            &self.metrics.slate.snapshot(),
-            slatedb::db_stats::L0_FLUSH_BYTES,
-        );
-        tracing::info!(
-            suite,
-            records_completed,
-            successful_records = records_completed,
-            total_records,
-            errors = 0_u64,
-            progress_percent = truncate_log_float(100.0),
-            average_puts_per_second = truncate_log_float(average_puts_per_second),
-            logical_mib_per_second = truncate_log_float(
-                average_puts_per_second * logical_bytes_per_record / (1024.0 * 1024.0)
-            ),
-            average_physical_upload_mib_per_second = truncate_log_float(bytes_per_second_as_mib(
-                physical_upload_bytes.saturating_sub(self.initial_physical_upload_bytes),
-                elapsed,
-            )),
-            average_l0_flush_mib_per_second = truncate_log_float(bytes_per_second_as_mib(
-                l0_flush_bytes.saturating_sub(self.initial_l0_flush_bytes),
-                elapsed,
-            )),
-            backpressure_percent = truncate_log_float(
-                (backpressure_ns as f64 / 1e9 / elapsed.as_secs_f64().max(f64::EPSILON) * 100.0)
-                    .min(100.0)
-            ),
-            elapsed_seconds = truncate_log_float(elapsed.as_secs_f64()),
-            "golden dataset preparation complete"
-        );
-    }
-}
-
-fn bytes_per_second_as_mib(bytes: u64, elapsed: Duration) -> f64 {
-    bytes as f64 / elapsed.as_secs_f64().max(f64::EPSILON) / (1024.0 * 1024.0)
-}
-
-fn spawn_dataset_batch_producer(
-    suite: &str,
-    record_count: u64,
-    key_bytes: usize,
-    value_bytes: usize,
-    value_compression_ratio: f64,
-    prefix_layout: bool,
-) -> (
-    mpsc::Receiver<DatasetBatch>,
-    tokio::task::JoinHandle<Result<()>>,
-) {
-    let (sender, receiver) = mpsc::channel(DATASET_BATCH_PIPELINE_DEPTH);
-    let suite = suite.to_string();
-    let producer = tokio::task::spawn_blocking(move || -> Result<()> {
-        let mut rng = StdRng::from_os_rng();
-        let mut values = ValueGenerator::new(value_compression_ratio);
-        let put_options = PutOptions::default();
-        let mut start = 0_u64;
-        while start < record_count {
-            let end = start
-                .saturating_add(DATASET_BATCH_RECORDS)
-                .min(record_count);
-            let mut batch = WriteBatch::new();
-            for id in start..end {
-                let key = if prefix_layout {
-                    prefix_key(id / 10, id % 10)
-                } else {
-                    key_for_suite(&suite, id, key_bytes)
-                };
-                batch.put_bytes_with_options(
-                    key,
-                    values.generate(value_bytes, &mut rng),
-                    &put_options,
-                );
-            }
-            if sender
-                .blocking_send(DatasetBatch { start, end, batch })
-                .is_err()
-            {
-                return Ok(());
-            }
-            start = end;
-        }
-        Ok(())
-    });
-    (receiver, producer)
-}
-
-pub(crate) async fn populate_dataset(
+pub async fn populate_dataset(
     db: Arc<Db>,
-    spec: DatasetLoadSpec,
+    config: &ResolvedConfig,
     metrics: DatasetLoadMetrics,
 ) -> Result<()> {
-    const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
-    let suite = spec.suite;
+    const HEARTBEAT: Duration = Duration::from_secs(30);
+    let record_count = config.dataset.record_count;
+    let producer_count = std::thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(2)
+        .clamp(2, 8);
+    let (mut batch_receivers, producers) = spawn_dataset_producers(config, producer_count);
     let options = WriteOptions {
         await_durable: false,
         ..Default::default()
     };
-    let mut progress = DatasetLoadProgress::new(metrics);
+    let started = Instant::now();
+    let mut last_report = started;
+    let mut last_records = 0_u64;
+    let mut last_upload = put_bytes(&metrics.store.snapshot());
+    let mut last_l0 = counter_value(&metrics.slate.snapshot(), slatedb::db_stats::L0_FLUSH_BYTES);
+    let mut loaded = 0_u64;
     let mut backpressure_ns = 0_u64;
-    let logical_bytes_per_record = spec.key_bytes.saturating_add(spec.value_bytes) as f64;
-    let mut heartbeat = tokio::time::interval(HEARTBEAT_INTERVAL);
+    let mut last_backpressure_ns = 0_u64;
+    let mut heartbeat = tokio::time::interval(HEARTBEAT);
     heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     heartbeat.tick().await;
     tracing::info!(
-        suite = suite.as_str(),
-        prepared_batch_queue_depth = DATASET_BATCH_PIPELINE_DEPTH,
+        producer_count,
+        queue_depth = DATASET_BATCH_QUEUE_DEPTH,
         records_per_batch = DATASET_BATCH_RECORDS,
-        "starting pipelined golden dataset load"
-    );
-    let (mut batches, producer) = spawn_dataset_batch_producer(
-        &suite,
-        spec.record_count,
-        spec.key_bytes,
-        spec.value_bytes,
-        spec.value_compression_ratio,
-        spec.prefix_layout,
+        "starting bulk load"
     );
 
-    let mut loaded_records = 0_u64;
-    while let Some(dataset_batch) = batches.recv().await {
+    while loaded < record_count {
+        let producer = usize::try_from(loaded / DATASET_BATCH_RECORDS)
+            .context("dataset batch index exceeds the platform limit")?
+            % producer_count;
+        let batch = batch_receivers[producer]
+            .recv()
+            .await
+            .context("dataset producer stopped before completing the load")??;
+        anyhow::ensure!(
+            batch.start == loaded,
+            "dataset producer returned a batch out of order"
+        );
         let mut write = Box::pin(measure_backpressure(
-            db.write_with_options(dataset_batch.batch, &options),
+            db.write_with_options(batch.batch, &options),
         ));
         let (result, backpressure) = loop {
             tokio::select! {
                 result = &mut write => break result,
                 _ = heartbeat.tick() => {
-                    progress.report(
-                        &suite,
-                        "insert",
-                        loaded_records,
-                        spec.record_count,
+                    report_load_progress(
+                        loaded,
+                        record_count,
                         backpressure_ns,
-                        logical_bytes_per_record,
+                        config,
+                        &metrics,
+                        started,
+                        &mut last_report,
+                        &mut last_records,
+                        &mut last_upload,
+                        &mut last_l0,
+                        &mut last_backpressure_ns,
                     );
                 }
             }
         };
-        result.with_context(|| {
-            format!(
-                "loading records {}..{}",
-                dataset_batch.start, dataset_batch.end
-            )
-        })?;
+        result.with_context(|| format!("loading records {}..{}", batch.start, batch.end))?;
         backpressure_ns = backpressure_ns.saturating_add(duration_ns(backpressure));
-        loaded_records = dataset_batch.end;
+        loaded = batch.end;
     }
-    producer
-        .await
-        .context("joining golden dataset batch producer")??;
-
+    for producer in producers {
+        producer.await.context("joining dataset producer")??;
+    }
     let mut flush = Box::pin(db.flush());
     loop {
         tokio::select! {
             result = &mut flush => {
-                result.context("flushing loaded dataset")?;
+                result.context("flushing bulk-loaded dataset")?;
                 break;
             }
             _ = heartbeat.tick() => {
-                progress.report(
-                    &suite,
-                    "flush",
-                    loaded_records,
-                    spec.record_count,
+                report_load_progress(
+                    loaded,
+                    record_count,
                     backpressure_ns,
-                    logical_bytes_per_record,
+                    config,
+                    &metrics,
+                    started,
+                    &mut last_report,
+                    &mut last_records,
+                    &mut last_upload,
+                    &mut last_l0,
+                    &mut last_backpressure_ns,
                 );
             }
         }
     }
-    progress.finish(
-        &suite,
-        loaded_records,
-        spec.record_count,
+    report_load_progress(
+        loaded,
+        record_count,
         backpressure_ns,
-        logical_bytes_per_record,
+        config,
+        &metrics,
+        started,
+        &mut last_report,
+        &mut last_records,
+        &mut last_upload,
+        &mut last_l0,
+        &mut last_backpressure_ns,
+    );
+    tracing::info!(
+        elapsed_seconds = truncate(started.elapsed().as_secs_f64()),
+        "bulk load complete"
     );
     Ok(())
 }
 
+type DatasetProducer = tokio::task::JoinHandle<Result<()>>;
+
+fn spawn_dataset_producers(
+    config: &ResolvedConfig,
+    producer_count: usize,
+) -> (
+    Vec<mpsc::Receiver<Result<DatasetBatch>>>,
+    Vec<DatasetProducer>,
+) {
+    let queue_per_producer = (DATASET_BATCH_QUEUE_DEPTH / producer_count).max(1);
+    let mut receivers = Vec::with_capacity(producer_count);
+    let mut producers = Vec::new();
+    for producer in 0..producer_count {
+        let (sender, receiver) = mpsc::channel(queue_per_producer);
+        receivers.push(receiver);
+        let record_count = config.dataset.record_count;
+        let key_bytes = config.dataset.key_bytes;
+        let value_bytes = config.dataset.value_bytes;
+        producers.push(tokio::task::spawn_blocking(move || -> Result<()> {
+            let mut rng = StdRng::from_os_rng();
+            let mut values = ValueGenerator::new();
+            let stride = DATASET_BATCH_RECORDS.saturating_mul(producer_count as u64);
+            let mut start = DATASET_BATCH_RECORDS.saturating_mul(producer as u64);
+            while start < record_count {
+                let end = start
+                    .saturating_add(DATASET_BATCH_RECORDS)
+                    .min(record_count);
+                let mut batch = WriteBatch::new();
+                for id in start..end {
+                    batch.put_bytes_with_options(
+                        key_for_id(id, key_bytes),
+                        values.generate(value_bytes, &mut rng),
+                        &PutOptions::default(),
+                    );
+                }
+                if sender
+                    .blocking_send(Ok(DatasetBatch { start, end, batch }))
+                    .is_err()
+                {
+                    break;
+                }
+                start = start.saturating_add(stride);
+            }
+            Ok(())
+        }));
+    }
+    (receivers, producers)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn report_load_progress(
+    completed: u64,
+    total: u64,
+    backpressure_ns: u64,
+    config: &ResolvedConfig,
+    metrics: &DatasetLoadMetrics,
+    started: Instant,
+    last_report: &mut Instant,
+    last_records: &mut u64,
+    last_upload: &mut u64,
+    last_l0: &mut u64,
+    last_backpressure_ns: &mut u64,
+) {
+    let now = Instant::now();
+    let interval = now.saturating_duration_since(*last_report);
+    let recent_records = completed.saturating_sub(*last_records);
+    let recent_rate = recent_records as f64 / interval.as_secs_f64().max(f64::EPSILON);
+    let upload = put_bytes(&metrics.store.snapshot());
+    let l0 = counter_value(&metrics.slate.snapshot(), slatedb::db_stats::L0_FLUSH_BYTES);
+    let logical_bytes = config
+        .dataset
+        .key_bytes
+        .saturating_add(config.dataset.value_bytes) as f64;
+    tracing::info!(
+        records_completed = completed,
+        successful_records = completed,
+        total_records = total,
+        errors = 0_u64,
+        progress_percent = truncate(completed as f64 / total.max(1) as f64 * 100.0),
+        recent_puts_per_second = truncate(recent_rate),
+        average_puts_per_second = truncate(
+            completed as f64
+                / now
+                    .saturating_duration_since(started)
+                    .as_secs_f64()
+                    .max(f64::EPSILON)
+        ),
+        logical_mib_per_second = truncate(recent_rate * logical_bytes / (1024.0 * 1024.0)),
+        physical_upload_mib_per_second = truncate(
+            upload.saturating_sub(*last_upload) as f64
+                / interval.as_secs_f64().max(f64::EPSILON)
+                / (1024.0 * 1024.0)
+        ),
+        l0_flush_mib_per_second = truncate(
+            l0.saturating_sub(*last_l0) as f64
+                / interval.as_secs_f64().max(f64::EPSILON)
+                / (1024.0 * 1024.0)
+        ),
+        backpressure_percent = truncate(
+            backpressure_ns.saturating_sub(*last_backpressure_ns) as f64
+                / 1e9
+                / interval.as_secs_f64().max(f64::EPSILON)
+                * 100.0
+        ),
+        eta_seconds =
+            truncate(total.saturating_sub(completed) as f64 / recent_rate.max(f64::EPSILON)),
+        "bulk-load progress"
+    );
+    *last_report = now;
+    *last_records = completed;
+    *last_upload = upload;
+    *last_l0 = l0;
+    *last_backpressure_ns = backpressure_ns;
+}
+
+fn put_bytes(snapshot: &crate::instrumented_store::StoreSnapshot) -> u64 {
+    snapshot.request_bytes.get("PUT").copied().unwrap_or(0)
+}
+
+fn truncate(value: f64) -> f64 {
+    (value * 100.0).trunc() / 100.0
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{
-        bytes_per_second_as_mib, capped_writer, key_for_suite, point_payload_bytes,
-        populate_dataset, run_bulk_load, truncate_log_float, ClosedLoopState, DatasetLoadMetrics,
-        DatasetLoadSpec, DATASET_BATCH_PIPELINE_DEPTH, DATASET_BATCH_RECORDS,
-    };
-    use crate::config::BenchmarkConfig;
-    use crate::instrumented_store::InstrumentedStore;
-    use crate::system::BenchmarkMetricsRecorder;
-    use anyhow::Result;
-    use object_store::memory::InMemory;
-    use slatedb::config::Settings;
-    use slatedb::Db;
-    use std::path::Path;
-    use std::sync::Arc;
-    use std::time::{Duration, Instant};
+    use super::truncate;
 
     #[test]
-    fn progress_log_floats_are_truncated_to_two_decimal_places() {
-        assert_eq!(truncate_log_float(1.3359786666666666), 1.33);
-        assert_eq!(truncate_log_float(121_718.11765259692), 121_718.11);
-        assert_eq!(truncate_log_float(-1.0), -1.0);
-    }
-
-    #[test]
-    fn rocksdb_point_payload_includes_keys_without_changing_ycsb_payload() -> Result<()> {
-        let benchmark = BenchmarkConfig::load_from(Path::new("config"))?;
-        let rocksdb = benchmark
-            .select(Some("rocksdb"), Some("random-read"), None)?
-            .into_iter()
-            .next()
-            .expect("RocksDB random-read variant");
-        let ycsb = benchmark
-            .select(Some("ycsb"), Some("ycsb-c"), None)?
-            .into_iter()
-            .next()
-            .expect("YCSB C variant");
-
-        assert_eq!(point_payload_bytes(&rocksdb, 20, 400), 420);
-        assert_eq!(point_payload_bytes(&ycsb, 16, 1024), 1024);
-        Ok(())
-    }
-
-    #[test]
-    fn insert_frontier_advances_after_out_of_order_completions() {
-        let state = ClosedLoopState::new(10);
-        let first = state.allocate_insert();
-        let second = state.allocate_insert();
-        let third = state.allocate_insert();
-
-        assert_eq!((first, second, third), (10, 11, 12));
-        state.acknowledge_insert(second);
-        assert_eq!(state.acknowledged_insert(), 10);
-        state.acknowledge_insert(first);
-        assert_eq!(state.acknowledged_insert(), 12);
-        state.acknowledge_insert(third);
-        assert_eq!(state.acknowledged_insert(), 13);
-    }
-
-    #[tokio::test]
-    async fn bulk_load_batches_writes_but_counts_records() -> Result<()> {
-        let benchmark = BenchmarkConfig::load_from(Path::new("config"))?;
-        let mut variant = benchmark
-            .select(Some("rocksdb"), Some("bulk-load"), None)?
-            .pop()
-            .expect("configured bulk-load variant");
-        variant.workload.record_count = Some(2_050);
-        let db = Arc::new(
-            Db::builder("bulk-load-batch-test", Arc::new(InMemory::new()))
-                .build()
-                .await?,
-        );
-
-        let stats = run_bulk_load(Arc::clone(&db), &variant, None, None).await?;
-
-        assert_eq!(stats.total, 2_050);
-        assert_eq!(stats.successful, 2_050);
-        assert_eq!(stats.errors, 0);
-        assert_eq!(stats.writes, 3);
-        assert_eq!(stats.write_payload_bytes, 2_050 * 420);
-        assert_eq!(
-            stats
-                .histograms
-                .get("return/insert")
-                .expect("insert return histogram")
-                .len(),
-            2_050
-        );
-        assert_eq!(
-            stats
-                .histograms
-                .get("api/write")
-                .expect("write API histogram")
-                .len(),
-            3
-        );
-        db.close().await?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn populate_dataset_writes_across_batch_boundaries() -> Result<()> {
-        let record_count = DATASET_BATCH_RECORDS
-            * u64::try_from(DATASET_BATCH_PIPELINE_DEPTH + 1).expect("pipeline depth fits u64")
-            + 1;
-        let store = Arc::new(InstrumentedStore::new(Arc::new(InMemory::new())));
-        let recorder = Arc::new(BenchmarkMetricsRecorder::new());
-        let db = Arc::new(
-            Db::builder("populate-dataset-batch-test", store.clone())
-                .with_metrics_recorder(recorder.clone())
-                .build()
-                .await?,
-        );
-
-        populate_dataset(
-            Arc::clone(&db),
-            DatasetLoadSpec::new("ycsb", record_count, 16, 64, 1.0, false),
-            DatasetLoadMetrics::new(store.metrics(), recorder),
-        )
-        .await?;
-
-        for id in [
-            0,
-            DATASET_BATCH_RECORDS - 1,
-            DATASET_BATCH_RECORDS,
-            record_count - 1,
-        ] {
-            let value = db
-                .get(key_for_suite("ycsb", id, 16))
-                .await?
-                .expect("populated record");
-            assert_eq!(value.len(), 64);
-        }
-        db.close().await?;
-        Ok(())
-    }
-
-    #[test]
-    fn byte_rate_uses_binary_mebibytes() {
-        assert_eq!(
-            bytes_per_second_as_mib(2 * 1024 * 1024, Duration::from_secs(2)),
-            1.0
-        );
-    }
-
-    #[tokio::test]
-    async fn capped_writer_pipelines_durable_writes() -> Result<()> {
-        let benchmark = BenchmarkConfig::load_from(Path::new("config"))?;
-        let variant = benchmark
-            .select(Some("rocksdb"), Some("read-while-writing"), None)?
-            .pop()
-            .expect("configured while-writing variant");
-        let settings = Settings {
-            flush_interval: Some(Duration::from_millis(100)),
-            compactor_options: None,
-            ..Default::default()
-        };
-        let db = Arc::new(
-            Db::builder("capped-writer-test", Arc::new(InMemory::new()))
-                .with_settings(settings)
-                .build()
-                .await?,
-        );
-
-        let started = Instant::now();
-        let stats = capped_writer(
-            Arc::clone(&db),
-            variant,
-            started + Duration::from_millis(350),
-            None,
-            None,
-        )
-        .await?;
-        let elapsed = started.elapsed();
-
-        let writer_operations = stats
-            .histograms
-            .get("return/writer-update")
-            .expect("writer return histogram")
-            .len();
-        assert!(
-            writer_operations > 100,
-            "expected pipelined writes, got {writer_operations}"
-        );
-        assert_eq!(stats.successful, 0);
-        assert_eq!(stats.errors, 0);
-        assert_eq!(
-            stats.background_writer_target_bytes_per_second,
-            Some(2 * 1024 * 1024)
-        );
-        assert_eq!(
-            stats.background_writer_logical_bytes,
-            writer_operations * 420
-        );
-        let achieved = stats
-            .application(elapsed)
-            .background_writer_achieved_mib_per_second
-            .expect("achieved writer throughput");
-        assert!(
-            (1.0..=2.05).contains(&achieved),
-            "expected writer close to its 2 MiB/s cap, got {achieved} MiB/s"
-        );
-        db.close().await?;
-        Ok(())
+    fn progress_values_have_two_decimal_places() {
+        assert_eq!(truncate(1.3359), 1.33);
+        assert_eq!(truncate(121_718.117), 121_718.11);
     }
 }

@@ -1,158 +1,491 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://benchmark.slatedb.io/schema/result.json",
-  "title": "SlateDB benchmark result",
-  "type": "object",
-  "additionalProperties": false,
-  "required": ["identity", "elapsed_ns", "environment", "configuration", "application", "durability", "resources", "storage", "initial_state", "source_files"],
-  "properties": {
-    "identity": { "$ref": "#/$defs/identity" },
-    "elapsed_ns": { "type": "integer", "minimum": 0 },
-    "environment": { "$ref": "#/$defs/environment" },
-    "configuration": { "$ref": "#/$defs/configuration" },
-    "application": { "$ref": "#/$defs/application" },
-    "durability": { "$ref": "#/$defs/durability" },
-    "resources": { "$ref": "#/$defs/resources" },
-    "storage": { "$ref": "#/$defs/storage" },
-    "initial_state": { "$ref": "#/$defs/initialState" },
-    "source_files": { "$ref": "#/$defs/sourceFiles" }
-  },
+  "title": "SlateDB benchmark task result",
+  "oneOf": [
+    { "$ref": "#/$defs/preparationResult" },
+    { "$ref": "#/$defs/workloadResult" }
+  ],
   "$defs": {
-    "nullableNumber": { "type": ["number", "null"] },
-    "nullableInteger": { "type": ["integer", "null"], "minimum": 0 },
-    "objectStoreMetrics": {
-      "type": "object", "additionalProperties": false,
-      "required": ["operations", "requests", "successful_requests", "request_errors", "client_errors", "server_errors", "transport_errors", "errors", "bytes_read", "bytes_written", "operation_bytes_read", "operation_bytes_written"],
+    "task": {
+      "enum": [
+        "bulk-load",
+        "full-compaction",
+        "idle",
+        "point-read-uniform",
+        "point-read-skewed",
+        "point-read-missing",
+        "read-heavy",
+        "balanced",
+        "update-heavy",
+        "range-scan",
+        "sustained-ingest",
+        "transaction-contention"
+      ]
+    },
+    "workload": {
+      "enum": [
+        "idle",
+        "point-read-uniform",
+        "point-read-skewed",
+        "point-read-missing",
+        "read-heavy",
+        "balanced",
+        "update-heavy",
+        "range-scan",
+        "sustained-ingest",
+        "transaction-contention"
+      ]
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "slate_version",
+        "slate_commit",
+        "runner_version",
+        "runner_commit",
+        "lockfile_sha256"
+      ],
       "properties": {
-        "operations": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
-        "requests": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
-        "successful_requests": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
-        "request_errors": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
-        "client_errors": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
-        "server_errors": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
-        "transport_errors": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } },
-        "errors": { "type": "integer", "minimum": 0 },
-        "bytes_read": { "type": "integer", "minimum": 0 }, "bytes_written": { "type": "integer", "minimum": 0 },
-        "operation_bytes_read": { "type": "integer", "minimum": 0 }, "operation_bytes_written": { "type": "integer", "minimum": 0 }
+        "slate_version": { "type": "string", "minLength": 1 },
+        "slate_commit": { "type": "string", "minLength": 1 },
+        "runner_version": { "type": "string", "minLength": 1 },
+        "runner_commit": { "type": "string", "minLength": 1 },
+        "lockfile_sha256": { "type": "string", "minLength": 1 }
       }
     },
-    "latency": {
-      "type": "object", "additionalProperties": false,
-      "required": ["count", "p50_ns", "p95_ns", "p99_ns", "p999_ns", "max_ns"],
+    "datasetConfiguration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "record_count",
+        "key_bytes",
+        "value_bytes",
+        "value_compression_ratio"
+      ],
       "properties": {
-        "count": { "type": "integer", "minimum": 0 }, "p50_ns": { "type": "integer", "minimum": 0 },
-        "p95_ns": { "type": "integer", "minimum": 0 }, "p99_ns": { "type": "integer", "minimum": 0 },
-        "p999_ns": { "type": "integer", "minimum": 0 }, "max_ns": { "type": "integer", "minimum": 0 }
+        "record_count": { "type": "integer", "minimum": 1 },
+        "key_bytes": { "type": "integer", "minimum": 1 },
+        "value_bytes": { "type": "integer", "minimum": 1 },
+        "value_compression_ratio": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1
+        }
       }
     },
-    "identity": {
-      "type": "object", "additionalProperties": false,
-      "required": ["slate_version", "slate_commit", "runner_version", "runner_commit", "lockfile_sha256", "timestamp", "suite", "workload", "variant", "mode"],
+    "cacheConfiguration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["block_bytes", "metadata_bytes", "object_store_bytes"],
       "properties": {
-        "slate_version": { "type": "string" }, "slate_commit": { "type": "string" }, "runner_version": { "type": "string" },
-        "runner_commit": { "type": "string" }, "lockfile_sha256": { "type": "string" }, "timestamp": { "type": "string", "format": "date-time" },
-        "suite": { "type": "string", "minLength": 1 }, "workload": { "type": "string" }, "variant": { "type": "string" },
-        "mode": { "enum": ["published", "smoke"] }
+        "block_bytes": { "type": "integer", "minimum": 1 },
+        "metadata_bytes": { "type": "integer", "minimum": 1 },
+        "object_store_bytes": { "type": "integer", "minimum": 1 }
       }
     },
-    "environment": {
-      "type": "object", "additionalProperties": false,
-      "required": ["runner_type", "hostname", "cpu_model", "cpu_cores", "ram_bytes", "local_disk", "os", "kernel", "object_store", "endpoint", "region"],
+    "taskConfiguration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task",
+        "clients",
+        "warmup_ms",
+        "measurement_ms",
+        "initial_state",
+        "key_selection",
+        "operation_mix",
+        "scan_limit",
+        "transaction_hot_keys",
+        "transaction_reads",
+        "transaction_updates"
+      ],
       "properties": {
-        "runner_type": { "type": "string" }, "hostname": { "type": "string" }, "cpu_model": { "type": "string" },
-        "cpu_cores": { "type": "integer", "minimum": 1 }, "ram_bytes": { "type": "integer", "minimum": 1 }, "local_disk": { "type": "string" },
-        "os": { "type": "string" }, "kernel": { "type": "string" }, "object_store": { "type": "string" },
-        "endpoint": { "type": "string" }, "region": { "type": "string" }
+        "task": { "$ref": "#/$defs/task" },
+        "clients": { "type": "integer", "minimum": 0 },
+        "warmup_ms": { "type": "integer", "minimum": 0 },
+        "measurement_ms": { "type": "integer", "minimum": 0 },
+        "initial_state": { "type": "string", "minLength": 1 },
+        "key_selection": { "type": "string", "minLength": 1 },
+        "operation_mix": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          }
+        },
+        "scan_limit": { "type": ["integer", "null"], "minimum": 1 },
+        "transaction_hot_keys": {
+          "type": ["integer", "null"],
+          "minimum": 1
+        },
+        "transaction_reads": {
+          "type": ["integer", "null"],
+          "minimum": 1
+        },
+        "transaction_updates": {
+          "type": ["integer", "null"],
+          "minimum": 1
+        }
       }
     },
     "configuration": {
-      "type": "object", "additionalProperties": false,
-      "required": ["clients", "warmup_ns", "measurement_ns", "record_count", "key_bytes", "value_bytes", "value_compression_ratio", "block_cache_bytes", "metadata_cache_bytes", "object_store_cache_bytes", "sst_block_bytes", "slate_settings", "build_profile", "enabled_features"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scale",
+        "dataset",
+        "caches",
+        "task",
+        "slate_settings",
+        "build_profile",
+        "enabled_features"
+      ],
       "properties": {
         "scale": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
-        "clients": { "type": "integer", "minimum": 1 },
-        "warmup_ns": { "type": "integer", "minimum": 0 }, "measurement_ns": { "type": "integer", "minimum": 0 },
-        "record_count": { "type": "integer", "minimum": 0 }, "key_bytes": { "type": "integer", "minimum": 1 }, "value_bytes": { "type": "integer", "minimum": 1 },
-        "value_compression_ratio": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
-        "block_cache_bytes": { "$ref": "#/$defs/nullableInteger" }, "metadata_cache_bytes": { "$ref": "#/$defs/nullableInteger" },
-        "object_store_cache_bytes": { "$ref": "#/$defs/nullableInteger" },
-        "sst_block_bytes": { "$ref": "#/$defs/nullableInteger" }, "slate_settings": { "type": "object" },
-        "build_profile": { "type": "string" }, "enabled_features": { "type": "array", "items": { "type": "string" } }
+        "dataset": { "$ref": "#/$defs/datasetConfiguration" },
+        "caches": { "$ref": "#/$defs/cacheConfiguration" },
+        "task": { "$ref": "#/$defs/taskConfiguration" },
+        "slate_settings": { "type": "object" },
+        "build_profile": { "enum": ["debug", "release"] },
+        "enabled_features": {
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true
+        }
       }
     },
-    "application": {
-      "type": "object", "additionalProperties": false,
-      "required": ["total_operations", "successful_operations", "read_hits", "read_misses", "background_writer_target_mib_per_second", "background_writer_achieved_mib_per_second", "payload_mib_per_second", "errors", "return_latency", "return_latency_by_operation", "api_latency", "batch_latency", "key_throughput_per_second", "transaction_commits", "transaction_aborts", "transaction_conflicts", "transaction_commit_rate", "transaction_abort_rate", "transaction_conflict_rate"],
+    "checkpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "database_path",
+        "checkpoint_id",
+        "manifest_id",
+        "lsm_digest_sha256",
+        "live_sst_bytes"
+      ],
       "properties": {
-        "total_operations": { "type": "integer", "minimum": 0 }, "successful_operations": { "type": "integer", "minimum": 0 },
-        "read_hits": { "type": ["integer", "null"], "minimum": 0 }, "read_misses": { "type": ["integer", "null"], "minimum": 0 },
-        "background_writer_target_mib_per_second": { "$ref": "#/$defs/nullableNumber" },
-        "background_writer_achieved_mib_per_second": { "$ref": "#/$defs/nullableNumber" },
-        "payload_mib_per_second": { "type": "number", "minimum": 0 }, "errors": { "type": "integer", "minimum": 0 },
-        "return_latency": { "$ref": "#/$defs/latency" },
-        "return_latency_by_operation": { "type": "object", "additionalProperties": { "$ref": "#/$defs/latency" } },
-        "api_latency": { "type": "object", "additionalProperties": { "$ref": "#/$defs/latency" } },
-        "batch_latency": { "anyOf": [{ "$ref": "#/$defs/latency" }, { "type": "null" }] },
-        "key_throughput_per_second": { "$ref": "#/$defs/nullableNumber" },
-        "transaction_commits": { "$ref": "#/$defs/nullableInteger" }, "transaction_aborts": { "$ref": "#/$defs/nullableInteger" },
-        "transaction_conflicts": { "$ref": "#/$defs/nullableInteger" },
-        "transaction_commit_rate": { "$ref": "#/$defs/nullableNumber" },
-        "transaction_abort_rate": { "$ref": "#/$defs/nullableNumber" },
-        "transaction_conflict_rate": { "$ref": "#/$defs/nullableNumber" }
+        "database_path": { "type": "string", "minLength": 1 },
+        "checkpoint_id": { "type": "string", "minLength": 1 },
+        "manifest_id": { "type": "integer", "minimum": 0 },
+        "lsm_digest_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "live_sst_bytes": { "type": "integer", "minimum": 0 }
       }
     },
-    "durability": {
-      "type": "object", "additionalProperties": false,
-      "required": ["lag", "final_flush_drain_ns", "durable_ops_per_second", "last_measured_sequence", "final_durable_sequence"],
+    "datasetMetadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "record_count",
+        "key_bytes",
+        "value_bytes",
+        "logical_bytes",
+        "live_sst_bytes"
+      ],
       "properties": {
-        "lag": { "anyOf": [{ "$ref": "#/$defs/latency" }, { "type": "null" }] },
-        "final_flush_drain_ns": { "$ref": "#/$defs/nullableInteger" }, "durable_ops_per_second": { "$ref": "#/$defs/nullableNumber" },
-        "last_measured_sequence": { "$ref": "#/$defs/nullableInteger" }, "final_durable_sequence": { "$ref": "#/$defs/nullableInteger" }
+        "record_count": { "type": "integer", "minimum": 1 },
+        "key_bytes": { "type": "integer", "minimum": 1 },
+        "value_bytes": { "type": "integer", "minimum": 1 },
+        "logical_bytes": { "type": "integer", "minimum": 1 },
+        "live_sst_bytes": { "type": "integer", "minimum": 0 }
       }
     },
-    "resources": {
-      "type": "object", "additionalProperties": false,
-      "required": ["average_cpu_percent", "peak_cpu_percent", "peak_rss_bytes", "network_bytes_sent", "network_bytes_received", "disk_bytes_read", "disk_bytes_written", "disk_read_operations", "disk_write_operations"],
+    "preparationResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "task",
+        "golden_id",
+        "timestamp",
+        "source",
+        "configuration",
+        "source_checkpoint",
+        "checkpoint",
+        "dataset"
+      ],
       "properties": {
-        "average_cpu_percent": { "type": "number", "minimum": 0 }, "peak_cpu_percent": { "type": "number", "minimum": 0 },
-        "peak_rss_bytes": { "type": "integer", "minimum": 0 }, "network_bytes_sent": { "type": "integer", "minimum": 0 },
-        "network_bytes_received": { "type": "integer", "minimum": 0 }, "disk_bytes_read": { "type": "integer", "minimum": 0 },
-        "disk_bytes_written": { "type": "integer", "minimum": 0 }, "disk_read_operations": { "type": "integer", "minimum": 0 },
-        "disk_write_operations": { "type": "integer", "minimum": 0 }
-      }
-    },
-    "storage": {
-      "type": "object", "additionalProperties": false,
-      "required": ["database_size_bytes", "average_database_size_bytes", "object_store", "compaction_throughput_bytes_per_second", "write_amplification", "backpressure_ns", "compaction_backlog_bytes", "five_minute_windows"],
-      "properties": {
-        "database_size_bytes": { "type": "integer", "minimum": 0, "description": "Estimated compressed bytes of unique SSTs in the final live LSM." },
-        "average_database_size_bytes": { "type": "integer", "minimum": 0, "description": "Time-weighted average of the live LSM size during measurement." },
-        "object_store": { "$ref": "#/$defs/objectStoreMetrics" },
-        "compaction_throughput_bytes_per_second": { "$ref": "#/$defs/nullableNumber" }, "write_amplification": { "$ref": "#/$defs/nullableNumber" },
-        "backpressure_ns": { "type": "integer", "minimum": 0 }, "compaction_backlog_bytes": { "$ref": "#/$defs/nullableInteger" },
-        "five_minute_windows": { "type": "array", "items": { "$ref": "#/$defs/window" } }
-      }
-    },
-    "window": {
-      "type": "object", "additionalProperties": false,
-      "required": ["start_offset_ns", "operations", "ops_per_second", "compaction_backlog_bytes", "write_amplification"],
-      "properties": {
-        "start_offset_ns": { "type": "integer", "minimum": 0 }, "operations": { "type": "integer", "minimum": 0 },
-        "ops_per_second": { "type": "number", "minimum": 0 }, "compaction_backlog_bytes": { "$ref": "#/$defs/nullableInteger" },
-        "write_amplification": { "$ref": "#/$defs/nullableNumber" }
+        "status": { "const": "ok" },
+        "task": { "enum": ["bulk-load", "full-compaction"] },
+        "golden_id": { "type": "string", "minLength": 1 },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "source": { "$ref": "#/$defs/source" },
+        "configuration": { "$ref": "#/$defs/configuration" },
+        "source_checkpoint": {
+          "oneOf": [
+            { "$ref": "#/$defs/checkpoint" },
+            { "type": "null" }
+          ]
+        },
+        "checkpoint": { "$ref": "#/$defs/checkpoint" },
+        "dataset": { "$ref": "#/$defs/datasetMetadata" }
       }
     },
     "initialState": {
-      "type": "object", "additionalProperties": false,
-      "required": ["checkpoint_id", "manifest_id", "lsm_digest_sha256"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "checkpoint_id",
+        "manifest_id",
+        "lsm_digest_sha256"
+      ],
       "properties": {
-        "checkpoint_id": { "type": ["string", "null"] }, "manifest_id": { "$ref": "#/$defs/nullableInteger" }, "lsm_digest_sha256": { "type": "string" }
+        "kind": { "enum": ["golden", "empty"] },
+        "checkpoint_id": { "type": ["string", "null"] },
+        "manifest_id": { "type": ["integer", "null"], "minimum": 0 },
+        "lsm_digest_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
       }
     },
-    "sourceFiles": {
-      "type": "object", "additionalProperties": false,
-      "required": ["histograms", "timeseries"],
-      "properties": { "histograms": { "type": "string" }, "timeseries": { "type": "string" } }
+    "rateSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "total",
+        "avg_per_second",
+        "p50_per_second",
+        "p95_per_second",
+        "p99_per_second",
+        "p999_per_second",
+        "min_per_second",
+        "max_per_second"
+      ],
+      "properties": {
+        "total": { "type": "integer", "minimum": 0 },
+        "avg_per_second": { "type": "number", "minimum": 0 },
+        "p50_per_second": { "type": "number", "minimum": 0 },
+        "p95_per_second": { "type": "number", "minimum": 0 },
+        "p99_per_second": { "type": "number", "minimum": 0 },
+        "p999_per_second": { "type": "number", "minimum": 0 },
+        "min_per_second": { "type": "number", "minimum": 0 },
+        "max_per_second": { "type": "number", "minimum": 0 }
+      }
+    },
+    "throughputSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "total_bytes",
+        "avg_bytes_per_second",
+        "p50_bytes_per_second",
+        "p95_bytes_per_second",
+        "p99_bytes_per_second",
+        "p999_bytes_per_second",
+        "min_bytes_per_second",
+        "max_bytes_per_second"
+      ],
+      "properties": {
+        "total_bytes": { "type": "integer", "minimum": 1 },
+        "avg_bytes_per_second": { "type": "number", "minimum": 0 },
+        "p50_bytes_per_second": { "type": "number", "minimum": 0 },
+        "p95_bytes_per_second": { "type": "number", "minimum": 0 },
+        "p99_bytes_per_second": { "type": "number", "minimum": 0 },
+        "p999_bytes_per_second": { "type": "number", "minimum": 0 },
+        "min_bytes_per_second": { "type": "number", "minimum": 0 },
+        "max_bytes_per_second": { "type": "number", "minimum": 0 }
+      }
+    },
+    "latencySummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "count",
+        "avg_ns",
+        "p50_ns",
+        "p95_ns",
+        "p99_ns",
+        "p999_ns",
+        "min_ns",
+        "max_ns"
+      ],
+      "properties": {
+        "count": { "type": "integer", "minimum": 1 },
+        "avg_ns": { "type": "number", "minimum": 0 },
+        "p50_ns": { "type": "integer", "minimum": 0 },
+        "p95_ns": { "type": "integer", "minimum": 0 },
+        "p99_ns": { "type": "integer", "minimum": 0 },
+        "p999_ns": { "type": "integer", "minimum": 0 },
+        "min_ns": { "type": "integer", "minimum": 0 },
+        "max_ns": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "distributionSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["avg", "p50", "p95", "p99", "p999", "min", "max"],
+      "properties": {
+        "avg": { "type": "number", "minimum": 0 },
+        "p50": { "type": "number", "minimum": 0 },
+        "p95": { "type": "number", "minimum": 0 },
+        "p99": { "type": "number", "minimum": 0 },
+        "p999": { "type": "number", "minimum": 0 },
+        "min": { "type": "number", "minimum": 0 },
+        "max": { "type": "number", "minimum": 0 }
+      }
+    },
+    "applicationMetrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operations", "throughput", "latency"],
+      "properties": {
+        "operations": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/rateSummary" }
+        },
+        "throughput": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/throughputSummary" }
+        },
+        "latency": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/latencySummary" }
+        }
+      }
+    },
+    "objectStoreMetrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requests", "throughput"],
+      "properties": {
+        "requests": {
+          "type": "object",
+          "propertyNames": {
+            "enum": ["GET", "PUT", "HEAD", "DELETE", "POST", "OTHER"]
+          },
+          "additionalProperties": { "$ref": "#/$defs/rateSummary" }
+        },
+        "throughput": {
+          "type": "object",
+          "propertyNames": {
+            "enum": ["GET", "PUT", "HEAD", "DELETE", "POST", "OTHER"]
+          },
+          "additionalProperties": { "$ref": "#/$defs/throughputSummary" }
+        }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "runner_type",
+        "hostname",
+        "cpu_model",
+        "cpu_cores",
+        "ram_bytes",
+        "local_disk",
+        "os",
+        "kernel",
+        "object_store",
+        "endpoint",
+        "region"
+      ],
+      "properties": {
+        "runner_type": { "type": "string" },
+        "hostname": { "type": "string" },
+        "cpu_model": { "type": "string" },
+        "cpu_cores": { "type": "integer", "minimum": 1 },
+        "ram_bytes": { "type": "integer", "minimum": 1 },
+        "local_disk": { "type": "string" },
+        "os": { "type": "string" },
+        "kernel": { "type": "string" },
+        "object_store": { "type": "string" },
+        "endpoint": { "type": "string" },
+        "region": { "type": "string" }
+      }
+    },
+    "processStatistics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cpu_cores", "rss_bytes"],
+      "properties": {
+        "cpu_cores": { "$ref": "#/$defs/distributionSummary" },
+        "rss_bytes": { "$ref": "#/$defs/distributionSummary" }
+      }
+    },
+    "machineStatistics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cpu_percent",
+        "rss_bytes",
+        "network_receive_bytes_per_second",
+        "network_send_bytes_per_second",
+        "disk_read_bytes_per_second",
+        "disk_write_bytes_per_second",
+        "disk_read_operations_per_second",
+        "disk_write_operations_per_second"
+      ],
+      "properties": {
+        "cpu_percent": { "$ref": "#/$defs/distributionSummary" },
+        "rss_bytes": { "$ref": "#/$defs/distributionSummary" },
+        "network_receive_bytes_per_second": {
+          "$ref": "#/$defs/distributionSummary"
+        },
+        "network_send_bytes_per_second": {
+          "$ref": "#/$defs/distributionSummary"
+        },
+        "disk_read_bytes_per_second": {
+          "$ref": "#/$defs/distributionSummary"
+        },
+        "disk_write_bytes_per_second": {
+          "$ref": "#/$defs/distributionSummary"
+        },
+        "disk_read_operations_per_second": {
+          "$ref": "#/$defs/distributionSummary"
+        },
+        "disk_write_operations_per_second": {
+          "$ref": "#/$defs/distributionSummary"
+        }
+      }
+    },
+    "workloadResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "task",
+        "golden_id",
+        "session",
+        "timestamp",
+        "source",
+        "environment",
+        "configuration",
+        "initial_state",
+        "client_measurement_ns",
+        "durability_drain_ns",
+        "recorded_interval_ns",
+        "application",
+        "object_store",
+        "process",
+        "machine"
+      ],
+      "properties": {
+        "status": { "const": "ok" },
+        "task": { "$ref": "#/$defs/workload" },
+        "golden_id": { "type": "string", "minLength": 1 },
+        "session": { "type": "string", "minLength": 1 },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "source": { "$ref": "#/$defs/source" },
+        "environment": { "$ref": "#/$defs/environment" },
+        "configuration": { "$ref": "#/$defs/configuration" },
+        "initial_state": { "$ref": "#/$defs/initialState" },
+        "client_measurement_ns": { "type": "integer", "minimum": 0 },
+        "durability_drain_ns": { "type": "integer", "minimum": 0 },
+        "recorded_interval_ns": { "type": "integer", "minimum": 1 },
+        "application": { "$ref": "#/$defs/applicationMetrics" },
+        "object_store": { "$ref": "#/$defs/objectStoreMetrics" },
+        "process": { "$ref": "#/$defs/processStatistics" },
+        "machine": { "$ref": "#/$defs/machineStatistics" }
+      }
     }
   }
 }

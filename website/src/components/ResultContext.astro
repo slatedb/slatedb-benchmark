@@ -1,0 +1,70 @@
+---
+import { routeHref, type ResultRoute, type SourceIdentity } from '../lib/results';
+
+interface Props {
+  version: string;
+  kind: 'preparation' | 'workload';
+  name: string;
+  goldenId: string;
+  source: SourceIdentity;
+  timestamp: string;
+  routes: ResultRoute<unknown>[];
+}
+
+const { version, kind, name, goldenId, source, timestamp, routes } = Astro.props;
+const versions = [...new Set(routes.map((route) => route.version))];
+const versionRoutes = routes.filter((route) => route.version === version);
+const preparations = versionRoutes.filter((route) => route.kind === 'preparation');
+const workloads = versionRoutes.filter((route) => route.kind === 'workload');
+const rawResult = `/raw/${version}/${kind}/${name}/result.json`;
+---
+
+<aside class="result-context" aria-label="Benchmark context">
+  <div class="context-block">
+    <span class="context-label">Version</span>
+    <nav class="link-list" aria-label="SlateDB versions">
+      {versions.map((candidate) => {
+        const target = routes.find((route) => route.version === candidate && route.name === name)
+          ?? routes.find((route) => route.version === candidate && route.kind === kind)
+          ?? routes.find((route) => route.version === candidate);
+        return target && <a class:list={{ current: candidate === version }} href={routeHref(target)}>{candidate}</a>;
+      })}
+    </nav>
+  </div>
+
+  <div class="context-block">
+    <span class="context-label">Preparation</span>
+    <nav class="link-list" aria-label="Preparation results">
+      {preparations.map((route) => (
+        <a class:list={{ current: kind === 'preparation' && route.name === name }} href={routeHref(route)}>
+          {route.name}
+        </a>
+      ))}
+    </nav>
+  </div>
+
+  <div class="context-block">
+    <span class="context-label">Workloads</span>
+    <nav class="link-list" aria-label="Workload results">
+      {workloads.map((route) => (
+        <a class:list={{ current: kind === 'workload' && route.name === name }} href={routeHref(route)}>
+          {route.name}
+        </a>
+      ))}
+    </nav>
+  </div>
+
+  <dl class="metadata-list">
+    <div><dt>Golden data</dt><dd>{goldenId}</dd></div>
+    <div>
+      <dt>Recorded</dt>
+      <dd>{new Date(timestamp).toLocaleString('en-US', { timeZone: 'UTC', timeZoneName: 'short' })}</dd>
+    </div>
+  </dl>
+
+  <div class="context-links">
+    <a href={rawResult}>Raw result</a>
+    <a href={`https://github.com/slatedb/slatedb/commit/${source.slate_commit}`}>SlateDB source ↗</a>
+    <a href={`https://github.com/slatedb/slatedb-benchmark/commit/${source.runner_commit}`}>Runner source ↗</a>
+  </div>
+</aside>

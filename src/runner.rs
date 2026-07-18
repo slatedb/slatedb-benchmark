@@ -1,28 +1,23 @@
-mod session;
-
-use crate::cli::{RunArgs, WorkerArgs};
-use crate::config::{BenchmarkConfig, SuiteConfig, VariantConfig, WorkloadKind};
+use crate::cli::RunArgs;
+use crate::config::{self, ResolvedConfig, Task};
 use crate::database_size::live_database_size_bytes;
-use crate::instrumented_store::{StoreMetrics, StoreSnapshot};
 use crate::model::{
-    BenchmarkConfiguration, Environment, Identity, InitialState, ResultRecord, SourceFiles,
-    TimeseriesFile,
+    CheckpointReference, GoldenDatasetMetadata, InitialState, PreparationResult,
+    ResultConfiguration, SourceIdentity, WorkloadResult,
 };
 use crate::object_store::{delete_prefix, ObjectStoreContext};
 use crate::system::{
-    inspect_environment, sample_until_stopped, ApplicationWindowRegistry, BenchmarkMetricsRecorder,
-    SampledTimeseries,
+    duration_ns, inspect_environment, verify_environment, BenchmarkMetricsRecorder,
 };
-use crate::workloads::{
-    execute_variant, extend_with_compaction_phase, populate_dataset, prepare_bulk_load,
-    DatasetLoadMetrics, DatasetLoadSpec, WorkloadOutcome,
-};
+use crate::validation::{validate_preparation_result, validate_workload_result};
+use crate::workloads::{self, DatasetLoadMetrics};
 use anyhow::{bail, Context, Result};
 use bytes::Bytes;
 use chrono::Utc;
 use object_store::path::Path;
-use object_store::ObjectStore;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use object_store::{ObjectStore, ObjectStoreExt, PutMode, PutPayload};
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 use slatedb::admin::{Admin, AdminBuilder, CloneSourceSpec};
 use slatedb::compactor::{Compaction, CompactionSpec, CompactionStatus, SourceId};
@@ -31,691 +26,559 @@ use slatedb::db_cache::{
     foyer::{FoyerCache, FoyerCacheOptions},
     DbCache, SplitCache,
 };
-use slatedb::{Db, SstBlockSize, VersionedManifest};
-use slatedb_common::metrics::{Metrics, MetricsRecorder};
+use slatedb::{Db, VersionedManifest};
+use slatedb_common::metrics::MetricsRecorder;
 use std::fs;
-use std::path::{Path as FsPath, PathBuf};
+use std::path::Path as FsPath;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct DatabaseCheckpoint {
-    #[serde(
-        serialize_with = "serialize_object_store_path",
-        deserialize_with = "deserialize_object_store_path"
-    )]
-    path: Path,
-    checkpoint_id: Uuid,
-    manifest_id: u64,
-    lsm_digest_sha256: String,
-    size_bytes: u64,
-}
-
-fn serialize_object_store_path<S>(path: &Path, serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    serializer.serialize_str(path.as_ref())
-}
-
-fn deserialize_object_store_path<'de, D>(deserializer: D) -> Result<Path, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    Ok(Path::from(String::deserialize(deserializer)?))
-}
-
-struct ResultContext<'a> {
-    environment: &'a Environment,
-    args: &'a RunArgs,
-}
-
-struct BulkLoadExecution {
-    initial: InitialState,
-    outcome: Option<WorkloadOutcome>,
-}
-
-struct CompactionMeasurement {
-    started: Instant,
-    start_store: StoreSnapshot,
-    start_slate: Metrics,
-    stop_tx: tokio::sync::watch::Sender<bool>,
-    sampler: tokio::task::JoinHandle<Result<SampledTimeseries>>,
-    store_metrics: Arc<StoreMetrics>,
-    recorder: Arc<BenchmarkMetricsRecorder>,
-}
-
-struct CompletedCompactionMeasurement {
-    sampled: SampledTimeseries,
-    store_delta: StoreSnapshot,
-    start_slate: Metrics,
-    end_slate: Metrics,
-    elapsed: Duration,
-}
-
-impl CompactionMeasurement {
-    fn start(
-        store_metrics: Arc<StoreMetrics>,
-        recorder: Arc<BenchmarkMetricsRecorder>,
-        db: Arc<Db>,
-    ) -> Self {
-        let started = Instant::now();
-        let start_store = store_metrics.snapshot();
-        let start_slate = recorder.snapshot();
-        let windows = Arc::new(ApplicationWindowRegistry::default());
-        let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
-        let sampler = tokio::spawn(sample_until_stopped(
-            started,
-            windows,
-            Arc::clone(&store_metrics),
-            Arc::clone(&recorder),
-            db,
-            stop_rx,
-        ));
-        Self {
-            started,
-            start_store,
-            start_slate,
-            stop_tx,
-            sampler,
-            store_metrics,
-            recorder,
-        }
-    }
-
-    async fn finish(self) -> Result<CompletedCompactionMeasurement> {
-        let _ = self.stop_tx.send(true);
-        let sampled = self
-            .sampler
-            .await
-            .context("joining bulk compaction sampler")??;
-        Ok(CompletedCompactionMeasurement {
-            sampled,
-            store_delta: self.store_metrics.snapshot().difference(&self.start_store),
-            start_slate: self.start_slate,
-            end_slate: self.recorder.snapshot(),
-            elapsed: self.started.elapsed(),
-        })
-    }
-}
-
-impl CompletedCompactionMeasurement {
-    fn apply(self, outcome: &mut WorkloadOutcome) -> Result<()> {
-        extend_with_compaction_phase(
-            outcome,
-            self.sampled.samples,
-            self.store_delta,
-            &self.start_slate,
-            &self.end_slate,
-            self.elapsed,
-        )
-    }
-}
+const SETTINGS_PATH: &str = "config/settings.toml";
+const COMPACTION_QUIET: Duration = Duration::from_secs(15);
 
 pub async fn execute(args: RunArgs) -> Result<()> {
+    validate_name(&args.golden, "golden")?;
+    if args.task.is_preparation() {
+        if args.session.is_some() {
+            bail!("--session is only valid for workload tasks");
+        }
+    } else {
+        validate_name(
+            args.session
+                .as_deref()
+                .context("--session is required for workload tasks")?,
+            "session",
+        )?;
+    }
     fs::create_dir_all(&args.output)
         .with_context(|| format!("creating {}", args.output.display()))?;
-    let result = execute_inner(&args).await;
-    if result.is_err() {
-        tracing::error!("benchmark run failed; partial output remains for diagnosis");
+    remove_local_output(&args.output.join("result.json"))?;
+    remove_local_output(&args.output.join("failure.json"))?;
+    let config = config::load(args.task, args.scale, FsPath::new(SETTINGS_PATH))?;
+    let object_store = ObjectStoreContext::load()?;
+    let result = match args.task {
+        Task::BulkLoad => run_bulk_load(&args, &config, &object_store).await,
+        Task::FullCompaction => run_full_compaction(&args, &config, &object_store).await,
+        _ => run_workload(&args, &config, &object_store).await,
+    };
+    if let Err(error) = &result {
+        tracing::error!(task = %args.task, "benchmark task failed; partial data remains for diagnosis");
+        if let Err(diagnostic_error) =
+            write_failure_diagnostic(&args, &config, &object_store, error)
+        {
+            tracing::warn!(%diagnostic_error, "failed to write task diagnostic");
+        }
     }
     result
 }
 
-async fn execute_inner(args: &RunArgs) -> Result<()> {
-    let benchmark = BenchmarkConfig::load_scaled(&args.config_dir, args.scale)?;
-    let selected = benchmark.select(Some(&args.suite), args.workload.as_deref(), None)?;
-
-    let object_store = ObjectStoreContext::load()?;
-    let environment = inspect_environment(
-        &object_store.provider,
-        &object_store.endpoint,
-        &object_store.region,
-    );
-
-    session::execute(args, &benchmark, selected, &object_store, &environment).await
-}
-
-async fn execute_isolated_variant(
-    variant: &VariantConfig,
-    clone_path: Path,
-    golden: &DatabaseCheckpoint,
-    store: Arc<dyn ObjectStore>,
-    store_metrics: Arc<StoreMetrics>,
-    fresh_process: bool,
-    result_context: &ResultContext<'_>,
-) -> Result<String> {
-    clone_database(
-        Arc::clone(&store),
-        &clone_path,
-        &golden.path,
-        golden.checkpoint_id,
-    )
-    .await?;
-    let result = async {
-        let recorder = Arc::new(BenchmarkMetricsRecorder::new());
-        let db = open_database(
-            clone_path.clone(),
-            Arc::clone(&store),
-            &variant.suite,
-            &variant.slate_settings,
-            Arc::clone(&recorder),
-        )
-        .await?;
-        let clone_digest = lsm_digest(&db)?;
-        if clone_digest != golden.lsm_digest_sha256 {
-            bail!("clone {} does not match checkpoint LSM state", clone_path);
-        }
-        let initial = InitialState {
-            checkpoint_id: Some(golden.checkpoint_id.to_string()),
-            manifest_id: Some(golden.manifest_id),
-            lsm_digest_sha256: clone_digest,
-        };
-        let initial_database_bytes = live_database_size_bytes(&db.manifest());
-        db.close()
-            .await
-            .context("closing clone validation handle")?;
-        let mut outcome = if fresh_process {
-            execute_variant_in_fresh_process(
-                variant,
-                &clone_path,
-                &golden.lsm_digest_sha256,
-                result_context.args,
-            )
-            .await?
-        } else {
-            let object_store_cache = object_store_cache_directory(&variant.suite)?;
-            let recorder = Arc::new(BenchmarkMetricsRecorder::new());
-            let db = open_database_with_object_store_cache(
-                clone_path.clone(),
-                Arc::clone(&store),
-                &variant.suite,
-                &variant.slate_settings,
-                object_store_cache.as_ref().map(|cache| cache.path()),
-                Arc::clone(&recorder),
-            )
-            .await?;
-            let outcome = execute_variant(Arc::clone(&db), variant, store_metrics, recorder).await;
-            db.close().await.context("closing benchmark clone")?;
-            outcome?
-        };
-        let final_manifest = AdminBuilder::new(clone_path.clone(), Arc::clone(&store))
-            .build()
-            .read_manifest(None)
-            .await
-            .context("reading final isolated benchmark manifest")?
-            .context("final isolated benchmark manifest does not exist")?;
-        outcome.storage.database_size_bytes = live_database_size_bytes(&final_manifest);
-        write_variant_result(
-            variant,
-            outcome,
-            initial,
-            initial_database_bytes,
-            result_context,
-        )
-    }
-    .await;
-    let cleanup = delete_prefix(store, &clone_path).await;
-    match (result, cleanup) {
-        (Ok(path), Ok(())) => Ok(path),
-        (Err(error), _) => Err(error),
-        (Ok(_), Err(error)) => Err(error.context("cleaning up benchmark clone")),
+fn remove_local_output(path: &FsPath) -> Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| format!("removing stale {}", path.display())),
     }
 }
 
-pub async fn execute_worker(args: WorkerArgs) -> Result<()> {
-    let benchmark = BenchmarkConfig::load_scaled(&args.config_dir, args.scale)?;
-    let mut selected =
-        benchmark.select(Some(&args.suite), Some(&args.workload), Some(&args.variant))?;
-    let variant = selected
-        .pop()
-        .context("worker selection did not resolve to a variant")?;
-    let context = ObjectStoreContext::load()?;
-    let database_path = Path::from(args.database_path);
-    let store: Arc<dyn ObjectStore> = context.instrumented.clone();
-    let recorder = Arc::new(BenchmarkMetricsRecorder::new());
-    let db = open_database_with_object_store_cache(
-        database_path.clone(),
-        store,
-        &variant.suite,
-        &variant.slate_settings,
-        args.object_store_cache_root.as_deref(),
-        Arc::clone(&recorder),
-    )
-    .await?;
-    let digest = lsm_digest(&db)?;
-    if digest != args.expected_lsm_digest {
-        bail!("fresh worker opened an unexpected LSM state");
-    }
-    let outcome = execute_variant(
-        Arc::clone(&db),
-        &variant,
-        context.instrumented.metrics(),
-        recorder,
-    )
-    .await;
-    db.close()
-        .await
-        .context("closing fresh-process benchmark clone")?;
-    write_json(&args.output, &outcome?)
-}
-
-async fn execute_variant_in_fresh_process(
-    variant: &VariantConfig,
-    database_path: &Path,
-    expected_lsm_digest: &str,
+fn write_failure_diagnostic(
     args: &RunArgs,
-) -> Result<WorkloadOutcome> {
-    let object_store_cache = object_store_cache_directory(&variant.suite)?;
-    let output = args.output.join(format!(".worker-{}.json", Uuid::new_v4()));
-    let executable = std::env::current_exe().context("locating benchmark executable")?;
-    let mut command = tokio::process::Command::new(executable);
-    command
-        .arg("worker")
-        .arg("--suite")
-        .arg(&variant.suite.name)
-        .arg("--workload")
-        .arg(&variant.workload.name)
-        .arg("--variant")
-        .arg(&variant.variant)
-        .arg("--database-path")
-        .arg(database_path.to_string())
-        .arg("--expected-lsm-digest")
-        .arg(expected_lsm_digest)
-        .arg("--output")
-        .arg(&output)
-        .arg("--config-dir")
-        .arg(&args.config_dir)
-        .arg("--scale")
-        .arg(args.scale.to_string());
-    if let Some(cache) = &object_store_cache {
-        command.arg("--object-store-cache-root").arg(cache.path());
-    }
-    let status = command
-        .status()
-        .await
-        .context("running fresh benchmark worker")?;
-    if !status.success() {
-        bail!("fresh benchmark worker exited with {status}");
-    }
-    let bytes =
-        fs::read(&output).with_context(|| format!("reading worker result {}", output.display()))?;
-    let outcome: WorkloadOutcome = serde_json::from_slice(&bytes)
-        .with_context(|| format!("parsing worker result {}", output.display()))?;
-    fs::remove_file(&output)
-        .with_context(|| format!("removing worker result {}", output.display()))?;
-    Ok(outcome)
+    config: &ResolvedConfig,
+    context: &ObjectStoreContext,
+    error: &anyhow::Error,
+) -> Result<()> {
+    let diagnostic = serde_json::json!({
+        "status": "failed",
+        "task": args.task,
+        "golden_id": args.golden,
+        "session": args.session,
+        "timestamp": Utc::now().to_rfc3339(),
+        "source": SourceIdentity::current(),
+        "configuration": ResultConfiguration::from(config),
+        "error": format!("{error:#}"),
+        "object_store": context.instrumented.metrics().snapshot(),
+    });
+    let path = args.output.join("failure.json");
+    fs::write(&path, serde_json::to_vec_pretty(&diagnostic)?)
+        .with_context(|| format!("writing {}", path.display()))
 }
 
-fn golden_key(variant: &VariantConfig) -> Result<String> {
-    let prefix_layout = variant.workload.kind == WorkloadKind::PrefixScan;
-    let record_count = if variant.workload.kind == WorkloadKind::SustainedIngest {
-        0
-    } else {
-        variant.record_count()
-    };
-    Ok(format!(
-        "{}-{}-{}-{}-{}-compression-{:016x}-{}-{}",
-        variant.suite.name,
-        if prefix_layout { "prefix" } else { "records" },
-        record_count,
-        variant.key_bytes(),
-        variant.value_bytes(),
-        variant.value_compression_ratio().to_bits(),
-        variant.suite.sst_block_bytes.unwrap_or_default(),
-        settings_digest(&variant.slate_settings)?
-    ))
-}
-
-async fn prepare_golden_database(
-    variant: &VariantConfig,
-    path: Path,
-    store: Arc<dyn ObjectStore>,
-    store_metrics: Arc<StoreMetrics>,
-    control_store: Arc<dyn ObjectStore>,
-    key: &str,
-) -> Result<DatabaseCheckpoint> {
-    let prefix_layout = variant.workload.kind == WorkloadKind::PrefixScan;
-    let record_count = if variant.workload.kind == WorkloadKind::SustainedIngest {
-        0
-    } else {
-        variant.record_count()
-    };
-    tracing::info!(
-        dataset = key,
-        records = record_count,
-        "preparing golden database"
-    );
-    let load_settings = golden_load_settings(&variant.slate_settings);
+async fn run_bulk_load(
+    args: &RunArgs,
+    config: &ResolvedConfig,
+    context: &ObjectStoreContext,
+) -> Result<()> {
+    let config = bulk_load_config(config)?;
+    let task_root = golden_task_root(context, &args.golden, Task::BulkLoad);
+    let result_path = task_root.clone().join("result.json");
+    if let Some(existing) =
+        load_optional::<PreparationResult>(Arc::clone(&context.control), &result_path).await?
+    {
+        validate_preparation_result(&existing)?;
+        ensure_preparation_matches(&existing, args, &config)?;
+        verify_checkpoint_reference(Arc::clone(&context.control), &existing.checkpoint).await?;
+        validate_uncompacted_checkpoint(Arc::clone(&context.control), &existing.checkpoint).await?;
+        write_local_result(&args.output, &existing)?;
+        return print_success(args, true);
+    }
+    delete_prefix(Arc::clone(&context.control), &task_root).await?;
+    let database_path = task_root.clone().join("database");
+    let cache = object_store_cache_directory()?;
     let recorder = Arc::new(BenchmarkMetricsRecorder::new());
     let db = open_database(
-        path.clone(),
-        Arc::clone(&store),
-        &variant.suite,
-        &load_settings,
+        database_path.clone(),
+        context.instrumented.clone(),
+        &config,
+        &config.settings,
+        Some(cache.path()),
         Arc::clone(&recorder),
     )
     .await?;
-    let load_result = populate_dataset(
+    let load = workloads::populate_dataset(
         Arc::clone(&db),
-        DatasetLoadSpec::new(
-            &variant.suite.name,
-            record_count,
-            variant.key_bytes(),
-            variant.value_bytes(),
-            variant.value_compression_ratio(),
-            prefix_layout,
-        ),
-        DatasetLoadMetrics::new(store_metrics, Arc::clone(&recorder)),
+        &config,
+        DatasetLoadMetrics::new(context.instrumented.metrics(), recorder),
     )
     .await;
-    close_database_after(&db, load_result, "closing golden load database").await?;
-
-    let recorder = Arc::new(BenchmarkMetricsRecorder::new());
-    let compaction_db = open_database(
-        path.clone(),
-        Arc::clone(&store),
-        &variant.suite,
-        &variant.slate_settings,
-        Arc::clone(&recorder),
+    close_database_after(&db, load, "closing bulk-load database").await?;
+    let checkpoint = checkpoint_database(
+        database_path,
+        Arc::clone(&context.control),
+        &format!("benchmark-{}-bulk-load", args.golden),
     )
     .await?;
-    let compaction_result =
-        compact_database_fully(path.clone(), control_store, &variant.suite).await;
-    close_database_after(
-        &compaction_db,
-        compaction_result,
-        "closing golden compaction database",
-    )
-    .await?;
-
-    let admin = AdminBuilder::new(path.clone(), Arc::clone(&store)).build();
-    let checkpoint = admin
-        .create_detached_checkpoint(&CheckpointOptions {
-            lifetime: None,
-            source: None,
-            name: Some(format!("benchmark-{key}")),
-        })
-        .await
-        .context("creating golden checkpoint")?;
-    let checkpoint_manifest = admin
-        .read_manifest(Some(checkpoint.manifest_id))
-        .await
-        .context("reading golden checkpoint manifest")?
-        .context("golden checkpoint manifest does not exist")?;
-    Ok(DatabaseCheckpoint {
-        path: path.clone(),
-        checkpoint_id: checkpoint.id,
-        manifest_id: checkpoint.manifest_id,
-        lsm_digest_sha256: manifest_lsm_digest(&checkpoint_manifest)?,
-        size_bytes: live_database_size_bytes(&checkpoint_manifest),
-    })
-}
-
-async fn close_database_after<T>(
-    db: &Db,
-    operation: Result<T>,
-    close_context: &'static str,
-) -> Result<T> {
-    let close_result = db.close().await.context(close_context);
-    let value = operation?;
-    close_result?;
-    Ok(value)
-}
-
-async fn execute_bulk_load_and_compact(
-    bulk_variant: &VariantConfig,
-    compaction_settings: &Settings,
-    database_path: &Path,
-    store: Arc<dyn ObjectStore>,
-    control_store: Arc<dyn ObjectStore>,
-    store_metrics: Arc<StoreMetrics>,
-    measure_bulk_load: bool,
-) -> Result<BulkLoadExecution> {
-    let object_store_cache = object_store_cache_directory(&bulk_variant.suite)?;
-    let bulk_recorder = Arc::new(BenchmarkMetricsRecorder::new());
-    let bulk_db = open_database_with_object_store_cache(
-        database_path.clone(),
-        Arc::clone(&store),
-        &bulk_variant.suite,
-        &bulk_variant.slate_settings,
-        object_store_cache.as_ref().map(|cache| cache.path()),
-        Arc::clone(&bulk_recorder),
-    )
-    .await?;
-    let bulk_result = async {
-        let initial = InitialState {
-            checkpoint_id: None,
-            manifest_id: Some(bulk_db.status().current_manifest.id()),
-            lsm_digest_sha256: lsm_digest(&bulk_db)?,
-        };
-        let outcome = if measure_bulk_load {
-            Some(
-                execute_variant(
-                    Arc::clone(&bulk_db),
-                    bulk_variant,
-                    Arc::clone(&store_metrics),
-                    Arc::clone(&bulk_recorder),
-                )
-                .await?,
-            )
-        } else {
-            prepare_bulk_load(Arc::clone(&bulk_db), bulk_variant).await?;
-            bulk_db
-                .flush()
-                .await
-                .context("flushing bulk-load database")?;
-            None
-        };
-        Ok(BulkLoadExecution { initial, outcome })
-    }
-    .await;
-    let mut execution =
-        close_database_after(&bulk_db, bulk_result, "closing bulk-load database").await?;
-
-    let recorder = Arc::new(BenchmarkMetricsRecorder::new());
-    let compaction_db = open_database_with_object_store_cache(
-        database_path.clone(),
-        Arc::clone(&store),
-        &bulk_variant.suite,
-        compaction_settings,
-        object_store_cache.as_ref().map(|cache| cache.path()),
-        Arc::clone(&recorder),
-    )
-    .await?;
-    let measurement = execution.outcome.as_ref().map(|_| {
-        CompactionMeasurement::start(
-            Arc::clone(&store_metrics),
-            Arc::clone(&recorder),
-            Arc::clone(&compaction_db),
-        )
-    });
-    let compaction_result =
-        compact_database_fully(database_path.clone(), control_store, &bulk_variant.suite).await;
-    let measurement_result = match measurement {
-        Some(measurement) => measurement.finish().await.map(Some),
-        None => Ok(None),
+    validate_uncompacted_checkpoint(Arc::clone(&context.control), &checkpoint).await?;
+    let result = PreparationResult {
+        status: "ok".to_string(),
+        task: Task::BulkLoad,
+        golden_id: args.golden.clone(),
+        timestamp: Utc::now().to_rfc3339(),
+        source: SourceIdentity::current(),
+        configuration: ResultConfiguration::from(&config),
+        source_checkpoint: None,
+        dataset: dataset_metadata(&config, &checkpoint),
+        checkpoint,
     };
-    let completed_measurement = close_database_after(
-        &compaction_db,
-        compaction_result.and(measurement_result),
-        "closing post-bulk compaction database",
-    )
-    .await?;
-    if let (Some(outcome), Some(measurement)) = (execution.outcome.as_mut(), completed_measurement)
-    {
-        measurement.apply(outcome)?;
-    }
-    Ok(execution)
+    validate_preparation_result(&result)?;
+    write_local_result(&args.output, &result)?;
+    create_result(Arc::clone(&context.control), &result_path, &result).await?;
+    print_success(args, false)
 }
 
-fn bulk_load_settings(suite_settings: &Settings) -> Settings {
-    let mut settings = uncompacted_load_settings(suite_settings);
-    settings.l0_flush_parallelism = 16;
-    settings
-}
-
-fn golden_load_settings(suite_settings: &Settings) -> Settings {
-    const GOLDEN_L0_SST_SIZE_BYTES: usize = 256 * 1024 * 1024;
-    const GOLDEN_MAX_UNFLUSHED_BYTES: usize = 4 * 1024 * 1024 * 1024;
-
-    let mut settings = uncompacted_load_settings(suite_settings);
-    settings.l0_flush_parallelism = 16;
-    settings.l0_sst_size_bytes = GOLDEN_L0_SST_SIZE_BYTES;
-    settings.max_unflushed_bytes = GOLDEN_MAX_UNFLUSHED_BYTES;
-    settings
-}
-
-fn uncompacted_load_settings(suite_settings: &Settings) -> Settings {
-    let mut settings = suite_settings.clone();
-    settings.wal_enabled = false;
-    settings.compactor_options = None;
-    settings.l0_max_ssts = u32::MAX as usize;
-    settings.l0_max_ssts_per_key = u32::MAX as usize;
-    settings
-}
-
-async fn execute_rocks_variant(
-    variant: &VariantConfig,
-    database_path: &Path,
-    store: Arc<dyn ObjectStore>,
-    store_metrics: Arc<StoreMetrics>,
-    fresh_process: bool,
+async fn run_full_compaction(
     args: &RunArgs,
-) -> Result<(WorkloadOutcome, InitialState, u64)> {
-    let admin = AdminBuilder::new(database_path.clone(), Arc::clone(&store)).build();
-    let manifest = admin
-        .read_manifest(None)
-        .await
-        .context("reading RocksDB suite manifest")?
-        .context("RocksDB suite manifest does not exist")?;
-    let initial = InitialState {
-        checkpoint_id: None,
-        manifest_id: Some(manifest.id()),
-        lsm_digest_sha256: manifest_lsm_digest(&manifest)?,
-    };
-    let initial_database_bytes = live_database_size_bytes(&manifest);
+    config: &ResolvedConfig,
+    context: &ObjectStoreContext,
+) -> Result<()> {
+    let bulk_path = golden_task_root(context, &args.golden, Task::BulkLoad).join("result.json");
+    let bulk: PreparationResult = load_required(Arc::clone(&context.control), &bulk_path).await?;
+    validate_preparation_result(&bulk)?;
+    ensure_shared_configuration(&bulk.configuration, config, false)?;
+    if bulk.source.slate_commit != env!("BENCHMARK_SLATE_COMMIT") {
+        bail!("bulk-load checkpoint was created by a different SlateDB commit");
+    }
+    verify_checkpoint_reference(Arc::clone(&context.control), &bulk.checkpoint).await?;
+    validate_uncompacted_checkpoint(Arc::clone(&context.control), &bulk.checkpoint).await?;
 
-    let mut outcome = if fresh_process {
-        execute_variant_in_fresh_process(variant, database_path, &initial.lsm_digest_sha256, args)
-            .await?
+    let task_root = golden_task_root(context, &args.golden, Task::FullCompaction);
+    let result_path = task_root.clone().join("result.json");
+    if let Some(existing) =
+        load_optional::<PreparationResult>(Arc::clone(&context.control), &result_path).await?
+    {
+        validate_preparation_result(&existing)?;
+        ensure_preparation_matches(&existing, args, config)?;
+        anyhow::ensure!(
+            existing.source_checkpoint.as_ref() == Some(&bulk.checkpoint),
+            "existing full-compaction result belongs to another bulk-load checkpoint"
+        );
+        verify_checkpoint_reference(Arc::clone(&context.control), &existing.checkpoint).await?;
+        validate_compacted_checkpoint(Arc::clone(&context.control), &existing.checkpoint).await?;
+        write_local_result(&args.output, &existing)?;
+        return print_success(args, true);
+    }
+    delete_prefix(Arc::clone(&context.control), &task_root).await?;
+    let database_path = task_root.clone().join("database");
+    clone_database(
+        Arc::clone(&context.control),
+        &database_path,
+        &Path::from(bulk.checkpoint.database_path.clone()),
+        parse_checkpoint_id(&bulk.checkpoint)?,
+    )
+    .await?;
+    let cache = object_store_cache_directory()?;
+    let recorder = Arc::new(BenchmarkMetricsRecorder::new());
+    let db = open_database(
+        database_path.clone(),
+        context.instrumented.clone(),
+        config,
+        &config.settings,
+        Some(cache.path()),
+        recorder,
+    )
+    .await?;
+    let compaction =
+        compact_database_fully(database_path.clone(), Arc::clone(&context.control)).await;
+    close_database_after(&db, compaction, "closing full-compaction database").await?;
+    let checkpoint = checkpoint_database(
+        database_path,
+        Arc::clone(&context.control),
+        &format!("benchmark-{}-full-compaction", args.golden),
+    )
+    .await?;
+    validate_compacted_checkpoint(Arc::clone(&context.control), &checkpoint).await?;
+    let result = PreparationResult {
+        status: "ok".to_string(),
+        task: Task::FullCompaction,
+        golden_id: args.golden.clone(),
+        timestamp: Utc::now().to_rfc3339(),
+        source: SourceIdentity::current(),
+        configuration: ResultConfiguration::from(config),
+        source_checkpoint: Some(bulk.checkpoint),
+        dataset: dataset_metadata(config, &checkpoint),
+        checkpoint,
+    };
+    validate_preparation_result(&result)?;
+    write_local_result(&args.output, &result)?;
+    create_result(Arc::clone(&context.control), &result_path, &result).await?;
+    print_success(args, false)
+}
+
+async fn run_workload(
+    args: &RunArgs,
+    config: &ResolvedConfig,
+    context: &ObjectStoreContext,
+) -> Result<()> {
+    let session = args.session.as_deref().context("workload session")?;
+    let golden = if args.task.uses_golden() {
+        let full_path =
+            golden_task_root(context, &args.golden, Task::FullCompaction).join("result.json");
+        let golden: PreparationResult =
+            load_required(Arc::clone(&context.control), &full_path).await?;
+        validate_preparation_result(&golden)?;
+        ensure_shared_configuration(&golden.configuration, config, true)?;
+        if golden.source.slate_commit != env!("BENCHMARK_SLATE_COMMIT") {
+            bail!("golden checkpoint was created by a different SlateDB commit");
+        }
+        verify_checkpoint_reference(Arc::clone(&context.control), &golden.checkpoint).await?;
+        validate_compacted_checkpoint(Arc::clone(&context.control), &golden.checkpoint).await?;
+        Some(golden)
     } else {
-        let object_store_cache = object_store_cache_directory(&variant.suite)?;
-        let recorder = Arc::new(BenchmarkMetricsRecorder::new());
-        let db = open_database_with_object_store_cache(
-            database_path.clone(),
-            Arc::clone(&store),
-            &variant.suite,
-            &variant.slate_settings,
-            object_store_cache.as_ref().map(|cache| cache.path()),
-            Arc::clone(&recorder),
+        None
+    };
+    let environment = inspect_environment(&context.provider, &context.endpoint, &context.region);
+    if std::env::var("SLATEDB_BENCH_PUBLISHED").as_deref() == Ok("true") {
+        anyhow::ensure!(config.scale == 1.0, "published runs require scale 1.0");
+        verify_environment(&environment)?;
+    }
+
+    let task_root = context
+        .root
+        .clone()
+        .join("sessions")
+        .join(session)
+        .join(args.task.as_str());
+    let result_path = task_root.clone().join("result.json");
+    if let Some(existing) =
+        load_optional::<WorkloadResult>(Arc::clone(&context.control), &result_path).await?
+    {
+        validate_workload_result(&existing)?;
+        ensure_workload_matches(&existing, args, config, golden.as_ref())?;
+        write_local_result(&args.output, &existing)?;
+        return print_success(args, true);
+    }
+    delete_prefix(Arc::clone(&context.control), &task_root).await?;
+    let database_path = task_root.clone().join("database");
+    let mut initial = if args.task.uses_golden() {
+        let golden = golden.as_ref().context("golden checkpoint")?;
+        clone_database(
+            Arc::clone(&context.control),
+            &database_path,
+            &Path::from(golden.checkpoint.database_path.clone()),
+            parse_checkpoint_id(&golden.checkpoint)?,
         )
         .await?;
-        if lsm_digest(&db)? != initial.lsm_digest_sha256 {
-            bail!("reopened RocksDB suite database has an unexpected LSM state");
+        InitialState {
+            kind: "golden".to_string(),
+            checkpoint_id: Some(golden.checkpoint.checkpoint_id.clone()),
+            manifest_id: Some(golden.checkpoint.manifest_id),
+            lsm_digest_sha256: golden.checkpoint.lsm_digest_sha256.clone(),
         }
-        let outcome = execute_variant(Arc::clone(&db), variant, store_metrics, recorder).await;
-        db.close()
-            .await
-            .context("closing RocksDB suite variant database")?;
-        outcome?
+    } else {
+        InitialState {
+            kind: "empty".to_string(),
+            checkpoint_id: None,
+            manifest_id: None,
+            lsm_digest_sha256: String::new(),
+        }
     };
-    let final_manifest = admin
-        .read_manifest(None)
-        .await
-        .context("reading final RocksDB suite manifest")?
-        .context("final RocksDB suite manifest does not exist")?;
-    outcome.storage.database_size_bytes = live_database_size_bytes(&final_manifest);
-    Ok((outcome, initial, initial_database_bytes))
+    let cache = object_store_cache_directory()?;
+    let recorder = Arc::new(BenchmarkMetricsRecorder::new());
+    let db = open_database(
+        database_path.clone(),
+        context.instrumented.clone(),
+        config,
+        &config.settings,
+        Some(cache.path()),
+        recorder,
+    )
+    .await?;
+    let actual_digest = match lsm_digest(&db) {
+        Ok(digest) => digest,
+        Err(error) => {
+            let _ = db.close().await;
+            return Err(error);
+        }
+    };
+    if args.task.uses_golden() {
+        if actual_digest != initial.lsm_digest_sha256 {
+            let close = db.close().await.context("closing invalid workload clone");
+            close?;
+            bail!("workload clone does not match the golden checkpoint");
+        }
+    } else {
+        initial.lsm_digest_sha256 = actual_digest;
+    }
+    let execution =
+        workloads::execute(Arc::clone(&db), config, context.instrumented.metrics()).await;
+    let close = db.close().await.context("closing workload database");
+    let compaction_check =
+        ensure_no_failed_compactions(database_path, Arc::clone(&context.control)).await;
+    let execution = execution?;
+    close?;
+    compaction_check?;
+
+    let result = WorkloadResult {
+        status: "ok".to_string(),
+        task: args.task,
+        golden_id: args.golden.clone(),
+        session: session.to_string(),
+        timestamp: Utc::now().to_rfc3339(),
+        source: SourceIdentity::current(),
+        environment,
+        configuration: ResultConfiguration::from(config),
+        initial_state: initial,
+        client_measurement_ns: duration_ns(execution.client_measurement),
+        durability_drain_ns: duration_ns(execution.durability_drain),
+        recorded_interval_ns: duration_ns(execution.measurement.elapsed()),
+        application: execution.measurement.application(),
+        object_store: execution.measurement.object_store(),
+        process: execution.measurement.process(),
+        machine: execution.measurement.machine(),
+    };
+    validate_workload_result(&result)?;
+    write_local_result(&args.output, &result)?;
+    create_result(Arc::clone(&context.control), &result_path, &result).await?;
+    print_success(args, false)
 }
 
-fn enabled_features() -> Vec<String> {
-    env!("BENCHMARK_ENABLED_FEATURES")
-        .split(',')
-        .filter(|feature| !feature.is_empty())
-        .map(str::to_string)
-        .collect()
+fn golden_task_root(context: &ObjectStoreContext, golden: &str, task: Task) -> Path {
+    context
+        .root
+        .clone()
+        .join("goldens")
+        .join(golden)
+        .join(task.as_str())
 }
 
-fn write_variant_result(
-    variant: &VariantConfig,
-    mut outcome: WorkloadOutcome,
-    initial_state: InitialState,
-    initial_database_bytes: u64,
-    context: &ResultContext<'_>,
-) -> Result<String> {
-    let version = env!("BENCHMARK_SLATE_VERSION");
-    let relative_directory = PathBuf::from("results")
-        .join(version)
-        .join(&variant.suite.name)
-        .join(&variant.workload.name)
-        .join(&variant.variant);
-    let directory = context.args.output.join(&relative_directory);
-    fs::create_dir_all(&directory)?;
-    let average_database_bytes = average_database_bytes(
-        &outcome.timeseries,
-        outcome.elapsed_ns,
-        initial_database_bytes,
-        outcome.storage.database_size_bytes,
+fn ensure_preparation_matches(
+    result: &PreparationResult,
+    args: &RunArgs,
+    config: &ResolvedConfig,
+) -> Result<()> {
+    anyhow::ensure!(
+        result.task == args.task,
+        "existing result belongs to another task"
     );
-    outcome.storage.average_database_size_bytes = average_database_bytes;
-    let result = ResultRecord {
-        identity: Identity {
-            slate_version: version.to_string(),
-            slate_commit: env!("BENCHMARK_SLATE_COMMIT").to_string(),
-            runner_version: env!("CARGO_PKG_VERSION").to_string(),
-            runner_commit: env!("BENCHMARK_RUNNER_COMMIT").to_string(),
-            lockfile_sha256: env!("BENCHMARK_LOCK_HASH").to_string(),
-            timestamp: Utc::now().to_rfc3339(),
-            suite: variant.suite.name.clone(),
-            workload: variant.workload.name.clone(),
-            variant: variant.variant.clone(),
-            mode: variant.mode().to_string(),
-        },
-        elapsed_ns: outcome.elapsed_ns,
-        environment: context.environment.clone(),
-        configuration: BenchmarkConfiguration {
-            scale: variant.scale.factor(),
-            clients: variant.clients,
-            warmup_ns: variant.warmup_ms().saturating_mul(1_000_000),
-            measurement_ns: variant.measurement_ms().saturating_mul(1_000_000),
-            record_count: variant.record_count(),
-            key_bytes: variant.key_bytes(),
-            value_bytes: variant.value_bytes(),
-            value_compression_ratio: variant.value_compression_ratio(),
-            block_cache_bytes: variant.suite.block_cache_bytes,
-            metadata_cache_bytes: Some(
-                variant
-                    .suite
-                    .metadata_cache_bytes
-                    .unwrap_or(slatedb::db_cache::DEFAULT_META_CACHE_CAPACITY),
-            ),
-            object_store_cache_bytes: variant.suite.object_store_cache_bytes,
-            sst_block_bytes: variant.suite.sst_block_bytes,
-            slate_settings: serde_json::to_value(&variant.slate_settings)?,
-            build_profile: if cfg!(debug_assertions) {
-                "debug".to_string()
-            } else {
-                "release".to_string()
-            },
-            enabled_features: enabled_features(),
-        },
-        application: outcome.application,
-        durability: outcome.durability,
-        resources: outcome.resources,
-        storage: outcome.storage,
-        initial_state,
-        source_files: SourceFiles {
-            histograms: "histograms.json".to_string(),
-            timeseries: "timeseries.json".to_string(),
-        },
+    anyhow::ensure!(
+        result.golden_id == args.golden,
+        "existing result belongs to another golden ID"
+    );
+    anyhow::ensure!(
+        result.source.slate_commit == env!("BENCHMARK_SLATE_COMMIT"),
+        "existing golden uses a different SlateDB commit"
+    );
+    anyhow::ensure!(
+        result.configuration == ResultConfiguration::from(config),
+        "existing preparation result uses a different resolved configuration"
+    );
+    Ok(())
+}
+
+fn ensure_workload_matches(
+    result: &WorkloadResult,
+    args: &RunArgs,
+    config: &ResolvedConfig,
+    golden: Option<&PreparationResult>,
+) -> Result<()> {
+    anyhow::ensure!(
+        result.task == args.task,
+        "existing result belongs to another task"
+    );
+    anyhow::ensure!(
+        result.golden_id == args.golden,
+        "existing result belongs to another golden ID"
+    );
+    anyhow::ensure!(
+        result.session == args.session.as_deref().unwrap_or_default(),
+        "existing result belongs to another session"
+    );
+    anyhow::ensure!(
+        result.source.runner_commit == env!("BENCHMARK_RUNNER_COMMIT"),
+        "existing result was created by a different runner commit"
+    );
+    anyhow::ensure!(
+        result.source.slate_commit == env!("BENCHMARK_SLATE_COMMIT"),
+        "existing result was created by a different SlateDB commit"
+    );
+    anyhow::ensure!(
+        result.configuration == ResultConfiguration::from(config),
+        "existing result uses a different resolved configuration"
+    );
+    if let Some(golden) = golden {
+        anyhow::ensure!(
+            result.initial_state.checkpoint_id.as_deref()
+                == Some(golden.checkpoint.checkpoint_id.as_str())
+                && result.initial_state.manifest_id == Some(golden.checkpoint.manifest_id)
+                && result.initial_state.lsm_digest_sha256 == golden.checkpoint.lsm_digest_sha256,
+            "existing result belongs to another golden checkpoint"
+        );
+    }
+    Ok(())
+}
+
+fn ensure_shared_configuration(
+    existing: &ResultConfiguration,
+    config: &ResolvedConfig,
+    include_settings: bool,
+) -> Result<()> {
+    let current = ResultConfiguration::from(config);
+    anyhow::ensure!(
+        existing.scale == current.scale,
+        "golden scale does not match"
+    );
+    anyhow::ensure!(
+        existing.dataset == current.dataset,
+        "golden dataset does not match"
+    );
+    anyhow::ensure!(
+        existing.caches == current.caches,
+        "golden caches do not match"
+    );
+    anyhow::ensure!(
+        existing.build_profile == current.build_profile,
+        "golden build profile does not match"
+    );
+    anyhow::ensure!(
+        existing.enabled_features == current.enabled_features,
+        "golden SlateDB features do not match"
+    );
+    if include_settings {
+        anyhow::ensure!(
+            existing.slate_settings == current.slate_settings,
+            "golden SlateDB settings do not match"
+        );
+    }
+    Ok(())
+}
+
+fn bulk_load_config(config: &ResolvedConfig) -> Result<ResolvedConfig> {
+    let mut config = config.clone();
+    config.settings.compactor_options = None;
+    config.settings.l0_max_ssts = u32::MAX as usize;
+    config.settings.l0_max_ssts_per_key = u32::MAX as usize;
+    config.slate_settings =
+        serde_json::to_value(&config.settings).context("serializing bulk-load SlateDB settings")?;
+    Ok(config)
+}
+
+fn dataset_metadata(
+    config: &ResolvedConfig,
+    checkpoint: &CheckpointReference,
+) -> GoldenDatasetMetadata {
+    GoldenDatasetMetadata {
+        record_count: config.dataset.record_count,
+        key_bytes: config.dataset.key_bytes,
+        value_bytes: config.dataset.value_bytes,
+        logical_bytes: config.dataset.logical_bytes(),
+        live_sst_bytes: checkpoint.live_sst_bytes,
+    }
+}
+
+async fn load_optional<T>(store: Arc<dyn ObjectStore>, path: &Path) -> Result<Option<T>>
+where
+    T: DeserializeOwned,
+{
+    let get = match store.get(path).await {
+        Ok(get) => get,
+        Err(object_store::Error::NotFound { .. }) => return Ok(None),
+        Err(error) => return Err(error).with_context(|| format!("loading {path}")),
     };
-    write_json(&directory.join("result.json"), &result)?;
-    write_json(&directory.join("histograms.json"), &outcome.histograms)?;
-    write_compact_json(&directory.join("timeseries.json"), &outcome.timeseries)?;
-    Ok(relative_directory.join("result.json").display().to_string())
+    let bytes = get
+        .bytes()
+        .await
+        .with_context(|| format!("reading {path}"))?;
+    let value = serde_json::from_slice(&bytes).with_context(|| format!("parsing {path}"))?;
+    Ok(Some(value))
+}
+
+async fn load_required<T>(store: Arc<dyn ObjectStore>, path: &Path) -> Result<T>
+where
+    T: DeserializeOwned,
+{
+    load_optional(store, path)
+        .await?
+        .with_context(|| format!("required result {path} does not exist"))
+}
+
+async fn create_result(
+    store: Arc<dyn ObjectStore>,
+    path: &Path,
+    value: &impl Serialize,
+) -> Result<()> {
+    store
+        .put_opts(
+            path,
+            PutPayload::from(serde_json::to_vec_pretty(value)?),
+            PutMode::Create.into(),
+        )
+        .await
+        .with_context(|| format!("creating completion result {path}"))?;
+    Ok(())
+}
+
+fn write_local_result(output: &FsPath, value: &impl Serialize) -> Result<()> {
+    fs::write(
+        output.join("result.json"),
+        serde_json::to_vec_pretty(value)?,
+    )
+    .with_context(|| format!("writing {}/result.json", output.display()))
+}
+
+fn print_success(args: &RunArgs, skipped: bool) -> Result<()> {
+    println!(
+        "{}",
+        serde_json::json!({
+            "status": "ok",
+            "task": args.task,
+            "result": args.output.join("result.json"),
+            "skipped": skipped,
+        })
+    );
+    Ok(())
+}
+
+fn validate_name(value: &str, kind: &str) -> Result<()> {
+    anyhow::ensure!(
+        !value.is_empty()
+            && value.len() <= 128
+            && value != "."
+            && value != ".."
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.')),
+        "{kind} names must be 1-128 ASCII letters, digits, '.', '-', or '_'"
+    );
+    Ok(())
 }
 
 async fn clone_database(
@@ -724,31 +587,21 @@ async fn clone_database(
     parent_path: &Path,
     checkpoint_id: Uuid,
 ) -> Result<()> {
-    let admin = AdminBuilder::new(clone_path.clone(), store).build();
-    admin
+    AdminBuilder::new(clone_path.clone(), store)
+        .build()
         .create_clone_builder_from_source(CloneSourceSpec::with_checkpoint(
             parent_path.clone(),
             checkpoint_id,
         ))
         .build()
         .await
-        .context("creating shallow benchmark clone")
+        .context("creating shallow database clone")
 }
 
 async fn open_database(
     path: Path,
     store: Arc<dyn ObjectStore>,
-    suite: &SuiteConfig,
-    settings: &Settings,
-    recorder: Arc<BenchmarkMetricsRecorder>,
-) -> Result<Arc<Db>> {
-    open_database_with_object_store_cache(path, store, suite, settings, None, recorder).await
-}
-
-async fn open_database_with_object_store_cache(
-    path: Path,
-    store: Arc<dyn ObjectStore>,
-    suite: &SuiteConfig,
+    config: &ResolvedConfig,
     settings: &Settings,
     object_store_cache_root: Option<&FsPath>,
     recorder: Arc<BenchmarkMetricsRecorder>,
@@ -756,66 +609,171 @@ async fn open_database_with_object_store_cache(
     let mut settings = settings.clone();
     settings.object_store_cache_options.root_folder =
         object_store_cache_root.map(FsPath::to_path_buf);
-    settings.object_store_cache_options.max_cache_size_bytes = suite
-        .object_store_cache_bytes
-        .map(usize::try_from)
-        .transpose()
-        .context("object-store cache capacity exceeds the platform limit")?;
-    let db_recorder: Arc<dyn MetricsRecorder> = recorder;
-    let mut builder = Db::builder(path, store)
+    settings.object_store_cache_options.max_cache_size_bytes = Some(
+        usize::try_from(config.caches.object_store_bytes)
+            .context("object-store cache capacity exceeds the platform limit")?,
+    );
+    let metrics: Arc<dyn MetricsRecorder> = recorder;
+    let db = Db::builder(path, store)
         .with_settings(settings)
-        .with_metrics_recorder(db_recorder);
-    builder = builder.with_db_cache(cache_for(suite));
-    if suite.sst_block_bytes == Some(8192) {
-        builder = builder.with_sst_block_size(SstBlockSize::Block8Kib);
-    }
-    Ok(Arc::new(builder.build().await.context("opening SlateDB")?))
+        .with_metrics_recorder(metrics)
+        .with_db_cache(cache_for(config))
+        .build()
+        .await
+        .context("opening SlateDB")?;
+    Ok(Arc::new(db))
 }
 
-fn cache_for(suite: &SuiteConfig) -> Arc<dyn DbCache> {
-    let block_cache = suite.block_cache_bytes.map(|max_capacity| {
-        Arc::new(FoyerCache::new_with_opts(FoyerCacheOptions {
-            max_capacity,
-            ..Default::default()
-        })) as Arc<dyn DbCache>
-    });
-    let metadata_capacity = suite
-        .metadata_cache_bytes
-        .unwrap_or(slatedb::db_cache::DEFAULT_META_CACHE_CAPACITY);
-    let metadata_cache = Some(Arc::new(FoyerCache::new_with_opts(FoyerCacheOptions {
-        max_capacity: metadata_capacity,
+fn cache_for(config: &ResolvedConfig) -> Arc<dyn DbCache> {
+    let block: Arc<dyn DbCache> = Arc::new(FoyerCache::new_with_opts(FoyerCacheOptions {
+        max_capacity: config.caches.block_bytes,
         ..Default::default()
-    })) as Arc<dyn DbCache>);
+    }));
+    let metadata: Arc<dyn DbCache> = Arc::new(FoyerCache::new_with_opts(FoyerCacheOptions {
+        max_capacity: config.caches.metadata_bytes,
+        ..Default::default()
+    }));
     Arc::new(
         SplitCache::new()
-            .with_block_cache(block_cache)
-            .with_meta_cache(metadata_cache)
+            .with_block_cache(Some(block))
+            .with_meta_cache(Some(metadata))
             .build(),
     )
 }
 
-fn object_store_cache_directory(suite: &SuiteConfig) -> Result<Option<tempfile::TempDir>> {
-    suite
-        .object_store_cache_bytes
-        .map(|_| {
-            tempfile::Builder::new()
-                .prefix("slatedb-benchmark-object-store-cache-")
-                .tempdir()
-                .context("creating temporary object-store cache")
-        })
-        .transpose()
+fn object_store_cache_directory() -> Result<tempfile::TempDir> {
+    tempfile::Builder::new()
+        .prefix("slatedb-benchmark-object-store-cache-")
+        .tempdir()
+        .context("creating temporary object-store cache")
 }
 
-async fn compact_database_fully(
-    database_path: Path,
-    store: Arc<dyn ObjectStore>,
-    suite: &SuiteConfig,
-) -> Result<()> {
-    let admin = AdminBuilder::new(database_path, store).build();
-    let quiet = Duration::from_millis(suite.compaction_quiet_ms);
+async fn close_database_after<T>(
+    db: &Db,
+    operation: Result<T>,
+    close_context: &'static str,
+) -> Result<T> {
+    let close = db.close().await.context(close_context);
+    let value = operation?;
+    close?;
+    Ok(value)
+}
 
+async fn checkpoint_database(
+    path: Path,
+    store: Arc<dyn ObjectStore>,
+    name: &str,
+) -> Result<CheckpointReference> {
+    let admin = AdminBuilder::new(path.clone(), store).build();
+    let checkpoint = admin
+        .create_detached_checkpoint(&CheckpointOptions {
+            lifetime: None,
+            source: None,
+            name: Some(name.to_string()),
+        })
+        .await
+        .context("creating detached checkpoint")?;
+    let manifest = admin
+        .read_manifest(Some(checkpoint.manifest_id))
+        .await
+        .context("reading checkpoint manifest")?
+        .context("checkpoint manifest does not exist")?;
+    Ok(CheckpointReference {
+        database_path: path.to_string(),
+        checkpoint_id: checkpoint.id.to_string(),
+        manifest_id: checkpoint.manifest_id,
+        lsm_digest_sha256: manifest_lsm_digest(&manifest)?,
+        live_sst_bytes: live_database_size_bytes(&manifest),
+    })
+}
+
+fn parse_checkpoint_id(checkpoint: &CheckpointReference) -> Result<Uuid> {
+    checkpoint
+        .checkpoint_id
+        .parse()
+        .context("checkpoint ID is invalid")
+}
+
+async fn verify_checkpoint_reference(
+    store: Arc<dyn ObjectStore>,
+    checkpoint: &CheckpointReference,
+) -> Result<()> {
+    let id = parse_checkpoint_id(checkpoint)?;
+    let admin = AdminBuilder::new(Path::from(checkpoint.database_path.clone()), store).build();
+    let found = admin
+        .list_checkpoints(None)
+        .await
+        .context("listing database checkpoints")?
+        .into_iter()
+        .find(|candidate| candidate.id == id)
+        .context("recorded checkpoint no longer exists")?;
+    anyhow::ensure!(
+        found.manifest_id == checkpoint.manifest_id,
+        "recorded checkpoint manifest changed"
+    );
+    let manifest = admin
+        .read_manifest(Some(checkpoint.manifest_id))
+        .await
+        .context("reading recorded checkpoint manifest")?
+        .context("recorded checkpoint manifest no longer exists")?;
+    anyhow::ensure!(
+        manifest_lsm_digest(&manifest)? == checkpoint.lsm_digest_sha256,
+        "recorded checkpoint LSM digest changed"
+    );
+    anyhow::ensure!(
+        live_database_size_bytes(&manifest) == checkpoint.live_sst_bytes,
+        "recorded checkpoint live size changed"
+    );
+    Ok(())
+}
+
+async fn validate_uncompacted_checkpoint(
+    store: Arc<dyn ObjectStore>,
+    checkpoint: &CheckpointReference,
+) -> Result<()> {
+    let manifest = AdminBuilder::new(Path::from(checkpoint.database_path.clone()), store)
+        .build()
+        .read_manifest(Some(checkpoint.manifest_id))
+        .await
+        .context("reading bulk-load checkpoint manifest")?
+        .context("bulk-load checkpoint manifest does not exist")?;
+    let l0_count = manifest.l0().len()
+        + manifest
+            .segments()
+            .iter()
+            .map(|segment| segment.l0().len())
+            .sum::<usize>();
+    let sorted_run_count = manifest.compacted().len()
+        + manifest
+            .segments()
+            .iter()
+            .map(|segment| segment.compacted().len())
+            .sum::<usize>();
+    anyhow::ensure!(l0_count > 0, "bulk-load checkpoint contains no L0 SSTs");
+    anyhow::ensure!(
+        sorted_run_count == 0,
+        "bulk-load checkpoint contains compacted sorted runs"
+    );
+    Ok(())
+}
+
+async fn validate_compacted_checkpoint(
+    store: Arc<dyn ObjectStore>,
+    checkpoint: &CheckpointReference,
+) -> Result<()> {
+    let manifest = AdminBuilder::new(Path::from(checkpoint.database_path.clone()), store)
+        .build()
+        .read_manifest(Some(checkpoint.manifest_id))
+        .await
+        .context("reading full-compaction checkpoint manifest")?
+        .context("full-compaction checkpoint manifest does not exist")?;
+    validate_fully_compacted_manifest(&manifest)
+}
+
+async fn compact_database_fully(database_path: Path, store: Arc<dyn ObjectStore>) -> Result<()> {
+    let admin = AdminBuilder::new(database_path, store).build();
     loop {
-        wait_for_compactor_quiet(&admin, quiet).await?;
+        wait_for_compactor_quiet(&admin).await?;
         let state = admin
             .read_compactor_state_view()
             .await
@@ -824,7 +782,6 @@ async fn compact_database_fully(
             validate_fully_compacted_manifest(state.manifest())?;
             return Ok(());
         };
-
         let compaction = admin
             .submit_compaction(spec)
             .await
@@ -833,14 +790,14 @@ async fn compact_database_fully(
     }
 }
 
-async fn wait_for_compactor_quiet(admin: &Admin, quiet: Duration) -> Result<()> {
+async fn wait_for_compactor_quiet(admin: &Admin) -> Result<()> {
     let mut stable_since = Instant::now();
     let mut last_state = None;
     loop {
         let state = admin
             .read_compactor_state_view()
             .await
-            .context("reading compactor state while waiting for quiescence")?;
+            .context("reading compactor state while waiting for idle")?;
         let state_version = (
             state.manifest().id(),
             state.compactions().map(|compactions| compactions.id()),
@@ -849,7 +806,6 @@ async fn wait_for_compactor_quiet(admin: &Admin, quiet: Duration) -> Result<()> 
             last_state = Some(state_version);
             stable_since = Instant::now();
         }
-
         let mut active = false;
         if let Some(compactions) = state.compactions() {
             for compaction in compactions.recent_compactions() {
@@ -859,17 +815,13 @@ async fn wait_for_compactor_quiet(admin: &Admin, quiet: Duration) -> Result<()> 
                     | CompactionStatus::Running
                     | CompactionStatus::Compacted => active = true,
                     CompactionStatus::Failed => {
-                        bail!(
-                            "compaction {} failed before full-database compaction",
-                            compaction.id()
-                        );
+                        bail!("compaction {} failed", compaction.id());
                     }
                     CompactionStatus::Completed => {}
                 }
             }
         }
-
-        if !active && stable_since.elapsed() >= quiet {
+        if !active && stable_since.elapsed() >= COMPACTION_QUIET {
             return Ok(());
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -877,16 +829,16 @@ async fn wait_for_compactor_quiet(admin: &Admin, quiet: Duration) -> Result<()> 
 }
 
 async fn wait_for_submitted_compaction(admin: &Admin, submitted: &Compaction) -> Result<()> {
-    let compaction_id = submitted.id();
+    let id = submitted.id();
     loop {
         let compaction = admin
-            .read_compaction(compaction_id, None)
+            .read_compaction(id, None)
             .await
-            .with_context(|| format!("reading submitted compaction {compaction_id}"))?
-            .with_context(|| format!("submitted compaction {compaction_id} disappeared"))?;
+            .with_context(|| format!("reading submitted compaction {id}"))?
+            .with_context(|| format!("submitted compaction {id} disappeared"))?;
         match compaction.status() {
             CompactionStatus::Completed => return Ok(()),
-            CompactionStatus::Failed => bail!("full-database compaction {compaction_id} failed"),
+            CompactionStatus::Failed => bail!("full-database compaction {id} failed"),
             CompactionStatus::Submitted
             | CompactionStatus::Scheduled
             | CompactionStatus::Running
@@ -894,6 +846,22 @@ async fn wait_for_submitted_compaction(admin: &Admin, submitted: &Compaction) ->
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+}
+
+async fn ensure_no_failed_compactions(path: Path, store: Arc<dyn ObjectStore>) -> Result<()> {
+    let state = AdminBuilder::new(path, store)
+        .build()
+        .read_compactor_state_view()
+        .await
+        .context("reading compactor state after workload")?;
+    if let Some(compactions) = state.compactions() {
+        for compaction in compactions.recent_compactions() {
+            if compaction.status() == CompactionStatus::Failed {
+                bail!("compaction {} failed during the workload", compaction.id());
+            }
+        }
+    }
+    Ok(())
 }
 
 fn next_full_compaction_spec(manifest: &VersionedManifest) -> Result<Option<CompactionSpec>> {
@@ -909,10 +877,8 @@ fn next_full_compaction_spec(manifest: &VersionedManifest) -> Result<Option<Comp
         )
         .max()
         .map_or(Ok(0), |id| {
-            id.checked_add(1)
-                .context("sorted-run id space exhausted during full compaction")
+            id.checked_add(1).context("sorted-run ID space exhausted")
         })?;
-
     let root_sources = manifest
         .l0()
         .iter()
@@ -933,7 +899,6 @@ fn next_full_compaction_spec(manifest: &VersionedManifest) -> Result<Option<Comp
     ) {
         return Ok(Some(spec));
     }
-
     for segment in manifest.segments() {
         let sources = segment
             .l0()
@@ -977,29 +942,21 @@ fn full_tree_compaction_spec(
 }
 
 fn validate_fully_compacted_manifest(manifest: &VersionedManifest) -> Result<()> {
-    if !manifest.l0().is_empty() || manifest.compacted().len() > 1 {
-        bail!(
-            "full compaction left root tree with {} L0 SSTs and {} sorted runs",
-            manifest.l0().len(),
-            manifest.compacted().len()
-        );
-    }
+    anyhow::ensure!(
+        manifest.l0().is_empty() && manifest.compacted().len() <= 1,
+        "full compaction left root L0 or multiple sorted runs"
+    );
     for segment in manifest.segments() {
-        if !segment.l0().is_empty() || segment.compacted().len() > 1 {
-            bail!(
-                "full compaction left segment {:?} with {} L0 SSTs and {} sorted runs",
-                segment.prefix(),
-                segment.l0().len(),
-                segment.compacted().len()
-            );
-        }
+        anyhow::ensure!(
+            segment.l0().is_empty() && segment.compacted().len() <= 1,
+            "full compaction left segment L0 or multiple sorted runs"
+        );
     }
     Ok(())
 }
 
 fn lsm_digest(db: &Db) -> Result<String> {
-    let status = db.status();
-    manifest_lsm_digest(&status.current_manifest)
+    manifest_lsm_digest(&db.status().current_manifest)
 }
 
 fn manifest_lsm_digest(manifest: &VersionedManifest) -> Result<String> {
@@ -1016,445 +973,28 @@ fn manifest_lsm_digest(manifest: &VersionedManifest) -> Result<String> {
     ))
 }
 
-fn settings_digest(settings: &Settings) -> Result<String> {
-    Ok(format!(
-        "{:x}",
-        Sha256::digest(serde_json::to_vec(settings)?)
-    ))
-}
-
-fn write_json(path: &FsPath, value: &impl Serialize) -> Result<()> {
-    fs::write(path, serde_json::to_vec_pretty(value)?)
-        .with_context(|| format!("writing {}", path.display()))
-}
-
-fn write_compact_json(path: &FsPath, value: &impl Serialize) -> Result<()> {
-    fs::write(path, serde_json::to_vec(value)?)
-        .with_context(|| format!("writing {}", path.display()))
-}
-
-fn average_database_bytes(
-    timeseries: &TimeseriesFile,
-    elapsed_ns: u64,
-    initial_bytes: u64,
-    final_bytes: u64,
-) -> u64 {
-    if elapsed_ns == 0 || timeseries.samples.len() < 2 {
-        return initial_bytes.saturating_add(final_bytes) / 2;
-    }
-    let mut byte_nanoseconds = 0_f64;
-    for window in timeseries.samples.windows(2) {
-        let left = &window[0];
-        let right = &window[1];
-        let duration = right.offset_ns.saturating_sub(left.offset_ns) as f64;
-        let average = (left.database_size_bytes as f64 + right.database_size_bytes as f64) / 2.0;
-        byte_nanoseconds += average * duration;
-    }
-    let last = &timeseries.samples[timeseries.samples.len() - 1];
-    if last.offset_ns < elapsed_ns {
-        byte_nanoseconds += final_bytes as f64 * elapsed_ns.saturating_sub(last.offset_ns) as f64;
-    }
-    (byte_nanoseconds / elapsed_ns as f64).max(0.0) as u64
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{
-        average_database_bytes, bulk_load_settings, close_database_after, compact_database_fully,
-        enabled_features, execute_rocks_variant, golden_load_settings, lsm_digest,
-        object_store_cache_directory, open_database, DatasetLoadMetrics, DatasetLoadSpec,
-    };
-    use crate::cli::RunArgs;
-    use crate::config::{
-        BenchmarkConfig, SuiteConfig, SuiteExecution, VariantConfig, VariantDefinition,
-        WorkloadConfig, WorkloadKind,
-    };
-    use crate::instrumented_store::InstrumentedStore;
-    use crate::model::{TimeseriesFile, TimeseriesSample};
-    use crate::system::BenchmarkMetricsRecorder;
-    use crate::workloads::populate_dataset;
-    use anyhow::Result;
-    use object_store::memory::InMemory;
-    use object_store::path::Path;
-    use object_store::ObjectStore;
-    use slatedb::admin::AdminBuilder;
-    use slatedb::config::{PutOptions, Settings, WriteOptions};
-    use slatedb::Db;
-    use std::path::PathBuf;
-    use std::process::Command;
-    use std::sync::Arc;
+    use super::{full_tree_compaction_spec, validate_name};
+    use bytes::Bytes;
+    use slatedb::compactor::SourceId;
 
     #[test]
-    fn database_size_uses_trapezoidal_time_integration() {
-        let timeseries = TimeseriesFile {
-            interval_ns: 1_000_000_000,
-            application_windows: Vec::new(),
-            durability_windows: None,
-            slatedb_metrics: Vec::new(),
-            samples: vec![
-                TimeseriesSample {
-                    offset_ns: 0,
-                    database_size_bytes: 100,
-                    ..Default::default()
-                },
-                TimeseriesSample {
-                    offset_ns: 1_000_000_000,
-                    database_size_bytes: 300,
-                    ..Default::default()
-                },
-                TimeseriesSample {
-                    offset_ns: 2_000_000_000,
-                    database_size_bytes: 500,
-                    ..Default::default()
-                },
-            ],
-        };
-        assert_eq!(
-            average_database_bytes(&timeseries, 2_000_000_000, 0, 500),
-            300
-        );
+    fn names_reject_path_components() {
+        assert!(validate_name("golden-1", "golden").is_ok());
+        assert!(validate_name("../golden", "golden").is_err());
+        assert!(validate_name("golden/one", "golden").is_err());
     }
 
     #[test]
-    fn bulk_load_settings_disable_durability_and_l0_backpressure() {
-        let suite_settings = Settings::default();
-        let settings = bulk_load_settings(&suite_settings);
-
-        assert!(!settings.wal_enabled);
-        assert!(settings.compactor_options.is_none());
-        assert_eq!(settings.l0_max_ssts, u32::MAX as usize);
-        assert_eq!(settings.l0_max_ssts_per_key, u32::MAX as usize);
-        assert_eq!(settings.l0_flush_parallelism, 16);
-        assert!(suite_settings.wal_enabled);
-        assert!(suite_settings.compactor_options.is_some());
-    }
-
-    #[test]
-    fn golden_load_settings_stream_uncompacted_data() {
-        let suite_settings = Settings::default();
-        let settings = golden_load_settings(&suite_settings);
-
-        assert!(!settings.wal_enabled);
-        assert!(settings.compactor_options.is_none());
-        assert_eq!(settings.l0_max_ssts, u32::MAX as usize);
-        assert_eq!(settings.l0_max_ssts_per_key, u32::MAX as usize);
-        assert_eq!(settings.l0_flush_parallelism, 16);
-        assert_eq!(settings.l0_sst_size_bytes, 256 * 1024 * 1024);
-        assert_eq!(settings.max_unflushed_bytes, 4 * 1024 * 1024 * 1024);
-        assert!(suite_settings.wal_enabled);
-        assert!(suite_settings.compactor_options.is_some());
-        assert_ne!(suite_settings.l0_sst_size_bytes, settings.l0_sst_size_bytes);
-        assert_ne!(
-            suite_settings.max_unflushed_bytes,
-            settings.max_unflushed_bytes
-        );
-    }
-
-    #[test]
-    fn enabled_features_match_explicit_slatedb_dependency_features() {
-        let manifest: toml::Value =
-            toml::from_str(include_str!("../Cargo.toml")).expect("parse Cargo.toml");
-        let dependency = manifest["dependencies"]["slatedb"]
-            .as_table()
-            .expect("slatedb dependency table");
-        assert_eq!(
-            dependency["default-features"].as_bool(),
-            Some(false),
-            "SlateDB defaults must not hide enabled features"
-        );
-        let mut expected = dependency["features"]
-            .as_array()
-            .expect("slatedb features")
-            .iter()
-            .map(|feature| feature.as_str().expect("feature string").to_string())
-            .collect::<Vec<_>>();
-        expected.sort();
-        expected.dedup();
-
-        assert_eq!(enabled_features(), expected);
-    }
-
-    #[test]
-    fn runner_commit_matches_checked_out_revision() {
-        let output = Command::new("git")
-            .args(["rev-parse", "HEAD"])
-            .current_dir(env!("CARGO_MANIFEST_DIR"))
-            .output()
-            .expect("run git rev-parse");
-        if output.status.success() {
-            assert_eq!(
-                env!("BENCHMARK_RUNNER_COMMIT"),
-                String::from_utf8_lossy(&output.stdout).trim()
-            );
-        }
-    }
-
-    #[test]
-    fn object_store_cache_directory_is_temporary() -> Result<()> {
-        let benchmark = BenchmarkConfig::load_from(std::path::Path::new("config"))?;
-        let suite = benchmark
-            .suites
-            .iter()
-            .find(|suite| suite.name == "slatedb")
-            .expect("slatedb suite");
-        let path = {
-            let cache = object_store_cache_directory(suite)?.expect("object-store cache");
-            let path = cache.path().to_path_buf();
-            assert!(path.is_dir());
-            path
-        };
-        assert!(!path.exists());
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn lsm_digest_changes_with_persisted_tree() -> Result<()> {
-        let settings = Settings {
-            compactor_options: None,
-            flush_interval: None,
-            wal_enabled: false,
-            ..Default::default()
-        };
-        let db = Db::builder("digest-test", Arc::new(InMemory::new()))
-            .with_settings(settings)
-            .build()
-            .await?;
-        let write_options = WriteOptions {
-            await_durable: false,
-            ..Default::default()
-        };
-        let empty_digest = lsm_digest(&db)?;
-
-        for index in 0..64 {
-            db.put_with_options(
-                format!("key-{index:04}"),
-                b"value",
-                &PutOptions::default(),
-                &write_options,
-            )
-            .await?;
-        }
-        db.flush().await?;
-        let sixty_four_record_digest = lsm_digest(&db)?;
-
-        for index in 64..160 {
-            db.put_with_options(
-                format!("key-{index:04}"),
-                b"value",
-                &PutOptions::default(),
-                &write_options,
-            )
-            .await?;
-        }
-        db.flush().await?;
-        let hundred_sixty_record_digest = lsm_digest(&db)?;
-
-        assert_ne!(empty_digest, sixty_four_record_digest);
-        assert_ne!(sixty_four_record_digest, hundred_sixty_record_digest);
-        db.close().await?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn full_compaction_drains_l0_into_one_sorted_run() -> Result<()> {
-        let benchmark = BenchmarkConfig::load_from(std::path::Path::new("config"))?;
-        let mut suite = benchmark
-            .suites
-            .iter()
-            .find(|suite| suite.name == "rocksdb")
-            .expect("rocksdb suite")
-            .clone();
-        suite.compaction_quiet_ms = 20;
-
-        let mut settings = Settings {
-            flush_interval: None,
-            wal_enabled: false,
-            manifest_poll_interval: std::time::Duration::from_millis(10),
-            ..Default::default()
-        };
-        let compactor = settings
-            .compactor_options
-            .as_mut()
-            .expect("embedded compactor");
-        compactor.poll_interval = std::time::Duration::from_millis(10);
-        compactor.commit_compacted_interval = std::time::Duration::from_millis(10);
-
-        let path = Path::from("full-compaction-test");
-        let control_store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-        let instrumented = Arc::new(InstrumentedStore::new(Arc::clone(&control_store)));
-        let store: Arc<dyn ObjectStore> = instrumented.clone();
-        let db = open_database(
-            path.clone(),
-            Arc::clone(&store),
-            &suite,
-            &settings,
-            Arc::new(BenchmarkMetricsRecorder::new()),
+    fn one_sorted_run_requires_no_more_full_compaction() {
+        assert!(full_tree_compaction_spec(
+            Bytes::new(),
+            vec![SourceId::SortedRun(7)],
+            vec![7],
+            0,
+            8,
         )
-        .await?;
-        let write_options = WriteOptions {
-            await_durable: false,
-            ..Default::default()
-        };
-        for index in 0..3 {
-            db.put_with_options(
-                format!("key-{index}"),
-                b"value",
-                &PutOptions::default(),
-                &write_options,
-            )
-            .await?;
-            db.flush().await?;
-        }
-
-        compact_database_fully(path.clone(), Arc::clone(&control_store), &suite).await?;
-        let manifest = AdminBuilder::new(path.clone(), Arc::clone(&control_store))
-            .build()
-            .read_manifest(None)
-            .await?
-            .expect("latest manifest");
-        assert!(manifest.l0().is_empty());
-        assert_eq!(manifest.compacted().len(), 1);
-        db.close().await?;
-
-        let before_control_poll = instrumented.metrics().snapshot();
-        compact_database_fully(path, control_store, &suite).await?;
-        let after_control_poll = instrumented.metrics().snapshot();
-        assert_eq!(
-            before_control_poll.operations,
-            after_control_poll.operations
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn database_is_closed_when_operation_fails() -> Result<()> {
-        let db = Db::open("close-after-error-test", Arc::new(InMemory::new())).await?;
-        let operation = Err(anyhow::anyhow!("operation failed"));
-
-        let error = close_database_after::<()>(&db, operation, "closing test database")
-            .await
-            .expect_err("operation should fail");
-
-        assert_eq!(error.to_string(), "operation failed");
-        assert!(db.put(b"key", b"value").await.is_err());
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn in_memory_rocks_variants_reopen_and_carry_forward_state() -> Result<()> {
-        let overwrite = WorkloadConfig {
-            name: "overwrite".to_string(),
-            kind: WorkloadKind::Overwrite,
-            variants: vec![VariantDefinition {
-                name: "clients-1".to_string(),
-                clients: 1,
-            }],
-            await_durable: false,
-            record_count: None,
-            key_bytes: None,
-            value_bytes: None,
-            warmup_ms: None,
-            measurement_ms: None,
-        };
-        let random_read = WorkloadConfig {
-            name: "random-read".to_string(),
-            kind: WorkloadKind::RandomRead,
-            variants: vec![VariantDefinition {
-                name: "clients-1".to_string(),
-                clients: 1,
-            }],
-            await_durable: false,
-            record_count: None,
-            key_bytes: None,
-            value_bytes: None,
-            warmup_ms: None,
-            measurement_ms: None,
-        };
-        let suite = SuiteConfig {
-            name: "rocksdb".to_string(),
-            release: false,
-            execution: SuiteExecution::Sequential,
-            compaction_quiet_ms: 10,
-            record_count: 8,
-            key_bytes: 16,
-            value_bytes: 64,
-            value_compression_ratio: 1.0,
-            block_cache_bytes: Some(1024 * 1024),
-            metadata_cache_bytes: Some(1024 * 1024),
-            object_store_cache_bytes: None,
-            warmup_ms: 0,
-            measurement_ms: 200,
-            sst_block_bytes: None,
-            workloads: vec![overwrite.clone(), random_read.clone()],
-        };
-        let slate_settings = Settings {
-            flush_interval: Some(std::time::Duration::from_millis(10)),
-            ..Default::default()
-        };
-        let variant = |workload| VariantConfig {
-            scale: crate::config::BenchmarkScale::FULL,
-            suite: suite.clone(),
-            workload,
-            variant: "clients-1".to_string(),
-            clients: 1,
-            slate_settings: slate_settings.clone(),
-        };
-        let args = RunArgs {
-            suite: "rocksdb".to_string(),
-            session: "rocks-reopen-test".to_string(),
-            workload: None,
-            output: PathBuf::new(),
-            config_dir: PathBuf::from("config"),
-            scale: crate::config::BenchmarkScale::FULL,
-        };
-        let path = Path::from("rocks-reopen-test");
-        let instrumented = Arc::new(InstrumentedStore::new(Arc::new(InMemory::new())));
-        let store: Arc<dyn ObjectStore> = instrumented.clone();
-        let recorder = Arc::new(BenchmarkMetricsRecorder::new());
-        let db = open_database(
-            path.clone(),
-            Arc::clone(&store),
-            &suite,
-            &slate_settings,
-            Arc::clone(&recorder),
-        )
-        .await?;
-        populate_dataset(
-            Arc::clone(&db),
-            DatasetLoadSpec::new("slatedb", 8, 16, 64, 1.0, false),
-            DatasetLoadMetrics::new(instrumented.metrics(), recorder),
-        )
-        .await?;
-        db.close().await?;
-
-        let (first, before_overwrite, initial_overwrite_size) = execute_rocks_variant(
-            &variant(overwrite),
-            &path,
-            Arc::clone(&store),
-            instrumented.metrics(),
-            false,
-            &args,
-        )
-        .await?;
-        let (second, before_read, initial_read_size) = execute_rocks_variant(
-            &variant(random_read),
-            &path,
-            store,
-            instrumented.metrics(),
-            false,
-            &args,
-        )
-        .await?;
-
-        assert!(first.application.successful_operations > 0);
-        assert!(second.application.successful_operations > 0);
-        assert_eq!(second.application.errors, 0);
-        assert_ne!(
-            before_overwrite.lsm_digest_sha256,
-            before_read.lsm_digest_sha256
-        );
-        assert!(initial_overwrite_size > 0);
-        assert_eq!(first.storage.database_size_bytes, initial_read_size);
-        Ok(())
+        .is_none());
     }
 }

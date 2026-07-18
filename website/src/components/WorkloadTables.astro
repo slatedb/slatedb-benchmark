@@ -1,0 +1,95 @@
+---
+import MetricTable from './MetricTable.astro';
+import type {
+  DistributionSummary,
+  LatencySummary,
+  RateSummary,
+  ThroughputSummary,
+  WorkloadResult,
+} from '../lib/results';
+
+interface Props {
+  result: WorkloadResult;
+}
+
+const { result } = Astro.props;
+const statisticColumns = ['avg', 'p50', 'p95', 'p99', 'p99.9', 'min', 'max'];
+const rateColumns = ['total', 'avg/s', 'p50/s', 'p95/s', 'p99/s', 'p99.9/s', 'min/s', 'max/s'];
+const throughputColumns = ['total GiB', 'avg MiB/s', 'p50', 'p95', 'p99', 'p99.9', 'min', 'max'];
+const number = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 });
+const compact = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 2 });
+const apiOrder = ['get', 'put', 'delete', 'scan', 'write', 'flush', 'transaction.get', 'transaction.put', 'transaction.commit', 'durable'];
+const objectStoreOrder = ['GET', 'PUT', 'HEAD', 'DELETE', 'POST', 'OTHER'];
+const ordered = <T,>(values: Record<string, T>, order = apiOrder) => Object.entries(values).sort(([left], [right]) => {
+  const leftIndex = order.indexOf(left);
+  const rightIndex = order.indexOf(right);
+  if (leftIndex === -1 && rightIndex === -1) return left.localeCompare(right);
+  if (leftIndex === -1) return 1;
+  if (rightIndex === -1) return -1;
+  return leftIndex - rightIndex;
+});
+const rateValues = (value: RateSummary) => [
+  compact.format(value.total),
+  compact.format(value.avg_per_second),
+  compact.format(value.p50_per_second),
+  compact.format(value.p95_per_second),
+  compact.format(value.p99_per_second),
+  compact.format(value.p999_per_second),
+  compact.format(value.min_per_second),
+  compact.format(value.max_per_second),
+];
+const throughputValues = (value: ThroughputSummary) => {
+  const mib = (bytes: number) => number.format(bytes / 1024 / 1024);
+  return [
+    number.format(value.total_bytes / 1024 / 1024 / 1024),
+    mib(value.avg_bytes_per_second),
+    mib(value.p50_bytes_per_second),
+    mib(value.p95_bytes_per_second),
+    mib(value.p99_bytes_per_second),
+    mib(value.p999_bytes_per_second),
+    mib(value.min_bytes_per_second),
+    mib(value.max_bytes_per_second),
+  ];
+};
+const latencyValues = (value: LatencySummary) => {
+  const ms = (nanoseconds: number) => number.format(nanoseconds / 1_000_000);
+  return [ms(value.avg_ns), ms(value.p50_ns), ms(value.p95_ns), ms(value.p99_ns), ms(value.p999_ns), ms(value.min_ns), ms(value.max_ns)];
+};
+const distributionValues = (value: DistributionSummary, divisor = 1) => [
+  number.format(value.avg / divisor),
+  number.format(value.p50 / divisor),
+  number.format(value.p95 / divisor),
+  number.format(value.p99 / divisor),
+  number.format(value.p999 / divisor),
+  number.format(value.min / divisor),
+  number.format(value.max / divisor),
+];
+
+const applicationOperations = ordered(result.application.operations).map(([label, value]) => ({ label, values: rateValues(value) }));
+const applicationThroughput = ordered(result.application.throughput).map(([label, value]) => ({ label, values: throughputValues(value) }));
+const applicationLatency = ordered(result.application.latency).map(([label, value]) => ({ label, values: latencyValues(value) }));
+const objectRequests = ordered(result.object_store.requests, objectStoreOrder).map(([label, value]) => ({ label, values: rateValues(value) }));
+const objectThroughput = ordered(result.object_store.throughput, objectStoreOrder).map(([label, value]) => ({ label, values: throughputValues(value) }));
+const process = [
+  { label: 'CPU utilization (cores)', values: distributionValues(result.process.cpu_cores) },
+  { label: 'RSS (GiB)', values: distributionValues(result.process.rss_bytes, 1024 ** 3) },
+];
+const machine = [
+  { label: 'CPU (%)', values: distributionValues(result.machine.cpu_percent) },
+  { label: 'RSS (GiB)', values: distributionValues(result.machine.rss_bytes, 1024 ** 3) },
+  { label: 'Network receive (MiB/s)', values: distributionValues(result.machine.network_receive_bytes_per_second, 1024 ** 2) },
+  { label: 'Network send (MiB/s)', values: distributionValues(result.machine.network_send_bytes_per_second, 1024 ** 2) },
+  { label: 'Disk read (MiB/s)', values: distributionValues(result.machine.disk_read_bytes_per_second, 1024 ** 2) },
+  { label: 'Disk write (MiB/s)', values: distributionValues(result.machine.disk_write_bytes_per_second, 1024 ** 2) },
+  { label: 'Disk read ops/s', values: distributionValues(result.machine.disk_read_operations_per_second) },
+  { label: 'Disk write ops/s', values: distributionValues(result.machine.disk_write_operations_per_second) },
+];
+---
+
+<MetricTable title="Application operations" firstColumn="API" columns={rateColumns} rows={applicationOperations} />
+<MetricTable title="Application throughput" firstColumn="API" columns={throughputColumns} rows={applicationThroughput} />
+<MetricTable title="Application latency (ms)" firstColumn="API" columns={statisticColumns} rows={applicationLatency} />
+<MetricTable title="Object-store requests" firstColumn="Method" columns={rateColumns} rows={objectRequests} />
+<MetricTable title="Object-store throughput" firstColumn="Method" columns={throughputColumns} rows={objectThroughput} />
+<MetricTable title="Process statistics" firstColumn="Metric" columns={statisticColumns} rows={process} codeLabels={false} />
+<MetricTable title="Machine statistics" firstColumn="Metric" columns={statisticColumns} rows={machine} codeLabels={false} />

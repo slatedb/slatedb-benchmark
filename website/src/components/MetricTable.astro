@@ -1,0 +1,44 @@
+---
+interface Row {
+  label: string;
+  values: string[];
+}
+
+interface Props {
+  title: string;
+  firstColumn: string;
+  columns: string[];
+  rows: Row[];
+  codeLabels?: boolean;
+}
+
+const { title, firstColumn, columns, rows, codeLabels = true } = Astro.props;
+---
+
+<section class="metric-section">
+  <div class="section-heading">
+    <h2>{title}</h2>
+  </div>
+  {rows.length > 0 ? (
+    <div class="table-scroll">
+      <table class="metric-table">
+        <thead>
+          <tr>
+            <th scope="col">{firstColumn}</th>
+            {columns.map((column) => <th scope="col">{column}</th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr>
+              <th scope="row">{codeLabels ? <code>{row.label}</code> : row.label}</th>
+              {row.values.map((value) => <td>{value}</td>)}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  ) : (
+    <p class="empty-table">No calls were recorded.</p>
+  )}
+</section>

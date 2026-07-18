@@ -2,198 +2,168 @@ import { promises as fs } from 'node:fs';
 import type { Dirent } from 'node:fs';
 import path from 'node:path';
 
-export type BenchmarkResult = {
-  identity: {
-    slate_version: string;
-    slate_commit: string;
-    runner_version: string;
-    runner_commit: string;
-    timestamp: string;
-    suite: string;
-    workload: string;
-    variant: string;
-    mode: string;
-  };
-  elapsed_ns: number;
-  environment: Record<string, string | number>;
-  configuration: Record<string, unknown> & {
-    scale?: number;
-    clients: number;
-    warmup_ns: number;
-    measurement_ns: number;
+export type SourceIdentity = {
+  slate_version: string;
+  slate_commit: string;
+  runner_version: string;
+  runner_commit: string;
+  lockfile_sha256: string;
+};
+
+export type CheckpointReference = {
+  database_path: string;
+  checkpoint_id: string;
+  manifest_id: number;
+  lsm_digest_sha256: string;
+  live_sst_bytes: number;
+};
+
+export type ResolvedConfiguration = {
+  scale: number;
+  dataset: {
     record_count: number;
     key_bytes: number;
     value_bytes: number;
     value_compression_ratio: number;
-    block_cache_bytes: number | null;
-    metadata_cache_bytes: number | null;
-    object_store_cache_bytes: number | null;
-    sst_block_bytes: number | null;
-    slate_settings: Record<string, unknown>;
-    build_profile: string;
-    enabled_features: string[];
   };
-  application: Record<string, unknown> & {
-    successful_operations: number;
-    read_hits: number | null;
-    read_misses: number | null;
-    background_writer_target_mib_per_second: number | null;
-    background_writer_achieved_mib_per_second: number | null;
-    payload_mib_per_second: number;
-    errors: number;
-    return_latency: Latency;
-    return_latency_by_operation: Record<string, Latency>;
-    api_latency: Record<string, Latency>;
+  caches: {
+    block_bytes: number;
+    metadata_bytes: number;
+    object_store_bytes: number;
   };
-  durability: Record<string, unknown> & {
-    lag: Latency | null;
-    final_flush_drain_ns: number | null;
-    durable_ops_per_second: number | null;
+  task: {
+    task: string;
+    clients: number;
+    warmup_ms: number;
+    measurement_ms: number;
+    initial_state: string;
+    key_selection: string;
+    operation_mix: Record<string, number>;
+    scan_limit: number | null;
+    transaction_hot_keys: number | null;
+    transaction_reads: number | null;
+    transaction_updates: number | null;
   };
-  resources: Record<string, unknown>;
-  storage: Record<string, unknown> & {
-    database_size_bytes: number;
-    average_database_size_bytes: number;
-    object_store?: ObjectStoreMetrics;
-    object_store_operations?: Record<string, number>;
-    object_store_requests?: Record<string, number>;
-    object_store_successful_requests?: Record<string, number>;
-    object_store_request_errors?: Record<string, number>;
-    object_store_client_errors?: Record<string, number>;
-    object_store_server_errors?: Record<string, number>;
-    object_store_transport_errors?: Record<string, number>;
-    object_store_errors?: number;
-    bytes_read?: number;
-    bytes_written?: number;
-    object_store_operation_bytes_read?: number;
-    object_store_operation_bytes_written?: number;
-  };
-  initial_state: Record<string, unknown>;
-  source_files: { histograms: string; timeseries: string };
+  slate_settings: Record<string, unknown>;
+  build_profile: string;
+  enabled_features: string[];
 };
 
-export type ObjectStoreMetrics = {
-  operations: Record<string, number>;
-  requests: Record<string, number>;
-  successful_requests: Record<string, number>;
-  request_errors: Record<string, number>;
-  client_errors: Record<string, number>;
-  server_errors: Record<string, number>;
-  transport_errors: Record<string, number>;
-  errors: number;
-  bytes_read: number;
-  bytes_written: number;
-  operation_bytes_read: number;
-  operation_bytes_written: number;
-};
-
-export function objectStoreMetrics(storage: BenchmarkResult['storage']): ObjectStoreMetrics {
-  return storage.object_store ?? {
-    operations: storage.object_store_operations ?? storage.object_store_requests ?? {},
-    requests: storage.object_store_requests ?? {},
-    successful_requests: storage.object_store_successful_requests ?? {},
-    request_errors: storage.object_store_request_errors ?? {},
-    client_errors: storage.object_store_client_errors ?? {},
-    server_errors: storage.object_store_server_errors ?? {},
-    transport_errors: storage.object_store_transport_errors ?? {},
-    errors: storage.object_store_errors ?? 0,
-    bytes_read: storage.bytes_read ?? 0,
-    bytes_written: storage.bytes_written ?? 0,
-    operation_bytes_read: storage.object_store_operation_bytes_read ?? storage.bytes_read ?? 0,
-    operation_bytes_written: storage.object_store_operation_bytes_written ?? storage.bytes_written ?? 0,
+export type PreparationResult = {
+  status: 'ok';
+  task: 'bulk-load' | 'full-compaction';
+  golden_id: string;
+  timestamp: string;
+  source: SourceIdentity;
+  configuration: ResolvedConfiguration;
+  source_checkpoint: CheckpointReference | null;
+  checkpoint: CheckpointReference;
+  dataset: {
+    record_count: number;
+    key_bytes: number;
+    value_bytes: number;
+    logical_bytes: number;
+    live_sst_bytes: number;
   };
-}
-
-export type PricingProvider = {
-  id: string;
-  name: string;
-  region: string;
-  region_id: string;
-  storage_class: string;
-  source: string;
-  storage_per_gib_month: number;
-  requests_per_1000: Record<string, number>;
 };
 
-export type PricingTable = {
-  currency: string;
-  units: { gib_bytes: number; month_days: number };
-  providers: PricingProvider[];
+export type RateSummary = {
+  total: number;
+  avg_per_second: number;
+  p50_per_second: number;
+  p95_per_second: number;
+  p99_per_second: number;
+  p999_per_second: number;
+  min_per_second: number;
+  max_per_second: number;
 };
 
-export type Latency = {
+export type ThroughputSummary = {
+  total_bytes: number;
+  avg_bytes_per_second: number;
+  p50_bytes_per_second: number;
+  p95_bytes_per_second: number;
+  p99_bytes_per_second: number;
+  p999_bytes_per_second: number;
+  min_bytes_per_second: number;
+  max_bytes_per_second: number;
+};
+
+export type LatencySummary = {
   count: number;
+  avg_ns: number;
   p50_ns: number;
   p95_ns: number;
   p99_ns: number;
   p999_ns: number;
+  min_ns: number;
   max_ns: number;
 };
 
-export type ApplicationWindow = {
-  start_offset_ns: number;
-  duration_ns: number;
-  completed_operations: number;
-  successful_operations: number;
-  errors: number;
-  read_payload_bytes: number;
-  write_payload_bytes: number;
-  read_hits: number;
-  read_misses: number;
-  return_latency: Latency | null;
-  return_latency_by_operation: Record<string, Latency>;
-  api_latency: Record<string, Latency>;
-  batch_latency: Latency | null;
+export type DistributionSummary = {
+  avg: number;
+  p50: number;
+  p95: number;
+  p99: number;
+  p999: number;
+  min: number;
+  max: number;
 };
 
-export type TimeseriesSample = {
-  offset_ns: number;
-  network_bytes_sent: number;
-  network_bytes_received: number;
+export type WorkloadResult = {
+  status: 'ok';
+  task: string;
+  golden_id: string;
+  session: string;
+  timestamp: string;
+  source: SourceIdentity;
+  environment: Record<string, string | number>;
+  configuration: ResolvedConfiguration;
+  initial_state: {
+    kind: 'golden' | 'empty';
+    checkpoint_id: string | null;
+    manifest_id: number | null;
+    lsm_digest_sha256: string;
+  };
+  client_measurement_ns: number;
+  durability_drain_ns: number;
+  recorded_interval_ns: number;
+  application: {
+    operations: Record<string, RateSummary>;
+    throughput: Record<string, ThroughputSummary>;
+    latency: Record<string, LatencySummary>;
+  };
+  object_store: {
+    requests: Record<string, RateSummary>;
+    throughput: Record<string, ThroughputSummary>;
+  };
+  process: {
+    cpu_cores: DistributionSummary;
+    rss_bytes: DistributionSummary;
+  };
+  machine: {
+    cpu_percent: DistributionSummary;
+    rss_bytes: DistributionSummary;
+    network_receive_bytes_per_second: DistributionSummary;
+    network_send_bytes_per_second: DistributionSummary;
+    disk_read_bytes_per_second: DistributionSummary;
+    disk_write_bytes_per_second: DistributionSummary;
+    disk_read_operations_per_second: DistributionSummary;
+    disk_write_operations_per_second: DistributionSummary;
+  };
 };
 
-export type MetricSeries = {
-  name: string;
-  description: string;
-  labels: Record<string, string>;
-  value_type: 'counter' | 'gauge' | 'up_down_counter' | 'histogram';
-  boundaries: number[] | null;
-  values: Array<number | Record<string, unknown> | null>;
-};
-
-export type DurabilityWindow = {
-  start_offset_ns: number;
-  duration_ns: number;
-  writes_made_durable: number;
-  durability_lag: Latency | null;
-};
-
-export type BenchmarkTimeseries = {
-  interval_ns: number;
-  samples: TimeseriesSample[];
-  application_windows: ApplicationWindow[];
-  durability_windows: DurabilityWindow[] | null;
-  slatedb_metrics: MetricSeries[];
-};
-
-export type ResultRoute = {
+export type ResultRoute<T> = {
   version: string;
-  suite: string;
-  workload: string;
-  variant: string;
-  result: BenchmarkResult;
-  timeseries: BenchmarkTimeseries;
+  kind: 'preparation' | 'workload';
+  name: string;
+  result: T;
 };
 
 const repoRoot = path.resolve(process.cwd(), '..');
-const resultsRoot = process.env.BENCHMARK_RESULTS_ROOT
+export const resultsRoot = process.env.BENCHMARK_RESULTS_ROOT
   ? path.resolve(process.env.BENCHMARK_RESULTS_ROOT)
   : path.join(repoRoot, 'results');
-const pricingFile = path.join(repoRoot, 'schema', 'prices.json');
-
-export async function loadPricing(): Promise<PricingTable> {
-  return JSON.parse(await fs.readFile(pricingFile, 'utf8')) as PricingTable;
-}
 
 async function walk(directory: string): Promise<string[]> {
   let entries: Dirent<string>[];
@@ -212,22 +182,27 @@ async function walk(directory: string): Promise<string[]> {
   return values.flat();
 }
 
-export async function loadResults(): Promise<ResultRoute[]> {
-  const files = (await walk(resultsRoot)).filter((file) => path.basename(file) === 'result.json');
+export async function loadPreparationResults(): Promise<ResultRoute<PreparationResult>[]> {
+  return loadTaskResults<PreparationResult>('preparation');
+}
+
+export async function loadWorkloadResults(): Promise<ResultRoute<WorkloadResult>[]> {
+  return loadTaskResults<WorkloadResult>('workload');
+}
+
+async function loadTaskResults<T>(kind: 'preparation' | 'workload'): Promise<ResultRoute<T>[]> {
+  const files = (await walk(resultsRoot)).filter((file) => {
+    const relative = path.relative(resultsRoot, file).split(path.sep);
+    return relative.length === 4 && relative[1] === kind && relative[3] === 'result.json';
+  });
   const routes = await Promise.all(
     files.map(async (file) => {
-      const result = JSON.parse(await fs.readFile(file, 'utf8')) as BenchmarkResult;
-      const directory = path.dirname(file);
-      const timeseries = JSON.parse(
-        await fs.readFile(path.join(directory, result.source_files.timeseries), 'utf8'),
-      ) as BenchmarkTimeseries;
+      const [version, , name] = path.relative(resultsRoot, file).split(path.sep);
       return {
-        version: result.identity.slate_version,
-        suite: result.identity.suite,
-        workload: result.identity.workload,
-        variant: result.identity.variant,
-        result,
-        timeseries,
+        version,
+        kind,
+        name,
+        result: JSON.parse(await fs.readFile(file, 'utf8')) as T,
       };
     }),
   );
@@ -236,32 +211,50 @@ export async function loadResults(): Promise<ResultRoute[]> {
 
 export async function rawResultFiles() {
   const files = (await walk(resultsRoot)).filter((file) =>
-    ['result.json', 'histograms.json', 'timeseries.json'].includes(path.basename(file)),
+    ['result.json', 'run.json'].includes(path.basename(file)),
   );
-  const results = await Promise.all(
+  return Promise.all(
     files.map(async (file) => ({
       path: path.relative(resultsRoot, file).split(path.sep).join('/'),
       body: await fs.readFile(file),
     })),
   );
-  return [...results, { path: 'prices.json', body: await fs.readFile(pricingFile) }];
 }
 
-export function latestStable(routes: ResultRoute[]): ResultRoute | undefined {
+export function latestStable<T>(routes: ResultRoute<T>[]): ResultRoute<T> | undefined {
   return routes.find((route) => /^\d+\.\d+\.\d+$/.test(route.version)) ?? routes[0];
 }
 
-export function routeHref(route: Pick<ResultRoute, 'version' | 'suite' | 'workload' | 'variant'>) {
-  return `/${route.version}/${route.suite}/${route.workload}/${route.variant}/`;
+export function routeHref(route: Pick<ResultRoute<unknown>, 'version' | 'kind' | 'name'>) {
+  return `/${route.version}/${route.kind}/${route.name}/`;
 }
 
-function compareRoutes(left: ResultRoute, right: ResultRoute) {
-  return (
-    compareVersion(right.version, left.version) ||
-    left.suite.localeCompare(right.suite) ||
-    left.workload.localeCompare(right.workload) ||
-    left.variant.localeCompare(right.variant, undefined, { numeric: true })
-  );
+function compareRoutes(left: ResultRoute<unknown>, right: ResultRoute<unknown>) {
+  return compareVersion(right.version, left.version) || compareTask(left.name, right.name);
+}
+
+const taskOrder = [
+  'bulk-load',
+  'full-compaction',
+  'idle',
+  'point-read-uniform',
+  'point-read-skewed',
+  'point-read-missing',
+  'read-heavy',
+  'balanced',
+  'update-heavy',
+  'range-scan',
+  'sustained-ingest',
+  'transaction-contention',
+];
+
+function compareTask(left: string, right: string) {
+  const leftIndex = taskOrder.indexOf(left);
+  const rightIndex = taskOrder.indexOf(right);
+  if (leftIndex === -1 && rightIndex === -1) return left.localeCompare(right);
+  if (leftIndex === -1) return 1;
+  if (rightIndex === -1) return -1;
+  return leftIndex - rightIndex;
 }
 
 function compareVersion(left: string, right: string) {

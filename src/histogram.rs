@@ -1,8 +1,5 @@
-use crate::model::{EncodedHistogram, HistogramsFile, LatencySummary};
+use crate::model::LatencySummary;
 use anyhow::{Context, Result};
-use base64::engine::general_purpose::STANDARD;
-use base64::Engine;
-use hdrhistogram::serialization::{Serializer, V2DeflateSerializer};
 use hdrhistogram::Histogram;
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -61,26 +58,14 @@ impl LatencyHistogram {
         }
         LatencySummary {
             count: self.len(),
+            avg_ns: self.inner.mean() * 1_000.0,
             p50_ns: self.inner.value_at_quantile(0.50) * 1_000,
             p95_ns: self.inner.value_at_quantile(0.95) * 1_000,
             p99_ns: self.inner.value_at_quantile(0.99) * 1_000,
             p999_ns: self.inner.value_at_quantile(0.999) * 1_000,
+            min_ns: self.inner.min() * 1_000,
             max_ns: self.inner.max() * 1_000,
         }
-    }
-
-    pub fn encode(&self) -> Result<EncodedHistogram> {
-        let mut bytes = Vec::new();
-        V2DeflateSerializer::new()
-            .serialize(&self.inner, &mut bytes)
-            .context("encoding HDR histogram")?;
-        Ok(EncodedHistogram {
-            unit: "microseconds".to_string(),
-            count: self.len(),
-            min: if self.is_empty() { 0 } else { self.inner.min() },
-            max: self.inner.max(),
-            data: STANDARD.encode(bytes),
-        })
     }
 }
 
@@ -92,13 +77,6 @@ pub struct HistogramSet {
 impl HistogramSet {
     pub fn record(&mut self, name: impl Into<String>, duration: Duration) {
         self.values.entry(name.into()).or_default().record(duration);
-    }
-
-    pub fn record_n(&mut self, name: impl Into<String>, duration: Duration, count: u64) {
-        self.values
-            .entry(name.into())
-            .or_default()
-            .record_n(duration, count);
     }
 
     pub fn merge(&mut self, other: &Self) -> Result<()> {
@@ -124,10 +102,6 @@ impl HistogramSet {
         self.values.insert(name.into(), histogram);
     }
 
-    pub fn get(&self, name: &str) -> Option<&LatencyHistogram> {
-        self.values.get(name)
-    }
-
     pub fn summaries_with_prefix(&self, prefix: &str) -> BTreeMap<String, LatencySummary> {
         self.values
             .iter()
@@ -136,17 +110,5 @@ impl HistogramSet {
                     .map(|short| (short.to_string(), histogram.summary()))
             })
             .collect()
-    }
-
-    pub fn to_file(&self) -> Result<HistogramsFile> {
-        let mut histograms = BTreeMap::new();
-        for (name, histogram) in &self.values {
-            histograms.insert(name.clone(), histogram.encode()?);
-        }
-        Ok(HistogramsFile {
-            encoding: "hdrhistogram-v2-deflate-base64".to_string(),
-            significant_digits: SIGNIFICANT_DIGITS,
-            histograms,
-        })
     }
 }

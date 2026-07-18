@@ -1,0 +1,63 @@
+---
+import Base from '../../../layouts/Base.astro';
+import ConfigurationTable from '../../../components/ConfigurationTable.astro';
+import ResultContext from '../../../components/ResultContext.astro';
+import SiteHeader from '../../../components/SiteHeader.astro';
+import WorkloadTables from '../../../components/WorkloadTables.astro';
+import {
+  loadPreparationResults,
+  loadWorkloadResults,
+  type ResultRoute,
+  type WorkloadResult,
+} from '../../../lib/results';
+
+export async function getStaticPaths() {
+  const workloads = await loadWorkloadResults();
+  const routes = [...await loadPreparationResults(), ...workloads];
+  return workloads.map((route) => ({
+    params: { version: route.version, name: route.name },
+    props: { route, routes },
+  }));
+}
+
+const { route, routes } = Astro.props as {
+  route: ResultRoute<WorkloadResult>;
+  routes: ResultRoute<unknown>[];
+};
+const result = route.result;
+---
+
+<Base title={`${route.name} · SlateDB ${route.version}`}>
+  <SiteHeader scaled={result.configuration.scale !== 1} />
+  <main class="result-shell">
+    <ResultContext
+      version={route.version}
+      kind="workload"
+      name={route.name}
+      goldenId={result.golden_id}
+      source={result.source}
+      timestamp={result.timestamp}
+      routes={routes}
+    />
+    <article class="result-content">
+      <header class="page-heading">
+        <p class="eyebrow">Workload</p>
+        <h1>{route.name}</h1>
+        <dl class="heading-metadata">
+          <div><dt>Clients</dt><dd>{result.configuration.task.clients}</dd></div>
+          <div><dt>Warmup</dt><dd>{result.configuration.task.warmup_ms / 1000}s</dd></div>
+          <div><dt>Recorded interval</dt><dd>{(result.recorded_interval_ns / 1e9).toLocaleString('en-US', { maximumFractionDigits: 2 })}s</dd></div>
+          <div><dt>Durability drain</dt><dd>{(result.durability_drain_ns / 1e9).toLocaleString('en-US', { maximumFractionDigits: 2 })}s</dd></div>
+          <div><dt>Initial state</dt><dd>{result.initial_state.kind}</dd></div>
+        </dl>
+      </header>
+
+      <WorkloadTables result={result} />
+
+      <section class="metric-section">
+        <div class="section-heading"><h2>Configuration</h2></div>
+        <ConfigurationTable configuration={result.configuration} />
+      </section>
+    </article>
+  </main>
+</Base>
