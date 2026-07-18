@@ -296,7 +296,7 @@ export function routeHref(route: Pick<ResultRoute<unknown>, 'version' | 'kind' |
 }
 
 function compareRoutes(left: ResultRoute<unknown>, right: ResultRoute<unknown>) {
-  return compareVersion(right.version, left.version) || compareTask(left.name, right.name);
+  return compareVersions(right.version, left.version) || compareTask(left.name, right.name);
 }
 
 export const workloadNames = [
@@ -327,12 +327,44 @@ function compareTask(left: string, right: string) {
   return leftIndex - rightIndex;
 }
 
-function compareVersion(left: string, right: string) {
-  const a = left.split(/[.-]/).map((part) => Number(part) || 0);
-  const b = right.split(/[.-]/).map((part) => Number(part) || 0);
-  for (let index = 0; index < Math.max(a.length, b.length); index += 1) {
-    const difference = (a[index] || 0) - (b[index] || 0);
+const versionPattern = /^(\d+)\.(\d+)\.(\d+)(?:[.-](.+))?$/;
+
+export function versionLabel(version: string) {
+  return versionPattern.test(version) ? version : `0.0.0-${version}`;
+}
+
+export function compareVersions(left: string, right: string) {
+  const a = versionLabel(left).match(versionPattern)!;
+  const b = versionLabel(right).match(versionPattern)!;
+  for (let index = 1; index <= 3; index += 1) {
+    const difference = Number(a[index]) - Number(b[index]);
     if (difference !== 0) return difference;
   }
+  const prerelease = comparePrerelease(a[4], b[4]);
+  if (prerelease !== 0) return prerelease;
   return left.localeCompare(right);
+}
+
+function comparePrerelease(left: string | undefined, right: string | undefined) {
+  if (left === right) return 0;
+  if (left === undefined) return 1;
+  if (right === undefined) return -1;
+  const a = left.split('.');
+  const b = right.split('.');
+  for (let index = 0; index < Math.max(a.length, b.length); index += 1) {
+    if (a[index] === undefined) return -1;
+    if (b[index] === undefined) return 1;
+    const aNumber = /^\d+$/.test(a[index]);
+    const bNumber = /^\d+$/.test(b[index]);
+    if (aNumber && bNumber) {
+      const difference = Number(a[index]) - Number(b[index]);
+      if (difference !== 0) return difference;
+    } else if (aNumber !== bNumber) {
+      return aNumber ? -1 : 1;
+    } else {
+      const difference = a[index].localeCompare(b[index]);
+      if (difference !== 0) return difference;
+    }
+  }
+  return 0;
 }

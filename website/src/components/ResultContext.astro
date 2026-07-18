@@ -1,5 +1,11 @@
 ---
-import { routeHref, type ResultRoute, type SourceIdentity } from '../lib/results';
+import {
+  compareVersions,
+  routeHref,
+  versionLabel,
+  type ResultRoute,
+  type SourceIdentity,
+} from '../lib/results';
 
 interface Props {
   version: string;
@@ -12,10 +18,13 @@ interface Props {
 }
 
 const { version, kind, name, goldenId, source, timestamp, routes } = Astro.props;
-const versions = [...new Set(routes.map((route) => route.version))];
+const versions = [...new Set(routes.map((route) => route.version))]
+  .sort((left, right) => compareVersions(right, left));
 const versionRoutes = routes.filter((route) => route.version === version);
 const preparations = versionRoutes.filter((route) => route.kind === 'preparation');
-const workloads = versionRoutes.filter((route) => route.kind === 'workload');
+const workloads = versionRoutes
+  .filter((route) => route.kind === 'workload')
+  .sort((left, right) => right.name.localeCompare(left.name));
 const rawResult = `/raw/${version}/${kind}/${name}/result.json`;
 ---
 
@@ -27,7 +36,11 @@ const rawResult = `/raw/${version}/${kind}/${name}/result.json`;
         const target = routes.find((route) => route.version === candidate && route.name === name)
           ?? routes.find((route) => route.version === candidate && route.kind === kind)
           ?? routes.find((route) => route.version === candidate);
-        return target && <a class:list={{ current: candidate === version }} href={routeHref(target)}>{candidate}</a>;
+        return target && (
+          <a class:list={{ current: candidate === version }} href={routeHref(target)}>
+            {versionLabel(candidate)}
+          </a>
+        );
       })}
     </nav>
   </div>
