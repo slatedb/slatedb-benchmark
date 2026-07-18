@@ -19,10 +19,9 @@ preparation phase and workload has one published configuration. The release
 does not vary clients, values, caches, machines, object stores, or SlateDB
 settings within a preparation phase or workload.
 
-The suite uses these SlateDB settings unless a preparation phase or workload
-says otherwise:
+The suite uses the SlateDB release defaults unless a preparation phase or
+workload says otherwise. It configures these caches:
 
-- 100 ms flush interval
 - 4 GiB block cache
 - 512 MiB metadata/index cache
 - 16 GiB local object-store cache
