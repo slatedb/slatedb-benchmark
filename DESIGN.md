@@ -280,9 +280,9 @@ after changing the SlateDB commit or preparation configuration.
 | `publish` | Commit results when the `publish` input is `true` |
 | `cleanup` | Delete workload database clones after outputs are collected |
 
-The workload matrix uses one WarpBuild machine per task and
-`max-parallel: 4`. All workload jobs share Tigris, so `run.json` records that
-limit. Each workload writes to
+The workload matrix uses one WarpBuild machine per task and runs up to four
+tasks at once. Act runs one task at a time because its jobs share the local
+checkout. `run.json` records the applied limit. Each workload writes to
 `sessions/<github.run_id>/<workload>/{series,result}.json`.
 
 ```text

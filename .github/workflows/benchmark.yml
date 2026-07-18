@@ -176,7 +176,7 @@ jobs:
     environment: benchmark
     strategy:
       fail-fast: false
-      max-parallel: 4
+      max-parallel: ${{ github.actor == 'nektos/act' && 1 || 4 }}
       matrix:
         task:
           - idle
@@ -263,7 +263,7 @@ jobs:
             --output .runs/release/results \
             --golden "$GOLDEN_ID" \
             --started-at "$BENCHMARK_STARTED_AT" \
-            --max-parallel 4
+            --max-parallel "${{ github.actor == 'nektos/act' && 1 || 4 }}"
       - uses: actions/upload-artifact@v4
         with:
           name: benchmark-results
