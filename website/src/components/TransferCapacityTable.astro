@@ -1,0 +1,61 @@
+---
+import type { TransferCapacity } from '../lib/results';
+
+interface Props {
+  capacity: TransferCapacity;
+}
+
+const { capacity } = Astro.props;
+const bytes = (value: number) => {
+  const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+  let amount = value;
+  let index = 0;
+  while (amount >= 1024 && index < units.length - 1) {
+    amount /= 1024;
+    index += 1;
+  }
+  return `${amount.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${units[index]}`;
+};
+const number = (value: number) => value.toLocaleString('en-US', {
+  maximumFractionDigits: 2,
+});
+const note = [
+  capacity.runner_type,
+  `${capacity.parallel_objects} parallel objects`,
+  `${capacity.max_concurrent_requests} maximum S3 requests`,
+  `${bytes(capacity.warmup_bytes)} warmup`,
+].join(' · ');
+---
+
+<section class="metric-section">
+  <div class="section-heading">
+    <h2>{capacity.object_store} transfer capacity</h2>
+    <p class="section-note">{note}</p>
+  </div>
+  <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th scope="col">Transfer</th>
+          <th scope="col">Capacity</th>
+          <th scope="col">Elapsed</th>
+          <th scope="col">Measured data</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th scope="row">Upload</th>
+          <td>{number(capacity.upload.mib_per_second)} MiB/s</td>
+          <td>{number(capacity.upload.elapsed_seconds)}s</td>
+          <td>{bytes(capacity.measured_bytes)}</td>
+        </tr>
+        <tr>
+          <th scope="row">Download</th>
+          <td>{number(capacity.download.mib_per_second)} MiB/s</td>
+          <td>{number(capacity.download.elapsed_seconds)}s</td>
+          <td>{bytes(capacity.measured_bytes)}</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>

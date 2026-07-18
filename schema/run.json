@@ -13,6 +13,7 @@
     "preparation_runner_commits",
     "resolved_configuration",
     "max_parallel",
+    "transfer_capacity",
     "results"
   ],
   "properties": {
@@ -70,6 +71,42 @@
       "additionalProperties": { "type": "object" }
     },
     "max_parallel": { "type": "integer", "minimum": 1 },
+    "transfer_capacity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "timestamp",
+        "scale",
+        "runner_type",
+        "object_store",
+        "endpoint",
+        "region",
+        "parallel_objects",
+        "requests_per_process",
+        "max_concurrent_requests",
+        "warmup_bytes",
+        "measured_bytes",
+        "upload",
+        "download"
+      ],
+      "properties": {
+        "status": { "const": "ok" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "scale": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+        "runner_type": { "type": "string", "minLength": 1 },
+        "object_store": { "type": "string", "minLength": 1 },
+        "endpoint": { "type": "string", "minLength": 1 },
+        "region": { "type": "string", "minLength": 1 },
+        "parallel_objects": { "const": 4 },
+        "requests_per_process": { "const": 8 },
+        "max_concurrent_requests": { "const": 32 },
+        "warmup_bytes": { "type": "integer", "minimum": 1 },
+        "measured_bytes": { "type": "integer", "minimum": 1 },
+        "upload": { "$ref": "#/$defs/transferMeasurement" },
+        "download": { "$ref": "#/$defs/transferMeasurement" }
+      }
+    },
     "results": {
       "type": "object",
       "minProperties": 22,
@@ -80,6 +117,17 @@
       "additionalProperties": {
         "type": "string",
         "pattern": "^[0-9a-f]{64}$"
+      }
+    }
+  },
+  "$defs": {
+    "transferMeasurement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["elapsed_seconds", "mib_per_second"],
+      "properties": {
+        "elapsed_seconds": { "type": "number", "exclusiveMinimum": 0 },
+        "mib_per_second": { "type": "number", "exclusiveMinimum": 0 }
       }
     }
   }

@@ -164,13 +164,14 @@ API tables retain the names `transaction.get`, `transaction.put`, and
 
 ## Metrics
 
-The website shows seven tables: application operations, application throughput,
-application latency, object-store requests, object-store throughput, process
-statistics, and machine statistics. Workload rows expand to charts;
-preparation pages keep tables only. Preparation pages also show checkpoint
-references and golden dataset metadata. Compaction omits the three empty
-application tables. The website omits rows with no calls and keeps zero values
-in rows that have calls. Values in the examples are illustrative.
+Each page shows the run's Tigris transfer capacity followed by seven task
+tables: application operations, application throughput, application latency,
+object-store requests, object-store throughput, process statistics, and
+machine statistics. Workload rows expand to charts; preparation pages keep
+tables only. Preparation pages also show checkpoint references and golden
+dataset metadata. Compaction omits the three empty application tables. The
+website omits rows with no calls and keeps zero values in rows that have calls.
+Values in the examples are illustrative.
 
 The runner counts operations and samples machine counters once per second. The
 workload recorders stay active through the durability drain, so totals and
@@ -188,6 +189,24 @@ process, and machine charts continue through durability drain and mark its
 start. Other charts include the row's published average as a horizontal
 reference. Chart data lives in a separate workload file and is fetched after
 page load.
+
+### Tigris transfer capacity
+
+One run-level probe measures aggregate upload and download capacity from a
+separate benchmark runner. Four transfers run in parallel, with eight
+multipart requests per transfer and 32 requests at most. Each direction uses
+8 GiB of warmup data followed by 32 GiB of measured data. Upload and download
+run separately. Files contain random bytes. The table reports aggregate MiB/s
+and elapsed time.
+
+| Transfer | Capacity | Elapsed | Measured data |
+| --- | ---: | ---: | ---: |
+| Upload | 684.0 MiB/s | 47.91s | 32 GiB |
+| Download | 294.1 MiB/s | 111.42s | 32 GiB |
+
+This probe describes the path through the runner, AWS CLI, network, and
+Tigris. It is context for the run, not a normalization factor for workload
+results.
 
 ### Application operations
 

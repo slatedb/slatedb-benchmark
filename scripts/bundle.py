@@ -2,6 +2,7 @@
 import argparse
 import hashlib
 import json
+import math
 import re
 import shutil
 from datetime import datetime, timezone
@@ -78,6 +79,40 @@ def read_series(path, result):
     return path
 
 
+def read_transfer_capacity(path, scale, environment):
+    with path.open(encoding="utf-8") as file:
+        result = json.load(file)
+    if result.get("status") != "ok":
+        raise ValueError(f"{path} does not contain a successful transfer probe")
+    if result.get("scale") != scale:
+        raise ValueError(f"{path} used a different scale")
+    for field in ("runner_type", "object_store", "endpoint", "region"):
+        if result.get(field) != environment[field]:
+            raise ValueError(f"{path} used a different {field.replace('_', ' ')}")
+    expected = {
+        "parallel_objects": 4,
+        "requests_per_process": 8,
+        "max_concurrent_requests": 32,
+        "warmup_bytes": 4 * max(1, math.ceil(2048 * scale)) * 1024 * 1024,
+        "measured_bytes": 4 * max(1, math.ceil(8192 * scale)) * 1024 * 1024,
+    }
+    for field, value in expected.items():
+        if result.get(field) != value:
+            raise ValueError(f"{path} has an invalid {field.replace('_', ' ')}")
+    for direction in ("upload", "download"):
+        measurement = result.get(direction)
+        if not isinstance(measurement, dict):
+            raise ValueError(f"{path} has no {direction} measurement")
+        for field in ("elapsed_seconds", "mib_per_second"):
+            value = measurement.get(field)
+            if not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+                raise ValueError(f"{path} has an invalid {direction} {field}")
+        expected_rate = result["measured_bytes"] / 1024 / 1024 / measurement["elapsed_seconds"]
+        if not math.isclose(measurement["mib_per_second"], expected_rate, rel_tol=1e-9):
+            raise ValueError(f"{path} has an inconsistent {direction} rate")
+    return result
+
+
 def write_json(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -141,6 +176,12 @@ def main():
         if result["configuration"]["scale"] != scale:
             raise ValueError(f"{task} used a different scale")
 
+    transfer_capacity = read_transfer_capacity(
+        args.input / "transfer-capacity" / "result.json",
+        scale,
+        workloads[WORKLOADS[0]]["environment"],
+    )
+
     destination = args.output / version
     if destination.exists():
         shutil.rmtree(destination)
@@ -171,6 +212,7 @@ def main():
         },
         "resolved_configuration": configurations,
         "max_parallel": args.max_parallel,
+        "transfer_capacity": transfer_capacity,
         "results": checksums,
     }
     write_json(destination / "run.json", manifest)

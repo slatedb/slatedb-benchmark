@@ -169,8 +169,50 @@ jobs:
             git restore Cargo.toml Cargo.lock
           fi
 
+  transfer-capacity:
+    needs: validate-golden
+    runs-on: warp-ubuntu-latest-x64-16x
+    timeout-minutes: 60
+    environment: benchmark
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install AWS CLI for act
+        if: ${{ env.ACT == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --silent --show-error \
+            https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip \
+            --output /tmp/awscliv2.zip
+          unzip -q /tmp/awscliv2.zip -d /tmp
+          sudo /tmp/aws/install
+      - name: Measure Tigris transfer capacity
+        shell: bash
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
+          AWS_REGION: auto
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
+          BENCHMARK_SCALE: ${{ inputs.scale }}
+          TIGRIS_BUCKET_PREFIX: ${{ vars.TIGRIS_BUCKET_PREFIX }}
+        run: |
+          set -euo pipefail
+          export AWS_ENDPOINT_URL_S3=${AWS_ENDPOINT_URL_S3:-https://t3.storage.dev}
+          export SLATEDB_BENCH_BUCKET=${SLATEDB_BENCH_BUCKET:-${TIGRIS_BUCKET_PREFIX}-slatedb}
+          export SLATEDB_BENCH_PREFIX=${SLATEDB_BENCH_PREFIX:-benchmark}
+          export SLATEDB_BENCH_REGION=${SLATEDB_BENCH_REGION:-fra}
+          export SLATEDB_BENCH_RUNNER_TYPE=${SLATEDB_BENCH_RUNNER_TYPE:-warp-ubuntu-latest-x64-16x}
+          ./scripts/transfer-capacity.sh .runs/transfer-capacity/result.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: transfer-capacity
+          path: .runs/transfer-capacity/result.json
+          if-no-files-found: error
+          overwrite: true
+
   workloads:
-    needs: [validate-golden, build]
+    needs: [validate-golden, build, transfer-capacity]
     runs-on: warp-ubuntu-latest-x64-16x
     timeout-minutes: 1440
     environment: benchmark
@@ -238,7 +280,7 @@ jobs:
           overwrite: true
 
   bundle:
-    needs: [validate-golden, workloads]
+    needs: [validate-golden, transfer-capacity, workloads]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -253,6 +295,10 @@ jobs:
           pattern: workload-*
           path: .runs/bundle/workload
           merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: transfer-capacity
+          path: .runs/bundle/transfer-capacity
       - name: Assemble release bundle
         env:
           BENCHMARK_STARTED_AT: ${{ needs.validate-golden.outputs.started_at }}
