@@ -190,7 +190,13 @@ export type WorkloadSeries = {
   application: {
     operations_per_second: Record<string, number[]>;
     bytes_per_second: Record<string, number[]>;
-    latency_ns: Record<string, (number | null)[]>;
+    latency_ns: Record<string, {
+      avg: (number | null)[];
+      p50: (number | null)[];
+      p95: (number | null)[];
+      p99: (number | null)[];
+      p999: (number | null)[];
+    }>;
     latency_histograms: Record<string, HistogramSeries>;
   };
   object_store: {

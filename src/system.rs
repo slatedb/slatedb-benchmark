@@ -1,9 +1,9 @@
 use crate::histogram::HistogramSet;
 use crate::instrumented_store::{StoreMetrics, StoreSnapshot};
 use crate::model::{
-    ApplicationMetrics, ApplicationSeries, DistributionSummary, Environment, MachineSeries,
-    MachineStatistics, ObjectStoreMetrics, ObjectStoreSeries, ProcessSeries, ProcessStatistics,
-    RateSummary, ThroughputSummary, WorkloadSeries,
+    ApplicationMetrics, ApplicationSeries, DistributionSummary, Environment, LatencyTimeSeries,
+    MachineSeries, MachineStatistics, ObjectStoreMetrics, ObjectStoreSeries, ProcessSeries,
+    ProcessStatistics, RateSummary, ThroughputSummary, WorkloadSeries,
 };
 use anyhow::{Context, Result};
 use slatedb_common::metrics::{
@@ -558,11 +558,33 @@ impl SampledMeasurement {
             .keys()
             .map(|name| {
                 let histogram_name = format!("api/{name}");
-                let values = self
+                let summaries = self
                     .latency_windows
                     .iter()
-                    .map(|window| window.histograms.average_ns(&histogram_name))
-                    .collect();
+                    .map(|window| window.histograms.summary(&histogram_name))
+                    .collect::<Vec<_>>();
+                let values = LatencyTimeSeries {
+                    avg: summaries
+                        .iter()
+                        .map(|summary| summary.as_ref().map(|value| value.avg_ns))
+                        .collect(),
+                    p50: summaries
+                        .iter()
+                        .map(|summary| summary.as_ref().map(|value| value.p50_ns as f64))
+                        .collect(),
+                    p95: summaries
+                        .iter()
+                        .map(|summary| summary.as_ref().map(|value| value.p95_ns as f64))
+                        .collect(),
+                    p99: summaries
+                        .iter()
+                        .map(|summary| summary.as_ref().map(|value| value.p99_ns as f64))
+                        .collect(),
+                    p999: summaries
+                        .iter()
+                        .map(|summary| summary.as_ref().map(|value| value.p999_ns as f64))
+                        .collect(),
+                };
                 (name.clone(), values)
             })
             .collect();
@@ -1244,11 +1266,18 @@ mod tests {
         assert!(series.object_store.requests_per_second["PUT"]
             .iter()
             .all(|value| *value == 0.0));
-        assert!(series.application.latency_ns["get"]
-            .iter()
-            .any(Option::is_some));
-        assert!(series.application.latency_ns["flush"]
-            .iter()
-            .any(Option::is_some));
+        for name in ["get", "flush"] {
+            let latency = &series.application.latency_ns[name];
+            for values in [
+                &latency.avg,
+                &latency.p50,
+                &latency.p95,
+                &latency.p99,
+                &latency.p999,
+            ] {
+                assert_eq!(values.len(), series.latency_elapsed_ns.len());
+                assert!(values.iter().any(Option::is_some));
+            }
+        }
     }
 }

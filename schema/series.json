@@ -35,7 +35,7 @@
       "properties": {
         "operations_per_second": { "$ref": "#/$defs/namedSeries" },
         "bytes_per_second": { "$ref": "#/$defs/namedSeries" },
-        "latency_ns": { "$ref": "#/$defs/namedOptionalSeries" },
+        "latency_ns": { "$ref": "#/$defs/namedLatencySeries" },
         "latency_histograms": {
           "type": "object",
           "additionalProperties": { "$ref": "#/$defs/histogram" }
@@ -112,17 +112,30 @@
       "type": "object",
       "additionalProperties": { "$ref": "#/$defs/nonnegativeNumbers" }
     },
-    "namedOptionalSeries": {
+    "namedLatencySeries": {
       "type": "object",
-      "additionalProperties": {
-        "type": "array",
-        "minItems": 1,
-        "items": {
-          "anyOf": [
-            { "type": "number", "minimum": 0 },
-            { "type": "null" }
-          ]
-        }
+      "additionalProperties": { "$ref": "#/$defs/latencyTimeSeries" }
+    },
+    "latencyTimeSeries": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["avg", "p50", "p95", "p99", "p999"],
+      "properties": {
+        "avg": { "$ref": "#/$defs/optionalNonnegativeNumbers" },
+        "p50": { "$ref": "#/$defs/optionalNonnegativeNumbers" },
+        "p95": { "$ref": "#/$defs/optionalNonnegativeNumbers" },
+        "p99": { "$ref": "#/$defs/optionalNonnegativeNumbers" },
+        "p999": { "$ref": "#/$defs/optionalNonnegativeNumbers" }
+      }
+    },
+    "optionalNonnegativeNumbers": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "anyOf": [
+          { "type": "number", "minimum": 0 },
+          { "type": "null" }
+        ]
       }
     },
     "histogram": {

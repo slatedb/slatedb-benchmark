@@ -1,7 +1,7 @@
 import type { WorkloadSeries } from '../lib/results';
 
 type ChartOptions = {
-  kind: 'time';
+  kind: 'time' | 'latency';
   source: string;
   key?: string;
   unit: string;
@@ -13,6 +13,8 @@ type ChartOptions = {
 type DestroyChart = () => void;
 
 const number = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 });
+const seriesColor = '#a45632';
+const latencyColors = ['#286f91', '#4f7b67', '#b07a24', '#ad5537', '#7b466c'];
 
 export function initializeMetricCharts() {
   document.querySelectorAll<HTMLElement>('[data-metric-charts]').forEach((root) => {
@@ -128,7 +130,9 @@ async function renderRow(
   try {
     const series = await loadSeries();
     if (panel.dataset.open !== 'true') return;
-    const destroy = renderTimeSeries(panel, options, series, clientMeasurementNs);
+    const destroy = options.kind === 'latency'
+      ? renderLatencySeries(panel, options, series, clientMeasurementNs)
+      : renderTimeSeries(panel, options, series, clientMeasurementNs);
     destroyers.set(panel, destroy);
   } catch (error) {
     if (panel.dataset.open !== 'true') return;
@@ -152,26 +156,101 @@ function renderTimeSeries(
   clientMeasurementNs: number,
 ): DestroyChart {
   const resource = options.source.startsWith('process.') || options.source.startsWith('machine.');
-  const latency = options.source === 'application.latency_ns';
-  const elapsed = latency
-    ? series.latency_elapsed_ns
-    : resource
-      ? series.resource_elapsed_ns
-      : series.rate_elapsed_ns;
+  const elapsed = resource ? series.resource_elapsed_ns : series.rate_elapsed_ns;
   const raw = resolveSource(series, options.source, options.key);
   if (!Array.isArray(raw) || raw.length !== elapsed.length || raw.length === 0) {
     throw new Error(`No chart data was recorded for ${options.label}.`);
   }
   const divisor = options.divisor ?? 1;
+  const points = seriesPoints(elapsed, raw, divisor);
+  if (points.length === 0) {
+    throw new Error(`No chart data was recorded for ${options.label}.`);
+  }
   const average = options.average === undefined ? undefined : options.average / divisor;
+  return renderCanvas(panel, {
+    label: options.label,
+    xLabel: 'Elapsed seconds',
+    yLabel: options.unit,
+    lines: [{ label: 'samples', color: seriesColor, points }],
+    xMax: elapsed.at(-1)! / 1e9,
+    average,
+    boundary: resource && clientMeasurementNs > 0 ? clientMeasurementNs / 1e9 : undefined,
+    tooltip: (point) => {
+      const interval = resource && clientMeasurementNs > 0 && point.x * 1e9 > clientMeasurementNs
+        ? 'drain'
+        : 'measurement';
+      return `${formatElapsed(point.x)} · ${number.format(point.y)} ${options.unit} · ${interval}`;
+    },
+  });
+}
+
+function renderLatencySeries(
+  panel: HTMLElement,
+  options: ChartOptions,
+  series: WorkloadSeries,
+  clientMeasurementNs: number,
+): DestroyChart {
+  const raw = resolveSource(series, options.source, options.key);
+  if (!raw || typeof raw !== 'object') {
+    throw new Error(`No chart data was recorded for ${options.label}.`);
+  }
+  const values = raw as Record<string, unknown>;
+  const definitions = [
+    { key: 'avg', label: 'avg' },
+    { key: 'p50', label: 'p50' },
+    { key: 'p95', label: 'p95' },
+    { key: 'p99', label: 'p99' },
+    { key: 'p999', label: 'p99.9' },
+  ];
+  const divisor = options.divisor ?? 1;
+  const lines = definitions.map((definition, index) => {
+    const samples = values[definition.key];
+    if (!Array.isArray(samples) || samples.length !== series.latency_elapsed_ns.length) {
+      throw new Error(`Latency chart data is incomplete for ${options.label}.`);
+    }
+    return {
+      label: definition.label,
+      color: latencyColors[index],
+      points: seriesPoints(series.latency_elapsed_ns, samples, divisor),
+    };
+  });
+  if (lines.some((line) => line.points.length === 0)) {
+    throw new Error(`No chart data was recorded for ${options.label}.`);
+  }
+  const tooltipValues = new Map<number, string>();
+  series.latency_elapsed_ns.forEach((elapsed, index) => {
+    const entries = definitions.flatMap((definition) => {
+      const value = (values[definition.key] as unknown[])[index];
+      if (value === null || !Number.isFinite(Number(value))) return [];
+      return [`${definition.label} ${number.format(Number(value) / divisor)}`];
+    });
+    if (entries.length > 0) tooltipValues.set(elapsed / 1e9, entries.join(' · '));
+  });
+  return renderCanvas(panel, {
+    label: options.label,
+    xLabel: 'Elapsed seconds',
+    yLabel: options.unit,
+    lines,
+    xMax: series.latency_elapsed_ns.at(-1)! / 1e9,
+    boundary: clientMeasurementNs > 0 ? clientMeasurementNs / 1e9 : undefined,
+    tooltip: (point) => {
+      const interval = clientMeasurementNs > 0 && point.x * 1e9 > clientMeasurementNs
+        ? 'drain'
+        : 'measurement';
+      return `${formatElapsed(point.x)} · ${interval}\n${tooltipValues.get(point.x)} ${options.unit}`;
+    },
+  });
+}
+
+function seriesPoints(elapsed: number[], values: unknown[], divisor: number): Point[] {
   const points: Point[] = [];
   let startsSegment = true;
   elapsed.forEach((value, index) => {
-    if (raw[index] === null) {
+    if (values[index] === null) {
       startsSegment = true;
       return;
     }
-    const y = Number(raw[index]) / divisor;
+    const y = Number(values[index]) / divisor;
     if (!Number.isFinite(y)) {
       startsSegment = true;
       return;
@@ -179,25 +258,7 @@ function renderTimeSeries(
     points.push({ x: value / 1e9, y, startsSegment });
     startsSegment = false;
   });
-  if (points.length === 0) {
-    throw new Error(`No chart data was recorded for ${options.label}.`);
-  }
-  const includesDrain = resource || latency;
-  return renderCanvas(panel, {
-    label: options.label,
-    xLabel: 'Elapsed seconds',
-    yLabel: options.unit,
-    points,
-    xMax: elapsed.at(-1)! / 1e9,
-    average,
-    boundary: includesDrain && clientMeasurementNs > 0 ? clientMeasurementNs / 1e9 : undefined,
-    tooltip: (point) => {
-      const interval = includesDrain && clientMeasurementNs > 0 && point.x * 1e9 > clientMeasurementNs
-        ? 'drain'
-        : 'measurement';
-      return `${formatElapsed(point.x)} · ${number.format(point.y)} ${options.unit} · ${interval}`;
-    },
-  });
+  return points;
 }
 
 function resolveSource(series: WorkloadSeries, source: string, key?: string): unknown {
@@ -212,11 +273,12 @@ function resolveSource(series: WorkloadSeries, source: string, key?: string): un
 }
 
 type Point = { x: number; y: number; startsSegment?: boolean };
+type LineSeries = { label: string; color: string; points: Point[] };
 type CanvasOptions = {
   label: string;
   xLabel: string;
   yLabel: string;
-  points: Point[];
+  lines: LineSeries[];
   xMax?: number;
   average?: number;
   boundary?: number;
@@ -229,8 +291,14 @@ function renderCanvas(panel: HTMLElement, options: CanvasOptions): DestroyChart 
   const title = document.createElement('strong');
   title.textContent = options.label;
   heading.append(title);
-  if (options.average !== undefined) {
+  if (options.lines.length > 1) {
+    const legend = document.createElement('div');
+    legend.className = 'chart-legend';
+    options.lines.forEach((line) => legend.append(legendItem(line.label, line.color)));
+    heading.append(legend);
+  } else if (options.average !== undefined) {
     const average = document.createElement('span');
+    average.className = 'chart-published-average';
     average.textContent = `Published average ${number.format(options.average)} ${options.yLabel}`;
     heading.append(average);
   }
@@ -251,6 +319,7 @@ function renderCanvas(panel: HTMLElement, options: CanvasOptions): DestroyChart 
   frame.append(canvas, tooltip, xLabel, yLabel);
   panel.replaceChildren(heading, frame);
 
+  const primaryPoints = options.lines[0].points;
   let plot = { left: 64, top: 16, width: 1, height: 1 };
   let xValues: number[] = [];
   const draw = () => {
@@ -268,11 +337,15 @@ function renderCanvas(panel: HTMLElement, options: CanvasOptions): DestroyChart 
     const bottom = 43;
     plot = { left: 64, top: 16, width: width - 64 - right, height: height - 16 - bottom };
     const minX = 0;
-    const maxX = options.xMax ?? Math.max(...options.points.map((point) => point.x));
-    const maxY = Math.max(...options.points.map((point) => point.y), options.average ?? 0, 1);
+    const maxX = options.xMax ?? Math.max(...primaryPoints.map((point) => point.x));
+    const observedMaxY = Math.max(
+      ...options.lines.flatMap((line) => line.points.map((point) => point.y)),
+      options.average ?? 0,
+    );
+    const maxY = observedMaxY > 0 ? observedMaxY * 1.05 : 1;
     const xScale = (value: number) => plot.left + (value - minX) / Math.max(maxX - minX, Number.EPSILON) * plot.width;
     const yScale = (value: number) => plot.top + plot.height - value / maxY * plot.height;
-    xValues = options.points.map((point) => xScale(point.x));
+    xValues = primaryPoints.map((point) => xScale(point.x));
 
     context.clearRect(0, 0, width, height);
     context.font = '10px JetBrains Mono, monospace';
@@ -299,6 +372,7 @@ function renderCanvas(panel: HTMLElement, options: CanvasOptions): DestroyChart 
     if (options.average !== undefined) {
       context.setLineDash([5, 5]);
       context.strokeStyle = '#8b94a3';
+      context.lineWidth = 1;
       context.beginPath();
       context.moveTo(plot.left, yScale(options.average));
       context.lineTo(plot.left + plot.width, yScale(options.average));
@@ -319,24 +393,26 @@ function renderCanvas(panel: HTMLElement, options: CanvasOptions): DestroyChart 
       context.textBaseline = 'top';
       context.fillText('drain', x - 5, plot.top + 4);
     }
-    context.strokeStyle = '#a45632';
-    context.lineWidth = 1.75;
-    context.beginPath();
-    options.points.forEach((point, index) => {
-      const x = xValues[index];
-      const y = yScale(point.y);
-      if (index === 0 || point.startsSegment) context.moveTo(x, y);
-      else context.lineTo(x, y);
-    });
-    context.stroke();
-    options.points.forEach((point, index) => {
-      const isolated = point.startsSegment
-        && (index === options.points.length - 1 || options.points[index + 1].startsSegment);
-      if (!isolated) return;
-      context.fillStyle = '#a45632';
+    options.lines.forEach((line) => {
+      context.strokeStyle = line.color;
+      context.lineWidth = options.lines.length > 1 ? 1.45 : 1.75;
       context.beginPath();
-      context.arc(xValues[index], yScale(point.y), 3, 0, Math.PI * 2);
-      context.fill();
+      line.points.forEach((point, index) => {
+        const x = xScale(point.x);
+        const y = yScale(point.y);
+        if (index === 0 || point.startsSegment) context.moveTo(x, y);
+        else context.lineTo(x, y);
+      });
+      context.stroke();
+      line.points.forEach((point, index) => {
+        const isolated = point.startsSegment
+          && (index === line.points.length - 1 || line.points[index + 1].startsSegment);
+        if (!isolated) return;
+        context.fillStyle = line.color;
+        context.beginPath();
+        context.arc(xScale(point.x), yScale(point.y), 3, 0, Math.PI * 2);
+        context.fill();
+      });
     });
   };
 
@@ -351,7 +427,7 @@ function renderCanvas(panel: HTMLElement, options: CanvasOptions): DestroyChart 
     for (let index = 1; index < xValues.length; index += 1) {
       if (Math.abs(xValues[index] - x) < Math.abs(xValues[closest] - x)) closest = index;
     }
-    tooltip.textContent = options.tooltip(options.points[closest]);
+    tooltip.textContent = options.tooltip(primaryPoints[closest]);
     tooltip.hidden = false;
     tooltip.style.left = `${Math.min(Math.max(xValues[closest], 90), frame.clientWidth - 90)}px`;
     tooltip.style.top = `${Math.max(event.clientY - bounds.top - 38, 4)}px`;
@@ -367,6 +443,18 @@ function renderCanvas(panel: HTMLElement, options: CanvasOptions): DestroyChart 
     canvas.removeEventListener('pointermove', move);
     canvas.removeEventListener('pointerleave', leave);
   };
+}
+
+function legendItem(label: string, color: string) {
+  const item = document.createElement('span');
+  item.className = 'chart-legend-item';
+  const swatch = document.createElement('span');
+  swatch.className = 'chart-legend-swatch';
+  swatch.style.borderColor = color;
+  const text = document.createElement('span');
+  text.textContent = label;
+  item.append(swatch, text);
+  return item;
 }
 
 function status(message: string) {

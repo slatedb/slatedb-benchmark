@@ -111,11 +111,11 @@ impl HistogramSet {
         }
     }
 
-    pub fn average_ns(&self, name: &str) -> Option<f64> {
+    pub fn summary(&self, name: &str) -> Option<LatencySummary> {
         self.values
             .get(name)
             .filter(|histogram| !histogram.is_empty())
-            .map(|histogram| histogram.summary().avg_ns)
+            .map(LatencyHistogram::summary)
     }
 
     pub fn summaries_with_prefix(&self, prefix: &str) -> BTreeMap<String, LatencySummary> {

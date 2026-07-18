@@ -37,17 +37,18 @@ summary table remains intact.
 
 Rate charts use complete client buckets and stop before durability drain.
 Latency, process, and machine charts continue through drain and mark its
-start. Draw the row's published average as a reference line.
+start. Non-latency charts draw the row's published average as a horizontal
+reference line.
 
-The average may differ from the arithmetic mean of plotted points. The table
-divides totals by the full recorded interval, including partial boundary
-intervals, while rate percentiles and charts use complete buckets.
+The average reference may differ from the arithmetic mean of plotted points.
+The table divides totals by the full recorded interval, including partial
+boundary intervals, while rate percentiles and charts use complete buckets.
 
-Application latency plots the average latency of calls completed in each
-sampling window. Windows with no calls for that API appear as gaps. The
-aggregate HDR histogram remains in the sidecar so the published table can be
-validated. Time-chart tooltips show elapsed time, value, and whether the point
-falls in measurement or drain.
+Application latency plots `avg`, `p50`, `p95`, `p99`, and `p99.9` for calls
+completed in each sampling window. Windows with no calls for that API appear
+as gaps. The aggregate HDR histogram remains in the sidecar so the published
+table can be validated. Time-chart tooltips show elapsed time, values, and
+whether the point falls in measurement or drain.
 
 ## Data contract
 
@@ -88,7 +89,13 @@ results/<version>/workload/<name>/
       "get": [22053152.0, 21947716.0]
     },
     "latency_ns": {
-      "get": [72000.0, 68000.0, null]
+      "get": {
+        "avg": [72000.0, 68000.0, null],
+        "p50": [61000.0, 59000.0, null],
+        "p95": [98000.0, 91000.0, null],
+        "p99": [121000.0, 117000.0, null],
+        "p999": [164000.0, 151000.0, null]
+      }
     },
     "latency_histograms": {
       "get": {
@@ -105,7 +112,7 @@ The complete sidecar contains these series:
 | Area | Series |
 | --- | --- |
 | Application | Calls/s and logical bytes/s by API |
-| Application latency | Window averages and aggregate HDR data by API |
+| Application latency | Window statistics and aggregate HDR data by API |
 | Object store | Requests/s and combined body bytes/s by HTTP method |
 | Process | CPU cores and RSS bytes |
 | Machine | CPU percent, RSS bytes, network bytes/s, disk bytes/s, disk ops/s |
@@ -130,7 +137,7 @@ Before dropping them:
 3. Export aligned, zero-filled arrays from application, object-store, process,
    and machine windows.
 4. Use one rate helper for the summaries and sidecar.
-5. Export per-window average latency and populated aggregate HDR bounds and
+5. Export per-window latency statistics and populated aggregate HDR bounds and
    counts from `src/histogram.rs`.
 6. Add the sidecar reference to `WorkloadResult`.
 7. Validate and write `series.json` before creating `result.json`.
@@ -194,6 +201,7 @@ Give each row a stable chart selector:
     source: 'application.operations_per_second',
     key: label,
     yUnit: 'calls/s',
+    average: value.avg_per_second,
   },
 }
 ```
@@ -237,7 +245,7 @@ A browser test verifies:
 4. Opening another row closes the first.
 5. The page fetches the sidecar once.
 6. Time charts mark measurement and drain.
-7. Latency charts use elapsed time and include drain samples.
+7. Latency charts show all five window statistics and include drain samples.
 8. Desktop and mobile layouts work.
 9. Tables survive chart-loading failure.
 

@@ -92,8 +92,9 @@ API and object-store rate percentiles use complete one-second client windows.
 Preparation tasks also retain their final partial rate bucket.
 Resource statistics continue to use one-second buckets through the drain. API
 and durability latencies use HDR histograms with microsecond precision and
-three significant digits. The worker retains each window's average for the
-elapsed-time chart and the aggregate histogram for result validation.
+three significant digits. The worker retains each window's average and
+percentiles for the elapsed-time chart and the aggregate histogram for result
+validation.
 
 The S3 recorder wraps the HTTP request-attempt boundary, so retries count as
 separate requests. A `404 Not Found` response still counts as a request, but not

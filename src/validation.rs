@@ -243,7 +243,35 @@ pub fn validate_workload_series(result: &WorkloadResult, series: &WorkloadSeries
         validate_throughput_distribution(values, &result.application.throughput[name])?;
     }
     for (name, values) in &series.application.latency_ns {
-        validate_optional_values(name, values, series.latency_elapsed_ns.len())?;
+        for (statistic, samples) in [
+            ("avg", values.avg.as_slice()),
+            ("p50", values.p50.as_slice()),
+            ("p95", values.p95.as_slice()),
+            ("p99", values.p99.as_slice()),
+            ("p99.9", values.p999.as_slice()),
+        ] {
+            validate_optional_values(
+                &format!("{name} {statistic}"),
+                samples,
+                series.latency_elapsed_ns.len(),
+            )?;
+        }
+        for index in 0..series.latency_elapsed_ns.len() {
+            match (
+                values.avg[index],
+                values.p50[index],
+                values.p95[index],
+                values.p99[index],
+                values.p999[index],
+            ) {
+                (None, None, None, None, None) => {}
+                (Some(_), Some(p50), Some(p95), Some(p99), Some(p999)) => ensure!(
+                    p50 <= p95 && p95 <= p99 && p99 <= p999,
+                    "latency series {name} percentiles are out of order"
+                ),
+                _ => bail!("latency series {name} has misaligned samples"),
+            }
+        }
     }
     for (name, histogram) in &series.application.latency_histograms {
         let summary = &result.application.latency[name];

@@ -223,10 +223,20 @@ pub struct HistogramSeries {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct LatencyTimeSeries {
+    pub avg: Vec<Option<f64>>,
+    pub p50: Vec<Option<f64>>,
+    pub p95: Vec<Option<f64>>,
+    pub p99: Vec<Option<f64>>,
+    pub p999: Vec<Option<f64>>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ApplicationSeries {
     pub operations_per_second: BTreeMap<String, Vec<f64>>,
     pub bytes_per_second: BTreeMap<String, Vec<f64>>,
-    pub latency_ns: BTreeMap<String, Vec<Option<f64>>>,
+    pub latency_ns: BTreeMap<String, LatencyTimeSeries>,
     pub latency_histograms: BTreeMap<String, HistogramSeries>,
 }
 

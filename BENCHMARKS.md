@@ -180,10 +180,12 @@ window. Average rates divide the total by the full recorded interval. Latency
 statistics use individual calls and milliseconds.
 
 All charts use elapsed seconds on the x-axis. Rate charts use the same complete
-client windows as rate percentiles. Latency charts plot the average latency of
-calls completed in each sampling window. Latency, process, and machine charts
-continue through durability drain and mark its start. Chart data lives in a
-separate workload file and is fetched after page load.
+client windows as rate percentiles. Latency charts plot `avg`, `p50`, `p95`,
+`p99`, and `p99.9` for calls completed in each sampling window. Latency,
+process, and machine charts continue through durability drain and mark its
+start. Other charts include the row's published average as a horizontal
+reference. Chart data lives in a separate workload file and is fetched after
+page load.
 
 ### Application operations
 
