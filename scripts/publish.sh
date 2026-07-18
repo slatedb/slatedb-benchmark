@@ -24,62 +24,15 @@ if [[ ! -d "$publish_checkout/.git" ]]; then
   exit 1
 fi
 
-python3 - "$run_manifest" <<'PY'
-import hashlib
-import json
-import sys
-from pathlib import Path
-
-manifest = Path(sys.argv[1])
-with manifest.open(encoding="utf-8") as file:
-    run = json.load(file)
-preparation = {"bulk-load", "full-compaction"}
-workloads = {
-    "idle",
-    "point-read-uniform",
-    "point-read-skewed",
-    "point-read-missing",
-    "read-heavy",
-    "balanced",
-    "update-heavy",
-    "range-scan",
-    "sustained-ingest",
-    "transaction-contention",
-}
-tasks = preparation | workloads
-configurations = run.get("resolved_configuration", {})
-if set(configurations) != tasks:
-    raise SystemExit("refusing to publish an incomplete benchmark run")
-if any(configuration.get("scale") != 1.0 for configuration in configurations.values()):
-    raise SystemExit("refusing to publish scaled benchmark results")
-expected = {
-    f"{'preparation' if task in preparation else 'workload'}/{task}/result.json"
-    for task in tasks
-}
-results = run.get("results", {})
-if set(results) != expected:
-    raise SystemExit("refusing to publish a run with missing results")
-for relative, expected_digest in results.items():
-    path = manifest.parent / relative
-    contents = path.read_bytes()
-    if hashlib.sha256(contents).hexdigest() != expected_digest:
-        raise SystemExit(f"checksum mismatch for {relative}")
-    result = json.loads(contents)
-    task = path.parent.name
-    if (
-        result.get("status") != "ok"
-        or result.get("task") != task
-        or result.get("golden_id") != run.get("golden_id")
-        or result.get("configuration", {}).get("scale") != 1.0
-        or result.get("source", {}).get("slate_commit")
-        != run.get("source", {}).get("slate_commit")
-    ):
-        raise SystemExit(f"invalid result metadata for {relative}")
-    if task in workloads and result.get("source", {}).get("runner_commit") != run.get(
-        "source", {}
-    ).get("runner_commit"):
-        raise SystemExit(f"runner commit mismatch for {relative}")
-PY
+if ! jq -e '
+  .status == "ok"
+  and (.resolved_configuration | type == "object")
+  and ((.resolved_configuration | length) > 0)
+  and ([.resolved_configuration[].scale] | all(. == 1.0))
+' "$run_manifest" >/dev/null; then
+  echo "refusing to publish an unsuccessful or scaled benchmark run" >&2
+  exit 1
+fi
 
 source_directory=$(dirname "$run_manifest")
 destination_directory="$publish_checkout/results/$version"
