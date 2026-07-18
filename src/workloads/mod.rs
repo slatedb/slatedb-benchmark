@@ -118,11 +118,11 @@ pub async fn execute(
         }
         Ok(None)
     };
+    let durability_drain = drain_started.map_or(Duration::ZERO, |started| started.elapsed());
     let _ = stop_tx.send(true);
     let mut measurement = sampler.await.context("joining metric sampler")??;
     flush_result?;
     let durable_result = durable_result?;
-    let durability_drain = drain_started.map_or(Duration::ZERO, |started| started.elapsed());
 
     if let Some(result) = durable_result {
         if result.lag.len() != stats.writes {
