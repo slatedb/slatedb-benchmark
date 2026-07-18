@@ -54,7 +54,7 @@ const hasDataset = versionRoutes.some(
 <aside class="result-context" aria-label="Benchmark context">
   <div class="context-block">
     <label class="context-label" for="result-version">Version</label>
-    <select class="version-select" id="result-version" data-version-select>
+    <select class="route-select" id="result-version" data-route-select>
       {versionOptions.map((option) => (
         <option value={option.href} selected={option.version === version}>{option.label}</option>
       ))}
@@ -62,7 +62,15 @@ const hasDataset = versionRoutes.some(
   </div>
 
   <div class="context-block">
-    <span class="context-label">Workloads</span>
+    <label class="context-label" for="result-workload">Workloads</label>
+    <select class="route-select workload-select" id="result-workload" data-route-select>
+      {kind === 'dataset' && <option value="" selected>Choose workload</option>}
+      {workloads.map((route) => (
+        <option value={routeHref(route)} selected={kind === 'workload' && route.name === name}>
+          {route.name}
+        </option>
+      ))}
+    </select>
     <nav class="link-list" aria-label="Workload results">
       {workloads.map((route) => (
         <a class:list={{ current: kind === 'workload' && route.name === name }} href={routeHref(route)}>
@@ -91,7 +99,9 @@ const hasDataset = versionRoutes.some(
 </aside>
 
 <script>
-  document.querySelectorAll<HTMLSelectElement>('[data-version-select]').forEach((select) => {
-    select.addEventListener('change', () => window.location.assign(select.value));
+  document.querySelectorAll<HTMLSelectElement>('[data-route-select]').forEach((select) => {
+    select.addEventListener('change', () => {
+      if (select.value) window.location.assign(select.value);
+    });
   });
 </script>

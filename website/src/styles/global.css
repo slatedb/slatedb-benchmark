@@ -106,7 +106,7 @@ code, td {
   letter-spacing: .11em;
   text-transform: uppercase;
 }
-.version-select {
+.route-select {
   width: 100%;
   margin-top: 8px;
   padding: 6px 8px;
@@ -117,10 +117,11 @@ code, td {
   font: 11px/1.4 'JetBrains Mono', ui-monospace, monospace;
   cursor: pointer;
 }
-.version-select:focus-visible {
+.route-select:focus-visible {
   outline: 1px solid var(--accent);
   outline-offset: 2px;
 }
+.workload-select { display: none; }
 .result-context a {
   color: var(--ink-4);
   font-family: 'JetBrains Mono', ui-monospace, monospace;
@@ -410,6 +411,8 @@ a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
   .context-block + .context-block,
   .metadata-list,
   .context-links { margin: 0; padding: 0; border: 0; }
+  .workload-select { display: block; }
+  .link-list { display: none; }
 }
 
 @media (max-width: 560px) {
@@ -417,7 +420,11 @@ a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
   .wordmark img { height: 23px; }
   .site-name { display: none; }
   .result-shell { width: 90vw; padding-top: 28px; }
-  .result-context { grid-template-columns: 1fr; }
+  .result-context {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 18px 16px;
+    margin-bottom: 28px;
+  }
   .configuration-group { grid-template-columns: 1fr; gap: 8px; }
   .heading-metadata { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .chart-detail { padding-inline: 8px; }
