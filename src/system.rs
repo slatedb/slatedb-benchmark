@@ -367,13 +367,16 @@ impl SampledMeasurement {
             .map_or(0, |operation| operation.calls)
     }
 
-    pub fn errors(&self) -> u64 {
+    pub fn application_errors(&self) -> u64 {
         self.application_total
             .operations
             .values()
             .map(|operation| operation.errors)
-            .sum::<u64>()
-            .saturating_add(self.store_end.difference(&self.store_start).errors())
+            .sum()
+    }
+
+    pub fn object_store_attempt_errors(&self) -> u64 {
+        self.store_end.difference(&self.store_start).errors()
     }
 
     pub fn application(&self) -> ApplicationMetrics {
@@ -1279,5 +1282,28 @@ mod tests {
                 assert!(values.iter().any(Option::is_some));
             }
         }
+    }
+
+    #[tokio::test]
+    async fn retried_object_store_attempt_does_not_count_as_application_error() {
+        let registry = Arc::new(ApplicationRegistry::default());
+        let store_metrics = Arc::new(StoreMetrics::default());
+        let (stop_tx, stop_rx) = watch::channel(false);
+        let (ready_tx, ready_rx) = oneshot::channel();
+        let sampler = tokio::spawn(sample_until_stopped(
+            registry,
+            Arc::clone(&store_metrics),
+            stop_rx,
+            Some(ready_tx),
+        ));
+        ready_rx.await.expect("sampler baseline");
+
+        store_metrics.record_request(HttpMethod::Put);
+        store_metrics.record_transport_error(HttpMethod::Put);
+        stop_tx.send(true).expect("stop sampler");
+
+        let measurement = sampler.await.expect("join sampler").expect("measurement");
+        assert_eq!(measurement.application_errors(), 0);
+        assert_eq!(measurement.object_store_attempt_errors(), 1);
     }
 }

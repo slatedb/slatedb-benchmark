@@ -159,7 +159,7 @@ async fn run_bulk_load(
     )
     .await;
     let ((), measurement) = close_database_after(&db, load, "closing bulk-load database").await?;
-    ensure_measurement_has_no_errors(&measurement)?;
+    ensure_measurement_has_no_application_errors(&measurement)?;
     let checkpoint = checkpoint_database(
         database_path,
         Arc::clone(&context.control),
@@ -255,7 +255,7 @@ async fn run_full_compaction(
     .await;
     let ((), measurement) =
         close_database_after(&db, compaction, "closing full-compaction database").await?;
-    ensure_measurement_has_no_errors(&measurement)?;
+    ensure_measurement_has_no_application_errors(&measurement)?;
     let checkpoint = checkpoint_database(
         database_path,
         Arc::clone(&context.control),
@@ -762,13 +762,22 @@ async fn close_database_after<T>(
     Ok(value)
 }
 
-fn ensure_measurement_has_no_errors(measurement: &SampledMeasurement) -> Result<()> {
-    let errors = measurement.errors();
-    anyhow::ensure!(
-        errors == 0,
-        "preparation recorded {errors} API or HTTP errors"
-    );
+fn ensure_measurement_has_no_application_errors(measurement: &SampledMeasurement) -> Result<()> {
+    let errors = measurement.application_errors();
+    anyhow::ensure!(errors == 0, "preparation recorded {errors} API errors");
+    log_nonfatal_object_store_attempt_errors(measurement, "preparation");
     Ok(())
+}
+
+fn log_nonfatal_object_store_attempt_errors(measurement: &SampledMeasurement, task_kind: &str) {
+    let errors = measurement.object_store_attempt_errors();
+    if errors > 0 {
+        tracing::warn!(
+            task_kind,
+            errors,
+            "object-store request attempts failed without failing the task"
+        );
+    }
 }
 
 async fn checkpoint_database(

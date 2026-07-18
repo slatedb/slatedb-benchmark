@@ -143,10 +143,15 @@ pub async fn execute(
         }
     }
     validate_workload(config, &stats, &measurement)?;
-    if measurement.errors() > 0 {
-        bail!(
-            "workload recorded {} API or HTTP errors",
-            measurement.errors()
+    let application_errors = measurement.application_errors();
+    if application_errors > 0 {
+        bail!("workload recorded {application_errors} API errors");
+    }
+    let object_store_attempt_errors = measurement.object_store_attempt_errors();
+    if object_store_attempt_errors > 0 {
+        tracing::warn!(
+            errors = object_store_attempt_errors,
+            "object-store request attempts failed without failing the task"
         );
     }
     tracing::info!(task = %config.task.task, "workload measurement complete");

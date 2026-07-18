@@ -98,9 +98,10 @@ validation.
 
 The S3 recorder wraps the HTTP request-attempt boundary, so retries count as
 separate requests. A `404 Not Found` response still counts as a request, but not
-as a task error because SlateDB probes for optional objects. The Linux sampler
-reads process and host counters once per second. Other errors remain in
-diagnostic data and fail the task.
+as a task error because SlateDB probes for optional objects. Failed HTTP
+attempts do not fail the task by themselves. Terminal object-store failures
+surface as task errors. The Linux sampler reads process and host counters once
+per second.
 
 ## Object-store state and recovery
 
