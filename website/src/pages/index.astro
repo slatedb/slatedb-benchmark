@@ -1,27 +1,29 @@
 ---
-import Base from '../layouts/Base.astro';
-import SiteHeader from '../components/SiteHeader.astro';
-import {
-  latestStable,
-  loadPreparationResults,
-  loadWorkloadResults,
-  routeHref,
-} from '../lib/results';
+import { latestStable, loadWorkloadResults, routeHref } from '../lib/results';
 
 const workloads = await loadWorkloadResults();
 const latest = latestStable(workloads);
 const preferred = latest
   ? workloads.find((route) => route.version === latest.version && route.name === 'balanced') ?? latest
-  : latestStable(await loadPreparationResults());
-const redirect = preferred ? routeHref(preferred) : undefined;
-if (redirect) return Astro.redirect(redirect);
+  : undefined;
+
+if (!preferred) throw new Error('website requires at least one workload result');
+
+const redirect = routeHref(preferred);
+const canonical = new URL(redirect, Astro.site).href;
 ---
 
-<Base title="SlateDB Benchmarks">
-  <SiteHeader />
-  <main class="empty-state">
-    <p class="eyebrow">SlateDB benchmarks</p>
-    <h1>No published results yet.</h1>
-    <p>Result files checked into <code>results/</code> appear after the next static build.</p>
-  </main>
-</Base>
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="refresh" content={`0;url=${redirect}`} />
+    <meta name="robots" content="noindex" />
+    <link rel="canonical" href={canonical} />
+    <title>SlateDB Benchmarks</title>
+    <script is:inline define:vars={{ redirect }}>
+      window.location.replace(redirect);
+    </script>
+  </head>
+  <body></body>
+</html>
