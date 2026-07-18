@@ -217,27 +217,37 @@ function renderLatencySeries(
   if (lines.some((line) => line.points.length === 0)) {
     throw new Error(`No chart data was recorded for ${options.label}.`);
   }
-  const tooltipValues = new Map<number, string>();
+  const tooltipValues = new Map<number, Map<string, string>>();
   series.latency_elapsed_ns.forEach((elapsed, index) => {
-    const entries = definitions.flatMap((definition) => {
+    const entries = new Map<string, string>();
+    definitions.forEach((definition) => {
       const value = (values[definition.key] as unknown[])[index];
-      if (value === null || !Number.isFinite(Number(value))) return [];
-      return [`${definition.label} ${number.format(Number(value) / divisor)}`];
+      if (value !== null && Number.isFinite(Number(value))) {
+        entries.set(
+          definition.label,
+          `${definition.label} ${number.format(Number(value) / divisor)}`,
+        );
+      }
     });
-    if (entries.length > 0) tooltipValues.set(elapsed / 1e9, entries.join(' · '));
+    if (entries.size > 0) tooltipValues.set(elapsed / 1e9, entries);
   });
   return renderCanvas(panel, {
     label: options.label,
     xLabel: 'Elapsed seconds',
     yLabel: options.unit,
     lines,
+    toggleableLines: true,
     xMax: series.latency_elapsed_ns.at(-1)! / 1e9,
     boundary: clientMeasurementNs > 0 ? clientMeasurementNs / 1e9 : undefined,
-    tooltip: (point) => {
+    tooltip: (point, visibleLabels) => {
       const interval = clientMeasurementNs > 0 && point.x * 1e9 > clientMeasurementNs
         ? 'drain'
         : 'measurement';
-      return `${formatElapsed(point.x)} · ${interval}\n${tooltipValues.get(point.x)} ${options.unit}`;
+      const values = [...(tooltipValues.get(point.x)?.entries() ?? [])]
+        .filter(([label]) => visibleLabels.has(label))
+        .map(([, value]) => value);
+      const details = values.length > 0 ? `\n${values.join(' · ')} ${options.unit}` : '';
+      return `${formatElapsed(point.x)} · ${interval}${details}`;
     },
   });
 }
@@ -279,10 +289,11 @@ type CanvasOptions = {
   xLabel: string;
   yLabel: string;
   lines: LineSeries[];
+  toggleableLines?: boolean;
   xMax?: number;
   average?: number;
   boundary?: number;
-  tooltip: (point: Point) => string;
+  tooltip: (point: Point, visibleLabels: ReadonlySet<string>) => string;
 };
 
 function renderCanvas(panel: HTMLElement, options: CanvasOptions): DestroyChart {
@@ -294,7 +305,16 @@ function renderCanvas(panel: HTMLElement, options: CanvasOptions): DestroyChart 
   if (options.lines.length > 1) {
     const legend = document.createElement('div');
     legend.className = 'chart-legend';
-    options.lines.forEach((line) => legend.append(legendItem(line.label, line.color)));
+    options.lines.forEach((line) => {
+      legend.append(options.toggleableLines
+        ? legendButton(line.label, line.color, (visible) => {
+            if (visible) visibleLabels.add(line.label);
+            else visibleLabels.delete(line.label);
+            tooltip.hidden = true;
+            draw();
+          })
+        : legendItem(line.label, line.color));
+    });
     heading.append(legend);
   } else if (options.average !== undefined) {
     const average = document.createElement('span');
@@ -320,6 +340,7 @@ function renderCanvas(panel: HTMLElement, options: CanvasOptions): DestroyChart 
   panel.replaceChildren(heading, frame);
 
   const primaryPoints = options.lines[0].points;
+  const visibleLabels = new Set(options.lines.map((line) => line.label));
   let plot = { left: 64, top: 16, width: 1, height: 1 };
   let xValues: number[] = [];
   const draw = () => {
@@ -338,8 +359,9 @@ function renderCanvas(panel: HTMLElement, options: CanvasOptions): DestroyChart 
     plot = { left: 64, top: 16, width: width - 64 - right, height: height - 16 - bottom };
     const minX = 0;
     const maxX = options.xMax ?? Math.max(...primaryPoints.map((point) => point.x));
+    const visibleLines = options.lines.filter((line) => visibleLabels.has(line.label));
     const observedMaxY = Math.max(
-      ...options.lines.flatMap((line) => line.points.map((point) => point.y)),
+      ...visibleLines.flatMap((line) => line.points.map((point) => point.y)),
       options.average ?? 0,
     );
     const maxY = observedMaxY > 0 ? observedMaxY * 1.05 : 1;
@@ -393,7 +415,7 @@ function renderCanvas(panel: HTMLElement, options: CanvasOptions): DestroyChart 
       context.textBaseline = 'top';
       context.fillText('drain', x - 5, plot.top + 4);
     }
-    options.lines.forEach((line) => {
+    visibleLines.forEach((line) => {
       context.strokeStyle = line.color;
       context.lineWidth = options.lines.length > 1 ? 1.45 : 1.75;
       context.beginPath();
@@ -417,6 +439,10 @@ function renderCanvas(panel: HTMLElement, options: CanvasOptions): DestroyChart 
   };
 
   const move = (event: PointerEvent) => {
+    if (visibleLabels.size === 0) {
+      tooltip.hidden = true;
+      return;
+    }
     const bounds = canvas.getBoundingClientRect();
     const x = event.clientX - bounds.left;
     if (x < plot.left || x > plot.left + plot.width) {
@@ -427,7 +453,7 @@ function renderCanvas(panel: HTMLElement, options: CanvasOptions): DestroyChart 
     for (let index = 1; index < xValues.length; index += 1) {
       if (Math.abs(xValues[index] - x) < Math.abs(xValues[closest] - x)) closest = index;
     }
-    tooltip.textContent = options.tooltip(primaryPoints[closest]);
+    tooltip.textContent = options.tooltip(primaryPoints[closest], visibleLabels);
     tooltip.hidden = false;
     tooltip.style.left = `${Math.min(Math.max(xValues[closest], 90), frame.clientWidth - 90)}px`;
     tooltip.style.top = `${Math.max(event.clientY - bounds.top - 38, 4)}px`;
@@ -455,6 +481,25 @@ function legendItem(label: string, color: string) {
   text.textContent = label;
   item.append(swatch, text);
   return item;
+}
+
+function legendButton(label: string, color: string, onToggle: (visible: boolean) => void) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'chart-legend-item';
+  button.setAttribute('aria-pressed', 'true');
+  const swatch = document.createElement('span');
+  swatch.className = 'chart-legend-swatch';
+  swatch.style.borderColor = color;
+  const text = document.createElement('span');
+  text.textContent = label;
+  button.append(swatch, text);
+  button.addEventListener('click', () => {
+    const visible = button.getAttribute('aria-pressed') !== 'true';
+    button.setAttribute('aria-pressed', String(visible));
+    onToggle(visible);
+  });
+  return button;
 }
 
 function status(message: string) {
