@@ -29,7 +29,7 @@ const versions = [...new Set(
 const versionRoutes = routes.filter((route) => route.version === version);
 const workloads = versionRoutes
   .filter((route) => route.kind === 'workload')
-  .sort((left, right) => right.name.localeCompare(left.name));
+  .sort((left, right) => left.name.localeCompare(right.name));
 const versionOptions = versions.map((candidate) => {
   const candidateRoutes = routes.filter((route) => route.version === candidate);
   const dataset = candidateRoutes.find(
