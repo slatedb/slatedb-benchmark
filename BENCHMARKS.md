@@ -222,7 +222,7 @@ returns and ends when SlateDB's durable frontier reaches the write's sequence
 number. The row combines durability latency for the workload's accepted
 writes. All values use milliseconds.
 
-| API | avg | p50 | p95 | p99 | p99.9 | min | max |
+| API | avg ms | p50 | p95 | p99 | p99.9 | min | max |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | `get` | 0.82 | 0.62 | 1.98 | 5.10 | 19.42 | 0.08 | 406.7 |
 | `put` | 0.41 | 0.24 | 1.04 | 3.62 | 13.91 | 0.05 | 298.6 |

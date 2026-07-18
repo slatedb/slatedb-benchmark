@@ -22,6 +22,7 @@ const {
   clientMeasurementNs,
 } = Astro.props;
 const statisticColumns = ['avg', 'p50', 'p95', 'p99', 'p99.9', 'min', 'max'];
+const latencyColumns = ['avg ms', 'p50', 'p95', 'p99', 'p99.9', 'min', 'max'];
 const rateColumns = ['total', 'avg/s', 'p50/s', 'p95/s', 'p99/s', 'p99.9/s', 'min/s', 'max/s'];
 const throughputColumns = ['total GiB', 'avg MiB/s', 'p50', 'p95', 'p99', 'p99.9', 'min', 'max'];
 const number = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 });
@@ -126,7 +127,7 @@ const machine = [
 >
   {(showEmptyApplication || applicationOperations.length > 0) && <MetricTable idPrefix="application-operations" title="Application operations" firstColumn="API" columns={rateColumns} rows={applicationOperations} />}
   {(showEmptyApplication || applicationThroughput.length > 0) && <MetricTable idPrefix="application-throughput" title="Application throughput" firstColumn="API" columns={throughputColumns} rows={applicationThroughput} />}
-  {(showEmptyApplication || applicationLatency.length > 0) && <MetricTable idPrefix="application-latency" title="Application latency (ms)" firstColumn="API" columns={statisticColumns} rows={applicationLatency} />}
+  {(showEmptyApplication || applicationLatency.length > 0) && <MetricTable idPrefix="application-latency" title="Application latency" firstColumn="API" columns={latencyColumns} rows={applicationLatency} />}
   <MetricTable idPrefix="object-requests" title="Object-store requests" firstColumn="Method" columns={rateColumns} rows={objectRequests} />
   <MetricTable idPrefix="object-throughput" title="Object-store throughput" firstColumn="Method" columns={throughputColumns} rows={objectThroughput} />
   <MetricTable idPrefix="process" title="Process statistics" firstColumn="Metric" columns={statisticColumns} rows={process} codeLabels={false} />
