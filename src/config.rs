@@ -13,7 +13,7 @@ const CLIENTS: usize = 64;
 const WARMUP_MS: u64 = 5 * 60 * 1_000;
 const MEASUREMENT_MS: u64 = 15 * 60 * 1_000;
 const IDLE_MS: u64 = 5 * 60 * 1_000;
-const INGEST_MS: u64 = 60 * 60 * 1_000;
+const INGEST_MS: u64 = 25 * 60 * 1_000;
 const BLOCK_CACHE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const METADATA_CACHE_BYTES: u64 = 512 * 1024 * 1024;
 const OBJECT_STORE_CACHE_BYTES: u64 = 16 * 1024 * 1024 * 1024;
@@ -478,7 +478,7 @@ mod tests {
         assert_eq!(config.dataset.key_bytes, 20);
         assert_eq!(config.dataset.value_bytes, 400);
         assert_eq!(config.task.clients, 64);
-        assert_eq!(config.task.measurement_ms, 36_000);
+        assert_eq!(config.task.measurement_ms, 15_000);
         assert_eq!(
             config
                 .settings

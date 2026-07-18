@@ -151,7 +151,7 @@ than 10.
 
 ### Sustained ingest
 
-Sixty-four clients insert unique keys into an empty database for 60 minutes,
+Sixty-four clients insert unique keys into an empty database for 25 minutes,
 with no warmup. A final flush drains all accepted writes and completes the
 durability record.
 
