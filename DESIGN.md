@@ -419,10 +419,10 @@ Preparation pages display golden dataset and checkpoint information alongside
 the applicable metric tables. Workload descriptions live in
 `website/src/content/workloads/<name>.md`; the build requires one file per
 workload. Each page renders the description below the workload title. Workload
-tables include one-line metric definitions, and clicking a row opens its chart
-below the row. The browser fetches one sidecar after page load and reuses it for
-every row. Data-saving mode disables the preload; a click still fetches it.
-Both page types omit inapplicable rows and keep measured zeroes visible.
+table rows open their charts below the row. The browser fetches one sidecar
+after page load and reuses it for every row. Data-saving mode disables the
+preload; a click still fetches it. Both page types omit inapplicable rows and
+keep measured zeroes visible.
 
 The site uses the SlateDB logo, colors, and fonts: Marcellus for headings, Inter
 for body text, and JetBrains Mono for numeric tables. The intended custom domain

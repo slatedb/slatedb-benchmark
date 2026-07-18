@@ -11,7 +11,6 @@ import type {
 interface Props {
   result: RecordedMetrics;
   showEmptyApplication?: boolean;
-  showDescriptions?: boolean;
   chartSeriesUrl?: string;
   clientMeasurementNs?: number;
 }
@@ -19,7 +18,6 @@ interface Props {
 const {
   result,
   showEmptyApplication = true,
-  showDescriptions = false,
   chartSeriesUrl,
   clientMeasurementNs,
 } = Astro.props;
@@ -126,13 +124,13 @@ const machine = [
   data-series-url={chartSeriesUrl}
   data-client-measurement-ns={clientMeasurementNs}
 >
-  {(showEmptyApplication || applicationOperations.length > 0) && <MetricTable idPrefix="application-operations" title="Application operations" description={showDescriptions ? "Completed SlateDB API calls, reported as totals and per-second rate distributions." : undefined} firstColumn="API" columns={rateColumns} rows={applicationOperations} />}
-  {(showEmptyApplication || applicationThroughput.length > 0) && <MetricTable idPrefix="application-throughput" title="Application throughput" description={showDescriptions ? "Logical key and value bytes passed to or returned from each SlateDB API." : undefined} firstColumn="API" columns={throughputColumns} rows={applicationThroughput} />}
-  {(showEmptyApplication || applicationLatency.length > 0) && <MetricTable idPrefix="application-latency" title="Application latency (ms)" description={showDescriptions ? "SlateDB API latency, plus write durability latency measured against the durable frontier." : undefined} firstColumn="API" columns={statisticColumns} rows={applicationLatency} />}
-  <MetricTable idPrefix="object-requests" title="Object-store requests" description={showDescriptions ? "Physical object-store HTTP requests, including retries, reported as totals and per-second rate distributions." : undefined} firstColumn="Method" columns={rateColumns} rows={objectRequests} />
-  <MetricTable idPrefix="object-throughput" title="Object-store throughput" description={showDescriptions ? "Physical HTTP request and response body bytes transferred to and from object storage." : undefined} firstColumn="Method" columns={throughputColumns} rows={objectThroughput} />
-  <MetricTable idPrefix="process" title="Process statistics" description={showDescriptions ? "CPU and resident memory used by the benchmark process, including SlateDB and its embedded compactor." : undefined} firstColumn="Metric" columns={statisticColumns} rows={process} codeLabels={false} />
-  <MetricTable idPrefix="machine" title="Machine statistics" description={showDescriptions ? "Host-wide CPU, network, and disk activity, with benchmark-process RSS included for context." : undefined} firstColumn="Metric" columns={statisticColumns} rows={machine} codeLabels={false} />
+  {(showEmptyApplication || applicationOperations.length > 0) && <MetricTable idPrefix="application-operations" title="Application operations" firstColumn="API" columns={rateColumns} rows={applicationOperations} />}
+  {(showEmptyApplication || applicationThroughput.length > 0) && <MetricTable idPrefix="application-throughput" title="Application throughput" firstColumn="API" columns={throughputColumns} rows={applicationThroughput} />}
+  {(showEmptyApplication || applicationLatency.length > 0) && <MetricTable idPrefix="application-latency" title="Application latency (ms)" firstColumn="API" columns={statisticColumns} rows={applicationLatency} />}
+  <MetricTable idPrefix="object-requests" title="Object-store requests" firstColumn="Method" columns={rateColumns} rows={objectRequests} />
+  <MetricTable idPrefix="object-throughput" title="Object-store throughput" firstColumn="Method" columns={throughputColumns} rows={objectThroughput} />
+  <MetricTable idPrefix="process" title="Process statistics" firstColumn="Metric" columns={statisticColumns} rows={process} codeLabels={false} />
+  <MetricTable idPrefix="machine" title="Machine statistics" firstColumn="Metric" columns={statisticColumns} rows={machine} codeLabels={false} />
 </div>
 
 <script>
