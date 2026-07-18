@@ -4,27 +4,50 @@ import ConfigurationTable from '../../../components/ConfigurationTable.astro';
 import ResultContext from '../../../components/ResultContext.astro';
 import SiteHeader from '../../../components/SiteHeader.astro';
 import MetricTables from '../../../components/MetricTables.astro';
+import { getCollection, render, type CollectionEntry } from 'astro:content';
 import {
   loadPreparationResults,
   loadWorkloadResults,
+  workloadNames,
   type ResultRoute,
   type WorkloadResult,
 } from '../../../lib/results';
 
 export async function getStaticPaths() {
   const workloads = await loadWorkloadResults();
+  const content = await getCollection('workloads');
+  const descriptions = new Map(content.map((entry) => [entry.id, entry]));
+  const expected = new Set<string>(workloadNames);
+  const missing = workloadNames.filter((name) => !descriptions.has(name));
+  const unexpected = content.filter((entry) => !expected.has(entry.id)).map((entry) => entry.id);
+  const undocumented = [...new Set(
+    workloads.filter((route) => !descriptions.has(route.name)).map((route) => route.name),
+  )];
+  if (missing.length > 0 || unexpected.length > 0 || undocumented.length > 0) {
+    throw new Error(
+      [
+        'workload descriptions do not match the catalog',
+        `missing=${missing.join(',') || 'none'}`,
+        `unexpected=${unexpected.join(',') || 'none'}`,
+        `undocumented results=${undocumented.join(',') || 'none'}`,
+      ].join('; '),
+    );
+  }
   const routes = [...await loadPreparationResults(), ...workloads];
   return workloads.map((route) => ({
     params: { version: route.version, name: route.name },
-    props: { route, routes },
+    props: { route, routes, description: descriptions.get(route.name)! },
   }));
 }
 
-const { route, routes } = Astro.props as {
+const { route, routes, description } = Astro.props as {
   route: ResultRoute<WorkloadResult>;
   routes: ResultRoute<unknown>[];
+  description: CollectionEntry<'workloads'>;
 };
 const result = route.result;
+const { Content } = await render(description);
+const sourceUrl = `https://github.com/slatedb/slatedb-benchmark/blob/${result.source.runner_commit}/${description.data.source}`;
 ---
 
 <Base title={`${route.name} · SlateDB ${route.version}`}>
@@ -52,14 +75,25 @@ const result = route.result;
         </dl>
       </header>
 
+      <div class="workload-description">
+        <Content />
+        <a class="workload-source" href={sourceUrl}>View workload source</a>
+      </div>
+
       <MetricTables
         result={result}
+        showDescriptions
         chartSeriesUrl={`/raw/${route.version}/workload/${route.name}/${result.series.file}`}
         clientMeasurementNs={result.client_measurement_ns}
       />
 
       <section class="metric-section">
-        <div class="section-heading"><h2>Configuration</h2></div>
+        <div class="section-heading">
+          <h2>Configuration</h2>
+          <p class="section-description">
+            The resolved dataset, workload, cache, and SlateDB settings used for this run.
+          </p>
+        </div>
         <ConfigurationTable configuration={result.configuration} />
       </section>
     </article>

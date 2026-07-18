@@ -14,6 +14,7 @@ interface Row {
 
 interface Props {
   title: string;
+  description?: string;
   firstColumn: string;
   columns: string[];
   rows: Row[];
@@ -21,16 +22,30 @@ interface Props {
   idPrefix?: string;
 }
 
-const { title, firstColumn, columns, rows, codeLabels = true, idPrefix = 'metric' } = Astro.props;
+const {
+  title,
+  description,
+  firstColumn,
+  columns,
+  rows,
+  codeLabels = true,
+  idPrefix = 'metric',
+} = Astro.props;
+const descriptionId = `${idPrefix}-description`;
 ---
 
 <section class="metric-section">
   <div class="section-heading">
     <h2>{title}</h2>
+    {description && <p id={descriptionId} class="section-description">{description}</p>}
   </div>
   {rows.length > 0 ? (
     <div class="table-scroll">
-      <table class="metric-table" data-chart-table>
+      <table
+        class="metric-table"
+        data-chart-table
+        aria-describedby={description ? descriptionId : undefined}
+      >
         <thead>
           <tr>
             <th scope="col">{firstColumn}</th>

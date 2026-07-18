@@ -299,9 +299,7 @@ function compareRoutes(left: ResultRoute<unknown>, right: ResultRoute<unknown>) 
   return compareVersion(right.version, left.version) || compareTask(left.name, right.name);
 }
 
-const taskOrder = [
-  'bulk-load',
-  'compaction',
+export const workloadNames = [
   'idle',
   'point-read-uniform',
   'point-read-skewed',
@@ -312,6 +310,12 @@ const taskOrder = [
   'range-scan',
   'sustained-ingest',
   'transaction-contention',
+] as const;
+
+const taskOrder = [
+  'bulk-load',
+  'compaction',
+  ...workloadNames,
 ];
 
 function compareTask(left: string, right: string) {
