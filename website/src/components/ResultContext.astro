@@ -25,24 +25,27 @@ const preparations = versionRoutes.filter((route) => route.kind === 'preparation
 const workloads = versionRoutes
   .filter((route) => route.kind === 'workload')
   .sort((left, right) => right.name.localeCompare(left.name));
+const versionOptions = versions.map((candidate) => {
+  const target = routes.find((route) => route.version === candidate && route.name === name)
+    ?? routes.find((route) => route.version === candidate && route.kind === kind)
+    ?? routes.find((route) => route.version === candidate)!;
+  return {
+    version: candidate,
+    label: versionLabel(candidate),
+    href: routeHref(target),
+  };
+});
 const rawResult = `/raw/${version}/${kind}/${name}/result.json`;
 ---
 
 <aside class="result-context" aria-label="Benchmark context">
   <div class="context-block">
-    <span class="context-label">Version</span>
-    <nav class="link-list" aria-label="SlateDB versions">
-      {versions.map((candidate) => {
-        const target = routes.find((route) => route.version === candidate && route.name === name)
-          ?? routes.find((route) => route.version === candidate && route.kind === kind)
-          ?? routes.find((route) => route.version === candidate);
-        return target && (
-          <a class:list={{ current: candidate === version }} href={routeHref(target)}>
-            {versionLabel(candidate)}
-          </a>
-        );
-      })}
-    </nav>
+    <label class="context-label" for="result-version">Version</label>
+    <select class="version-select" id="result-version" data-version-select>
+      {versionOptions.map((option) => (
+        <option value={option.href} selected={option.version === version}>{option.label}</option>
+      ))}
+    </select>
   </div>
 
   <div class="context-block">
@@ -81,3 +84,9 @@ const rawResult = `/raw/${version}/${kind}/${name}/result.json`;
     <a href={`https://github.com/slatedb/slatedb-benchmark/commit/${source.runner_commit}`}>Runner source ↗</a>
   </div>
 </aside>
+
+<script>
+  document.querySelectorAll<HTMLSelectElement>('[data-version-select]').forEach((select) => {
+    select.addEventListener('change', () => window.location.assign(select.value));
+  });
+</script>
