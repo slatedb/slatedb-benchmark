@@ -24,37 +24,6 @@ export type Environment = {
   region: string;
 };
 
-export type TransferCapacity = {
-  status: 'ok';
-  timestamp: string;
-  scale: number;
-  runner_type: string;
-  object_store: string;
-  endpoint: string;
-  region: string;
-  parallel_objects: number;
-  requests_per_process: number;
-  max_concurrent_requests: number;
-  warmup_bytes: number;
-  measured_bytes: number;
-  upload: TransferMeasurement;
-  download: TransferMeasurement;
-};
-
-export type TransferMeasurement = {
-  elapsed_seconds: number;
-  mib_per_second: number;
-};
-
-export type RunManifest = {
-  status: 'ok';
-  golden_id: string;
-  started_at: string;
-  finished_at: string;
-  source: SourceIdentity;
-  transfer_capacity: TransferCapacity;
-};
-
 export type CheckpointReference = {
   database_path: string;
   checkpoint_id: string;
@@ -255,7 +224,6 @@ export type ResultRoute<T> = {
   kind: 'preparation' | 'workload';
   name: string;
   result: T;
-  run: RunManifest;
 };
 
 const repoRoot = path.resolve(process.cwd(), '..');
@@ -296,15 +264,11 @@ async function loadTaskResults<T>(kind: 'preparation' | 'workload'): Promise<Res
   const routes = await Promise.all(
     files.map(async (file) => {
       const [version, , name] = path.relative(resultsRoot, file).split(path.sep);
-      const run = JSON.parse(
-        await fs.readFile(path.join(resultsRoot, version, 'run.json'), 'utf8'),
-      ) as RunManifest;
       return {
         version,
         kind,
         name,
         result: JSON.parse(await fs.readFile(file, 'utf8')) as T,
-        run,
       };
     }),
   );

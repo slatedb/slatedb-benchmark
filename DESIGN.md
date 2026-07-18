@@ -276,7 +276,7 @@ after changing the SlateDB commit or preparation configuration.
 | --- | --- |
 | `validate-golden` | Verify and upload both preparation results |
 | `build` | Build the current runner against the recorded SlateDB commit |
-| `transfer-capacity` | Measure the run's Tigris upload and download capacity |
+| `transfer-capacity` | Record diagnostic Tigris upload and download bandwidth |
 | `workloads` | Run the workload matrix |
 | `bundle` | Assemble and checksum all run results |
 | `publish` | Commit results when the `publish` input is `true` |
@@ -286,7 +286,8 @@ The transfer probe runs on the published WarpBuild machine type alongside the
 build. Four AWS CLI processes transfer 8 GiB of warmup data and then 32 GiB of
 measured data in each direction. Upload and download run separately. Scaled
 local runs reduce both sizes. Workloads wait for the probe, so its traffic
-never overlaps their measurements.
+never overlaps their measurements. The probe is diagnostic data and does not
+appear on the website.
 
 The workload matrix uses one WarpBuild machine per task and runs up to four
 tasks at once. Act runs one task at a time because its jobs share the local
@@ -341,7 +342,7 @@ results/<version>/
 ```
 
 `run.json` records the golden ID, preparation and benchmark runner commits,
-resolved configuration, matrix concurrency, Tigris transfer capacity, and
+resolved configuration, matrix concurrency, diagnostic Tigris bandwidth, and
 result checksums. Preparation results describe the golden data and
 checkpoints. Both result types contain the environment and metric summaries
 defined in
@@ -414,10 +415,9 @@ GitHub Pages. It has no database service.
 /<version>/workload/<name>/
 ```
 
-Every page displays the run-level Tigris transfer-capacity table. Preparation
-pages display golden dataset and checkpoint information alongside the
-applicable metric tables. Workload pages display the same tables. Clicking a
-workload row opens its chart below the row. The browser fetches one sidecar
+Preparation pages display golden dataset and checkpoint information alongside
+the applicable metric tables. Workload pages display the same tables. Clicking
+a workload row opens its chart below the row. The browser fetches one sidecar
 after page load and reuses it for every row. Data-saving mode disables the
 preload; a click still fetches it. Both page types omit inapplicable rows and
 keep measured zeroes visible. Result files and source commits remain linked
