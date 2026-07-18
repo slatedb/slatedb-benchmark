@@ -5,7 +5,10 @@ mod util;
 
 use crate::config::{ResolvedConfig, Task};
 use crate::instrumented_store::StoreMetrics;
-use crate::system::{sample_until_stopped, ApplicationRegistry, SampledMeasurement};
+use crate::system::{
+    sample_until_stopped_with_rate_control, ApplicationRegistry, RateWindowControl,
+    SampledMeasurement,
+};
 use anyhow::{bail, Context, Result};
 use durability::DurabilityTracker;
 use slatedb::Db;
@@ -45,11 +48,13 @@ pub async fn execute(
 
     tracing::info!(task = %config.task.task, "starting workload measurement");
     let registry = Arc::new(ApplicationRegistry::default());
+    let rate_windows = Arc::new(RateWindowControl::new());
     let (stop_tx, stop_rx) = watch::channel(false);
     let (ready_tx, ready_rx) = oneshot::channel();
-    let sampler = tokio::spawn(sample_until_stopped(
+    let sampler = tokio::spawn(sample_until_stopped_with_rate_control(
         Arc::clone(&registry),
         store_metrics,
+        Arc::clone(&rate_windows),
         stop_rx,
         Some(ready_tx),
     ));
@@ -72,6 +77,7 @@ pub async fn execute(
     )
     .await;
     let client_measurement = client_started.elapsed();
+    rate_windows.finish();
     tracing::info!(task = %config.task.task, "workload clients stopped");
     drop(durability);
     let stats = match stats {

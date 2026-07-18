@@ -163,10 +163,11 @@ keeps zero values in rows that have calls. Values in the examples are
 illustrative.
 
 The runner counts operations and samples machine counters once per second. The
-recorders stay active through the durability drain. Rate percentiles use
-complete one-second windows and exclude partial windows at the boundaries.
-Average rates divide the total by the full recorded interval. Latency
-statistics use individual calls and milliseconds.
+workload recorders stay active through the durability drain, so totals and
+latency statistics include drain activity. Rate percentiles use complete
+one-second client windows and exclude the durability drain and partial windows
+at the boundaries. Average rates divide the total by the full recorded interval.
+Latency statistics use individual calls and milliseconds.
 
 ### Application operations
 

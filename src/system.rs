@@ -316,6 +316,24 @@ pub struct SampledMeasurement {
     resources: Vec<ResourceWindow>,
 }
 
+#[derive(Debug)]
+pub(crate) struct RateWindowControl {
+    active: Mutex<bool>,
+}
+
+impl RateWindowControl {
+    pub(crate) fn new() -> Self {
+        Self {
+            active: Mutex::new(true),
+        }
+    }
+
+    /// Stops rate-window capture after any in-flight sample completes.
+    pub(crate) fn finish(&self) {
+        *self.active.lock().expect("rate window control lock") = false;
+    }
+}
+
 impl SampledMeasurement {
     pub fn elapsed(&self) -> Duration {
         self.elapsed
@@ -477,6 +495,23 @@ impl SampledMeasurement {
 pub async fn sample_until_stopped(
     registry: Arc<ApplicationRegistry>,
     store_metrics: Arc<StoreMetrics>,
+    stop: watch::Receiver<bool>,
+    ready: Option<oneshot::Sender<()>>,
+) -> Result<SampledMeasurement> {
+    sample_until_stopped_with_rate_control(
+        registry,
+        store_metrics,
+        Arc::new(RateWindowControl::new()),
+        stop,
+        ready,
+    )
+    .await
+}
+
+pub(crate) async fn sample_until_stopped_with_rate_control(
+    registry: Arc<ApplicationRegistry>,
+    store_metrics: Arc<StoreMetrics>,
+    rate_windows: Arc<RateWindowControl>,
     mut stop: watch::Receiver<bool>,
     ready: Option<oneshot::Sender<()>>,
 ) -> Result<SampledMeasurement> {
@@ -499,20 +534,28 @@ pub async fn sample_until_stopped(
     while !*stop.borrow() {
         tokio::select! {
             _ = interval.tick() => {
+                // This lock makes `finish` a boundary: the drain cannot start
+                // until any sample already in progress has taken its snapshots.
+                let rate_windows_active = rate_windows
+                    .active
+                    .lock()
+                    .expect("rate window control lock");
                 let now = Instant::now();
                 let duration = now.saturating_duration_since(previous_at);
                 let application = registry.drain()?;
                 let store = store_metrics.snapshot();
                 let host_snapshot = host.snapshot();
                 application_total.merge(&application)?;
-                application_windows.push(ApplicationWindow {
-                    duration,
-                    operations: application.operations,
-                });
-                store_windows.push(StoreWindow {
-                    duration,
-                    delta: store.difference(&previous_store),
-                });
+                if *rate_windows_active {
+                    application_windows.push(ApplicationWindow {
+                        duration,
+                        operations: application.operations,
+                    });
+                    store_windows.push(StoreWindow {
+                        duration,
+                        delta: store.difference(&previous_store),
+                    });
+                }
                 resources.push(host_snapshot.window(&previous_host, duration));
                 previous_at = now;
                 previous_store = store;
@@ -530,14 +573,20 @@ pub async fn sample_until_stopped(
     let ended = Instant::now();
     let duration = ended.saturating_duration_since(previous_at);
     application_total.merge(&application)?;
-    application_windows.push(ApplicationWindow {
-        duration,
-        operations: application.operations,
-    });
-    store_windows.push(StoreWindow {
-        duration,
-        delta: store_end.difference(&previous_store),
-    });
+    if *rate_windows
+        .active
+        .lock()
+        .expect("rate window control lock")
+    {
+        application_windows.push(ApplicationWindow {
+            duration,
+            operations: application.operations,
+        });
+        store_windows.push(StoreWindow {
+            duration,
+            delta: store_end.difference(&previous_store),
+        });
+    }
     Ok(SampledMeasurement {
         elapsed: ended.saturating_duration_since(started),
         application_total,
@@ -835,7 +884,10 @@ pub fn counter_value(metrics: &Metrics, name: &str) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{sample_until_stopped, summarize_values, ApplicationRegistry};
+    use super::{
+        sample_until_stopped, sample_until_stopped_with_rate_control, summarize_values,
+        ApplicationRegistry, RateWindowControl,
+    };
     use crate::instrumented_store::{HttpMethod, StoreMetrics};
     use std::sync::Arc;
     use std::time::Duration;
@@ -891,5 +943,48 @@ mod tests {
         assert_eq!(object_store.requests["GET"].total, 1);
         assert!(object_store.requests["GET"].min_per_second > 0.0);
         assert!(object_store.throughput["GET"].min_bytes_per_second > 0.0);
+    }
+
+    #[tokio::test]
+    async fn drain_activity_is_totaled_without_contaminating_rate_windows() {
+        let registry = Arc::new(ApplicationRegistry::default());
+        let recorder = registry.recorder();
+        let store_metrics = Arc::new(StoreMetrics::default());
+        let rate_windows = Arc::new(RateWindowControl::new());
+        let (stop_tx, stop_rx) = watch::channel(false);
+        let (ready_tx, ready_rx) = oneshot::channel();
+        let sampler = tokio::spawn(sample_until_stopped_with_rate_control(
+            Arc::clone(&registry),
+            Arc::clone(&store_metrics),
+            Arc::clone(&rate_windows),
+            stop_rx,
+            Some(ready_tx),
+        ));
+        ready_rx.await.expect("sampler baseline");
+
+        recorder.record_success("get", Duration::from_millis(1), 16);
+        store_metrics.record_request(HttpMethod::Get);
+        store_metrics.record_response_bytes(HttpMethod::Get, 16);
+        tokio::time::sleep(Duration::from_millis(1_200)).await;
+
+        rate_windows.finish();
+        recorder.record_success("flush", Duration::from_millis(1), 0);
+        store_metrics.record_request(HttpMethod::Put);
+        store_metrics.record_response_bytes(HttpMethod::Put, 16);
+        tokio::time::sleep(Duration::from_millis(1_200)).await;
+        stop_tx.send(true).expect("stop sampler");
+
+        let measurement = sampler.await.expect("join sampler").expect("measurement");
+        let application = measurement.application();
+        assert_eq!(application.operations["get"].total, 1);
+        assert!(application.operations["get"].min_per_second > 0.0);
+        assert_eq!(application.operations["flush"].total, 1);
+        assert_eq!(application.operations["flush"].p50_per_second, 0.0);
+
+        let object_store = measurement.object_store();
+        assert_eq!(object_store.requests["GET"].total, 1);
+        assert!(object_store.requests["GET"].min_per_second > 0.0);
+        assert_eq!(object_store.requests["PUT"].total, 1);
+        assert_eq!(object_store.requests["PUT"].p50_per_second, 0.0);
     }
 }

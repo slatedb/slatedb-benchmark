@@ -62,20 +62,22 @@ Linux sample        -> process and host counters
 ```
 
 The recorders remain active through the durability drain. Published totals,
-rate buckets, latency histograms, and resource samples include that interval.
-Rate averages use the full interval from the counter baseline through the end
-of the drain. Workload results store the client interval, durability drain, and
-full recorded interval separately in nanoseconds.
+latency histograms, and resource samples include that interval. Rate percentile
+buckets stop at the client boundary, before the durability drain. Rate averages
+use the full interval from the counter baseline through the end of the drain.
+Workload results store the client interval, durability drain, and full recorded
+interval separately in nanoseconds.
 
 The `scan` API row records each iterator `next()` call separately, including a
 call that returns the end of the iterator. Latency ends when that call returns.
 Iterator creation and the total time to consume a scan are not recorded as
 `scan` latency.
 
-API rates, object-store rates, and resource statistics use one-second buckets.
-API and durability latencies use HDR histograms with microsecond precision and
-three significant digits. The worker keeps these structures in memory until
-result validation finishes.
+API and object-store rate percentiles use complete one-second client windows.
+Resource statistics continue to use one-second buckets through the drain. API
+and durability latencies use HDR histograms with microsecond precision and three
+significant digits. The worker keeps these structures in memory until result
+validation finishes.
 
 The S3 recorder wraps the HTTP request-attempt boundary, so retries count as
 separate requests. A `404 Not Found` response still counts as a request, but not
