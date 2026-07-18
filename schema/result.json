@@ -205,10 +205,16 @@
         "golden_id",
         "timestamp",
         "source",
+        "environment",
         "configuration",
         "source_checkpoint",
         "checkpoint",
-        "dataset"
+        "dataset",
+        "recorded_interval_ns",
+        "application",
+        "object_store",
+        "process",
+        "machine"
       ],
       "properties": {
         "status": { "const": "ok" },
@@ -216,6 +222,7 @@
         "golden_id": { "type": "string", "minLength": 1 },
         "timestamp": { "type": "string", "format": "date-time" },
         "source": { "$ref": "#/$defs/source" },
+        "environment": { "$ref": "#/$defs/environment" },
         "configuration": { "$ref": "#/$defs/configuration" },
         "source_checkpoint": {
           "oneOf": [
@@ -224,7 +231,12 @@
           ]
         },
         "checkpoint": { "$ref": "#/$defs/checkpoint" },
-        "dataset": { "$ref": "#/$defs/datasetMetadata" }
+        "dataset": { "$ref": "#/$defs/datasetMetadata" },
+        "recorded_interval_ns": { "type": "integer", "minimum": 1 },
+        "application": { "$ref": "#/$defs/applicationMetrics" },
+        "object_store": { "$ref": "#/$defs/objectStoreMetrics" },
+        "process": { "$ref": "#/$defs/processStatistics" },
+        "machine": { "$ref": "#/$defs/machineStatistics" }
       }
     },
     "initialState": {

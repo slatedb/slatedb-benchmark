@@ -52,6 +52,10 @@ parallel, submits ordered batches through SlateDB's write API, and does not
 wait for each batch to become durable. It disables background compaction for
 the load, flushes the database, and saves the uncompacted checkpoint.
 
+Measurement starts after the database opens and ends when the final flush
+returns. Each 1,024-record batch appears as a `write` API call. The final flush
+appears as one `flush` call.
+
 Progress logs include completed records, recent and average records per second,
 logical MiB/s, physical HTTP upload MiB/s, L0 flush MiB/s, backpressure,
 elapsed time, and ETA.
@@ -64,6 +68,10 @@ and waits for SlateDB to report idle. This phase has no warmup or client
 operations. Its output becomes the golden checkpoint. The compaction wait has
 no runner-level deadline. The GitHub job's 24-hour timeout remains the outer
 limit.
+
+Measurement starts after the cloned database opens and ends when full
+compaction completes. This phase has no application API rows; its activity
+appears in the object-store, process, and machine tables.
 
 The measured steady-state workloads clone the golden checkpoint and do not
 inherit another workload's writes.
@@ -157,17 +165,19 @@ API tables retain the names `transaction.get`, `transaction.put`, and
 The website shows seven tables and no charts: application operations,
 application throughput, application latency, object-store requests,
 object-store throughput, process statistics, and machine statistics.
-Workload pages use these tables. Preparation pages show checkpoint references
-and golden dataset metadata instead. The website omits rows with no calls and
-keeps zero values in rows that have calls. Values in the examples are
-illustrative.
+Workload and preparation pages use these tables. Preparation pages also show
+checkpoint references and golden dataset metadata. Full compaction omits the
+three empty application tables. The website omits rows with no calls and keeps
+zero values in rows that have calls. Values in the examples are illustrative.
 
 The runner counts operations and samples machine counters once per second. The
 workload recorders stay active through the durability drain, so totals and
-latency statistics include drain activity. Rate percentiles use complete
+latency statistics include drain activity. Preparation recorders cover the
+phase boundaries defined above. Workload rate percentiles use complete
 one-second client windows and exclude the durability drain and partial windows
-at the boundaries. Average rates divide the total by the full recorded interval.
-Latency statistics use individual calls and milliseconds.
+at the boundaries. Preparation rate percentiles also include the final partial
+window. Average rates divide the total by the full recorded interval. Latency
+statistics use individual calls and milliseconds.
 
 ### Application operations
 

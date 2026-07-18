@@ -10,6 +10,20 @@ export type SourceIdentity = {
   lockfile_sha256: string;
 };
 
+export type Environment = {
+  runner_type: string;
+  hostname: string;
+  cpu_model: string;
+  cpu_cores: number;
+  ram_bytes: number;
+  local_disk: string;
+  os: string;
+  kernel: string;
+  object_store: string;
+  endpoint: string;
+  region: string;
+};
+
 export type CheckpointReference = {
   database_path: string;
   checkpoint_id: string;
@@ -55,6 +69,7 @@ export type PreparationResult = {
   golden_id: string;
   timestamp: string;
   source: SourceIdentity;
+  environment: Environment;
   configuration: ResolvedConfiguration;
   source_checkpoint: CheckpointReference | null;
   checkpoint: CheckpointReference;
@@ -65,7 +80,7 @@ export type PreparationResult = {
     logical_bytes: number;
     live_sst_bytes: number;
   };
-};
+} & RecordedMetrics;
 
 export type RateSummary = {
   total: number;
@@ -110,23 +125,7 @@ export type DistributionSummary = {
   max: number;
 };
 
-export type WorkloadResult = {
-  status: 'ok';
-  task: string;
-  golden_id: string;
-  session: string;
-  timestamp: string;
-  source: SourceIdentity;
-  environment: Record<string, string | number>;
-  configuration: ResolvedConfiguration;
-  initial_state: {
-    kind: 'golden' | 'empty';
-    checkpoint_id: string | null;
-    manifest_id: number | null;
-    lsm_digest_sha256: string;
-  };
-  client_measurement_ns: number;
-  durability_drain_ns: number;
+export type RecordedMetrics = {
   recorded_interval_ns: number;
   application: {
     operations: Record<string, RateSummary>;
@@ -152,6 +151,25 @@ export type WorkloadResult = {
     disk_write_operations_per_second: DistributionSummary;
   };
 };
+
+export type WorkloadResult = {
+  status: 'ok';
+  task: string;
+  golden_id: string;
+  session: string;
+  timestamp: string;
+  source: SourceIdentity;
+  environment: Environment;
+  configuration: ResolvedConfiguration;
+  initial_state: {
+    kind: 'golden' | 'empty';
+    checkpoint_id: string | null;
+    manifest_id: number | null;
+    lsm_digest_sha256: string;
+  };
+  client_measurement_ns: number;
+  durability_drain_ns: number;
+} & RecordedMetrics;
 
 export type ResultRoute<T> = {
   version: string;

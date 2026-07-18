@@ -418,17 +418,26 @@ async fn transaction(
     }
 }
 
-const DATASET_BATCH_RECORDS: u64 = 1_024;
+pub(crate) const DATASET_BATCH_RECORDS: u64 = 1_024;
 const DATASET_BATCH_QUEUE_DEPTH: usize = 16;
 
 pub struct DatasetLoadMetrics {
     store: Arc<StoreMetrics>,
     slate: Arc<BenchmarkMetricsRecorder>,
+    application: ApplicationRecorder,
 }
 
 impl DatasetLoadMetrics {
-    pub fn new(store: Arc<StoreMetrics>, slate: Arc<BenchmarkMetricsRecorder>) -> Self {
-        Self { store, slate }
+    pub fn new(
+        store: Arc<StoreMetrics>,
+        slate: Arc<BenchmarkMetricsRecorder>,
+        application: ApplicationRecorder,
+    ) -> Self {
+        Self {
+            store,
+            slate,
+            application,
+        }
     }
 }
 
@@ -484,6 +493,7 @@ pub async fn populate_dataset(
             batch.start == loaded,
             "dataset producer returned a batch out of order"
         );
+        let write_started = Instant::now();
         let mut write = Box::pin(measure_backpressure(
             db.write_with_options(batch.batch, &options),
         ));
@@ -507,19 +517,50 @@ pub async fn populate_dataset(
                 }
             }
         };
-        result.with_context(|| format!("loading records {}..{}", batch.start, batch.end))?;
+        let write_latency = write_started.elapsed();
+        let logical_bytes_per_record = u64::try_from(
+            config
+                .dataset
+                .key_bytes
+                .saturating_add(config.dataset.value_bytes),
+        )
+        .unwrap_or(u64::MAX);
+        let logical_bytes = batch
+            .end
+            .saturating_sub(batch.start)
+            .saturating_mul(logical_bytes_per_record);
+        match result {
+            Ok(_) => metrics
+                .application
+                .record_success("write", write_latency, logical_bytes),
+            Err(error) => {
+                metrics.application.record_error("write", write_latency);
+                return Err(error)
+                    .with_context(|| format!("loading records {}..{}", batch.start, batch.end));
+            }
+        }
         backpressure_ns = backpressure_ns.saturating_add(duration_ns(backpressure));
         loaded = batch.end;
     }
     for producer in producers {
         producer.await.context("joining dataset producer")??;
     }
+    let flush_started = Instant::now();
     let mut flush = Box::pin(db.flush());
     loop {
         tokio::select! {
             result = &mut flush => {
-                result.context("flushing bulk-loaded dataset")?;
-                break;
+                let latency = flush_started.elapsed();
+                match result {
+                    Ok(()) => {
+                        metrics.application.record_success("flush", latency, 0);
+                        break;
+                    }
+                    Err(error) => {
+                        metrics.application.record_error("flush", latency);
+                        return Err(error).context("flushing bulk-loaded dataset");
+                    }
+                }
             }
             _ = heartbeat.tick() => {
                 report_load_progress(

@@ -16,6 +16,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{oneshot, watch};
 
+pub(crate) use closed::DATASET_BATCH_RECORDS;
 pub use closed::{populate_dataset, DatasetLoadMetrics};
 use stats::WorkerStats;
 

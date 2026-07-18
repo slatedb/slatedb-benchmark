@@ -7,7 +7,8 @@ use crate::model::{
 };
 use crate::object_store::{delete_prefix, ObjectStoreContext};
 use crate::system::{
-    duration_ns, inspect_environment, verify_environment, BenchmarkMetricsRecorder,
+    duration_ns, inspect_environment, measure_until_complete, verify_environment,
+    ApplicationRegistry, BenchmarkMetricsRecorder, SampledMeasurement,
 };
 use crate::validation::{validate_preparation_result, validate_workload_result};
 use crate::workloads::{self, DatasetLoadMetrics};
@@ -109,17 +110,22 @@ async fn run_bulk_load(
     context: &ObjectStoreContext,
 ) -> Result<()> {
     let config = bulk_load_config(config)?;
+    let environment = inspect_environment(&context.provider, &context.endpoint, &context.region);
     let task_root = golden_task_root(context, &args.golden, Task::BulkLoad);
     let result_path = task_root.clone().join("result.json");
     if let Some(existing) =
         load_optional::<PreparationResult>(Arc::clone(&context.control), &result_path).await?
     {
-        validate_preparation_result(&existing)?;
-        ensure_preparation_matches(&existing, args, &config)?;
-        verify_checkpoint_reference(Arc::clone(&context.control), &existing.checkpoint).await?;
-        validate_uncompacted_checkpoint(Arc::clone(&context.control), &existing.checkpoint).await?;
-        write_local_result(&args.output, &existing)?;
-        return print_success(args, true);
+        if existing.recorded_interval_ns > 0 {
+            validate_preparation_result(&existing)?;
+            ensure_preparation_matches(&existing, args, &config)?;
+            verify_checkpoint_reference(Arc::clone(&context.control), &existing.checkpoint).await?;
+            validate_uncompacted_checkpoint(Arc::clone(&context.control), &existing.checkpoint)
+                .await?;
+            write_local_result(&args.output, &existing)?;
+            return print_success(args, true);
+        }
+        tracing::info!(task = %args.task, "rebuilding preparation result without recorded metrics");
     }
     delete_prefix(Arc::clone(&context.control), &task_root).await?;
     let database_path = task_root.clone().join("database");
@@ -134,13 +140,23 @@ async fn run_bulk_load(
         Arc::clone(&recorder),
     )
     .await?;
-    let load = workloads::populate_dataset(
-        Arc::clone(&db),
-        &config,
-        DatasetLoadMetrics::new(context.instrumented.metrics(), recorder),
+    let application = Arc::new(ApplicationRegistry::default());
+    let load = measure_until_complete(
+        Arc::clone(&application),
+        context.instrumented.metrics(),
+        workloads::populate_dataset(
+            Arc::clone(&db),
+            &config,
+            DatasetLoadMetrics::new(
+                context.instrumented.metrics(),
+                recorder,
+                application.recorder(),
+            ),
+        ),
     )
     .await;
-    close_database_after(&db, load, "closing bulk-load database").await?;
+    let ((), measurement) = close_database_after(&db, load, "closing bulk-load database").await?;
+    ensure_measurement_has_no_errors(&measurement)?;
     let checkpoint = checkpoint_database(
         database_path,
         Arc::clone(&context.control),
@@ -154,10 +170,16 @@ async fn run_bulk_load(
         golden_id: args.golden.clone(),
         timestamp: Utc::now().to_rfc3339(),
         source: SourceIdentity::current(),
+        environment,
         configuration: ResultConfiguration::from(&config),
         source_checkpoint: None,
         dataset: dataset_metadata(&config, &checkpoint),
         checkpoint,
+        recorded_interval_ns: duration_ns(measurement.elapsed()),
+        application: measurement.application(),
+        object_store: measurement.object_store(),
+        process: measurement.process(),
+        machine: measurement.machine(),
     };
     validate_preparation_result(&result)?;
     write_local_result(&args.output, &result)?;
@@ -170,6 +192,7 @@ async fn run_full_compaction(
     config: &ResolvedConfig,
     context: &ObjectStoreContext,
 ) -> Result<()> {
+    let environment = inspect_environment(&context.provider, &context.endpoint, &context.region);
     let bulk_path = golden_task_root(context, &args.golden, Task::BulkLoad).join("result.json");
     let bulk: PreparationResult = load_required(Arc::clone(&context.control), &bulk_path).await?;
     validate_preparation_result(&bulk)?;
@@ -185,16 +208,20 @@ async fn run_full_compaction(
     if let Some(existing) =
         load_optional::<PreparationResult>(Arc::clone(&context.control), &result_path).await?
     {
-        validate_preparation_result(&existing)?;
-        ensure_preparation_matches(&existing, args, config)?;
-        anyhow::ensure!(
-            existing.source_checkpoint.as_ref() == Some(&bulk.checkpoint),
-            "existing full-compaction result belongs to another bulk-load checkpoint"
-        );
-        verify_checkpoint_reference(Arc::clone(&context.control), &existing.checkpoint).await?;
-        validate_compacted_checkpoint(Arc::clone(&context.control), &existing.checkpoint).await?;
-        write_local_result(&args.output, &existing)?;
-        return print_success(args, true);
+        if existing.recorded_interval_ns > 0 {
+            validate_preparation_result(&existing)?;
+            ensure_preparation_matches(&existing, args, config)?;
+            anyhow::ensure!(
+                existing.source_checkpoint.as_ref() == Some(&bulk.checkpoint),
+                "existing full-compaction result belongs to another bulk-load checkpoint"
+            );
+            verify_checkpoint_reference(Arc::clone(&context.control), &existing.checkpoint).await?;
+            validate_compacted_checkpoint(Arc::clone(&context.control), &existing.checkpoint)
+                .await?;
+            write_local_result(&args.output, &existing)?;
+            return print_success(args, true);
+        }
+        tracing::info!(task = %args.task, "rebuilding preparation result without recorded metrics");
     }
     delete_prefix(Arc::clone(&context.control), &task_root).await?;
     let database_path = task_root.clone().join("database");
@@ -216,9 +243,16 @@ async fn run_full_compaction(
         recorder,
     )
     .await?;
-    let compaction =
-        compact_database_fully(database_path.clone(), Arc::clone(&context.control)).await;
-    close_database_after(&db, compaction, "closing full-compaction database").await?;
+    let application = Arc::new(ApplicationRegistry::default());
+    let compaction = measure_until_complete(
+        application,
+        context.instrumented.metrics(),
+        compact_database_fully(database_path.clone(), Arc::clone(&context.control)),
+    )
+    .await;
+    let ((), measurement) =
+        close_database_after(&db, compaction, "closing full-compaction database").await?;
+    ensure_measurement_has_no_errors(&measurement)?;
     let checkpoint = checkpoint_database(
         database_path,
         Arc::clone(&context.control),
@@ -232,10 +266,16 @@ async fn run_full_compaction(
         golden_id: args.golden.clone(),
         timestamp: Utc::now().to_rfc3339(),
         source: SourceIdentity::current(),
+        environment,
         configuration: ResultConfiguration::from(config),
         source_checkpoint: Some(bulk.checkpoint),
         dataset: dataset_metadata(config, &checkpoint),
         checkpoint,
+        recorded_interval_ns: duration_ns(measurement.elapsed()),
+        application: measurement.application(),
+        object_store: measurement.object_store(),
+        process: measurement.process(),
+        machine: measurement.machine(),
     };
     validate_preparation_result(&result)?;
     write_local_result(&args.output, &result)?;
@@ -657,6 +697,15 @@ async fn close_database_after<T>(
     let value = operation?;
     close?;
     Ok(value)
+}
+
+fn ensure_measurement_has_no_errors(measurement: &SampledMeasurement) -> Result<()> {
+    let errors = measurement.errors();
+    anyhow::ensure!(
+        errors == 0,
+        "preparation recorded {errors} API or HTTP errors"
+    );
+    Ok(())
 }
 
 async fn checkpoint_database(

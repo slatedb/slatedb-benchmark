@@ -4,15 +4,16 @@ import type {
   DistributionSummary,
   LatencySummary,
   RateSummary,
+  RecordedMetrics,
   ThroughputSummary,
-  WorkloadResult,
 } from '../lib/results';
 
 interface Props {
-  result: WorkloadResult;
+  result: RecordedMetrics;
+  showEmptyApplication?: boolean;
 }
 
-const { result } = Astro.props;
+const { result, showEmptyApplication = true } = Astro.props;
 const statisticColumns = ['avg', 'p50', 'p95', 'p99', 'p99.9', 'min', 'max'];
 const rateColumns = ['total', 'avg/s', 'p50/s', 'p95/s', 'p99/s', 'p99.9/s', 'min/s', 'max/s'];
 const throughputColumns = ['total GiB', 'avg MiB/s', 'p50', 'p95', 'p99', 'p99.9', 'min', 'max'];
@@ -86,9 +87,9 @@ const machine = [
 ];
 ---
 
-<MetricTable title="Application operations" firstColumn="API" columns={rateColumns} rows={applicationOperations} />
-<MetricTable title="Application throughput" firstColumn="API" columns={throughputColumns} rows={applicationThroughput} />
-<MetricTable title="Application latency (ms)" firstColumn="API" columns={statisticColumns} rows={applicationLatency} />
+{(showEmptyApplication || applicationOperations.length > 0) && <MetricTable title="Application operations" firstColumn="API" columns={rateColumns} rows={applicationOperations} />}
+{(showEmptyApplication || applicationThroughput.length > 0) && <MetricTable title="Application throughput" firstColumn="API" columns={throughputColumns} rows={applicationThroughput} />}
+{(showEmptyApplication || applicationLatency.length > 0) && <MetricTable title="Application latency (ms)" firstColumn="API" columns={statisticColumns} rows={applicationLatency} />}
 <MetricTable title="Object-store requests" firstColumn="Method" columns={rateColumns} rows={objectRequests} />
 <MetricTable title="Object-store throughput" firstColumn="Method" columns={throughputColumns} rows={objectThroughput} />
 <MetricTable title="Process statistics" firstColumn="Metric" columns={statisticColumns} rows={process} codeLabels={false} />

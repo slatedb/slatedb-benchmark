@@ -1,5 +1,6 @@
 use crate::model::{
-    DistributionSummary, LatencySummary, PreparationResult, RateSummary, ResultConfiguration,
+    ApplicationMetrics, DistributionSummary, Environment, LatencySummary, MachineStatistics,
+    ObjectStoreMetrics, PreparationResult, ProcessStatistics, RateSummary, ResultConfiguration,
     SourceIdentity, ThroughputSummary, WorkloadResult,
 };
 use anyhow::{bail, ensure, Result};
@@ -15,6 +16,14 @@ pub fn validate_preparation_result(result: &PreparationResult) -> Result<()> {
     validate_timestamp(&result.timestamp)?;
     validate_source(&result.source)?;
     validate_configuration(&result.configuration, result.task)?;
+    validate_environment(&result.environment)?;
+    validate_recorded_metrics(
+        result.recorded_interval_ns,
+        &result.application,
+        &result.object_store,
+        &result.process,
+        &result.machine,
+    )?;
     ensure!(
         result.dataset.record_count > 0,
         "prepared dataset has no records"
@@ -50,10 +59,13 @@ pub fn validate_preparation_result(result: &PreparationResult) -> Result<()> {
         "prepared dataset size does not match its checkpoint"
     );
     match result.task {
-        crate::config::Task::BulkLoad => ensure!(
-            result.source_checkpoint.is_none(),
-            "bulk load must not have a source checkpoint"
-        ),
+        crate::config::Task::BulkLoad => {
+            ensure!(
+                result.source_checkpoint.is_none(),
+                "bulk load must not have a source checkpoint"
+            );
+            validate_preparation_application_rows(result)?;
+        }
         crate::config::Task::FullCompaction => {
             let source = result
                 .source_checkpoint
@@ -64,6 +76,7 @@ pub fn validate_preparation_result(result: &PreparationResult) -> Result<()> {
                 source.checkpoint_id != result.checkpoint.checkpoint_id,
                 "full compaction reused its source checkpoint"
             );
+            validate_preparation_application_rows(result)?;
         }
         _ => unreachable!("checked preparation task"),
     }
@@ -87,7 +100,7 @@ pub fn validate_workload_result(result: &WorkloadResult) -> Result<()> {
     validate_timestamp(&result.timestamp)?;
     validate_source(&result.source)?;
     validate_configuration(&result.configuration, result.task)?;
-    validate_environment(result)?;
+    validate_environment(&result.environment)?;
     ensure!(
         result.recorded_interval_ns
             >= result
@@ -111,11 +124,29 @@ pub fn validate_workload_result(result: &WorkloadResult) -> Result<()> {
         );
     }
     validate_initial_state(result)?;
-    for (api, operations) in &result.application.operations {
+    validate_recorded_metrics(
+        result.recorded_interval_ns,
+        &result.application,
+        &result.object_store,
+        &result.process,
+        &result.machine,
+    )?;
+    validate_application_rows(result)?;
+    Ok(())
+}
+
+fn validate_recorded_metrics(
+    recorded_interval_ns: u64,
+    application: &ApplicationMetrics,
+    object_store: &ObjectStoreMetrics,
+    process: &ProcessStatistics,
+    machine: &MachineStatistics,
+) -> Result<()> {
+    ensure!(recorded_interval_ns > 0, "recorded interval is empty");
+    for (api, operations) in &application.operations {
         ensure!(!api.is_empty(), "application API name is empty");
         validate_rate(operations)?;
-        let latency = result
-            .application
+        let latency = application
             .latency
             .get(api)
             .ok_or_else(|| anyhow::anyhow!("application API {api} has no latency row"))?;
@@ -127,30 +158,29 @@ pub fn validate_workload_result(result: &WorkloadResult) -> Result<()> {
         validate_average_rate(
             operations.total,
             operations.avg_per_second,
-            result.recorded_interval_ns,
+            recorded_interval_ns,
         )?;
     }
-    for (api, throughput) in &result.application.throughput {
+    for (api, throughput) in &application.throughput {
         ensure!(
-            result.application.operations.contains_key(api),
+            application.operations.contains_key(api),
             "application throughput {api} has no operations row"
         );
         validate_throughput(throughput)?;
         validate_average_rate(
             throughput.total_bytes,
             throughput.avg_bytes_per_second,
-            result.recorded_interval_ns,
+            recorded_interval_ns,
         )?;
     }
-    for (name, latency) in &result.application.latency {
+    for (name, latency) in &application.latency {
         validate_latency(latency)?;
         ensure!(
-            name == "durable" || result.application.operations.contains_key(name),
+            name == "durable" || application.operations.contains_key(name),
             "application latency {name} has no operations row"
         );
     }
-    validate_application_rows(result)?;
-    for (method, requests) in &result.object_store.requests {
+    for (method, requests) in &object_store.requests {
         ensure!(
             matches!(
                 method.as_str(),
@@ -162,31 +192,31 @@ pub fn validate_workload_result(result: &WorkloadResult) -> Result<()> {
         validate_average_rate(
             requests.total,
             requests.avg_per_second,
-            result.recorded_interval_ns,
+            recorded_interval_ns,
         )?;
     }
-    for (method, throughput) in &result.object_store.throughput {
+    for (method, throughput) in &object_store.throughput {
         ensure!(
-            result.object_store.requests.contains_key(method),
+            object_store.requests.contains_key(method),
             "object-store throughput {method} has no request row"
         );
         validate_throughput(throughput)?;
         validate_average_rate(
             throughput.total_bytes,
             throughput.avg_bytes_per_second,
-            result.recorded_interval_ns,
+            recorded_interval_ns,
         )?;
     }
-    validate_distribution(&result.process.cpu_cores)?;
-    validate_distribution(&result.process.rss_bytes)?;
-    validate_distribution(&result.machine.cpu_percent)?;
-    validate_distribution(&result.machine.rss_bytes)?;
-    validate_distribution(&result.machine.network_receive_bytes_per_second)?;
-    validate_distribution(&result.machine.network_send_bytes_per_second)?;
-    validate_distribution(&result.machine.disk_read_bytes_per_second)?;
-    validate_distribution(&result.machine.disk_write_bytes_per_second)?;
-    validate_distribution(&result.machine.disk_read_operations_per_second)?;
-    validate_distribution(&result.machine.disk_write_operations_per_second)?;
+    validate_distribution(&process.cpu_cores)?;
+    validate_distribution(&process.rss_bytes)?;
+    validate_distribution(&machine.cpu_percent)?;
+    validate_distribution(&machine.rss_bytes)?;
+    validate_distribution(&machine.network_receive_bytes_per_second)?;
+    validate_distribution(&machine.network_send_bytes_per_second)?;
+    validate_distribution(&machine.disk_read_bytes_per_second)?;
+    validate_distribution(&machine.disk_write_bytes_per_second)?;
+    validate_distribution(&machine.disk_read_operations_per_second)?;
+    validate_distribution(&machine.disk_write_operations_per_second)?;
     Ok(())
 }
 
@@ -261,24 +291,18 @@ fn validate_configuration(
     Ok(())
 }
 
-fn validate_environment(result: &WorkloadResult) -> Result<()> {
-    ensure!(
-        result.environment.cpu_cores > 0,
-        "environment has no CPU cores"
-    );
-    ensure!(result.environment.ram_bytes > 0, "environment has no RAM");
+fn validate_environment(environment: &Environment) -> Result<()> {
+    ensure!(environment.cpu_cores > 0, "environment has no CPU cores");
+    ensure!(environment.ram_bytes > 0, "environment has no RAM");
     for (name, value) in [
-        ("runner type", result.environment.runner_type.as_str()),
-        ("hostname", result.environment.hostname.as_str()),
-        ("CPU model", result.environment.cpu_model.as_str()),
-        ("operating system", result.environment.os.as_str()),
-        ("kernel", result.environment.kernel.as_str()),
-        ("object store", result.environment.object_store.as_str()),
-        (
-            "object-store endpoint",
-            result.environment.endpoint.as_str(),
-        ),
-        ("object-store region", result.environment.region.as_str()),
+        ("runner type", environment.runner_type.as_str()),
+        ("hostname", environment.hostname.as_str()),
+        ("CPU model", environment.cpu_model.as_str()),
+        ("operating system", environment.os.as_str()),
+        ("kernel", environment.kernel.as_str()),
+        ("object store", environment.object_store.as_str()),
+        ("object-store endpoint", environment.endpoint.as_str()),
+        ("object-store region", environment.region.as_str()),
     ] {
         ensure!(!value.is_empty(), "environment {name} is empty");
     }
@@ -315,6 +339,66 @@ fn validate_initial_state(result: &WorkloadResult) -> Result<()> {
         is_sha256(&result.initial_state.lsm_digest_sha256),
         "initial LSM digest is invalid"
     );
+    Ok(())
+}
+
+fn validate_preparation_application_rows(result: &PreparationResult) -> Result<()> {
+    use crate::config::Task;
+
+    match result.task {
+        Task::BulkLoad => {
+            let expected = ["flush", "write"].into_iter().collect::<BTreeSet<_>>();
+            let operations = result
+                .application
+                .operations
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>();
+            let latency = result
+                .application
+                .latency
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>();
+            let throughput = result
+                .application
+                .throughput
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>();
+            ensure!(
+                operations == expected && latency == expected,
+                "bulk load must record write and flush calls"
+            );
+            ensure!(
+                throughput == ["write"].into_iter().collect(),
+                "bulk load must record write throughput"
+            );
+            ensure!(
+                result.application.operations["write"].total
+                    == result
+                        .dataset
+                        .record_count
+                        .div_ceil(crate::workloads::DATASET_BATCH_RECORDS),
+                "bulk-load write count does not match its batches"
+            );
+            ensure!(
+                result.application.operations["flush"].total == 1,
+                "bulk load must record exactly one flush"
+            );
+            ensure!(
+                result.application.throughput["write"].total_bytes == result.dataset.logical_bytes,
+                "bulk-load write throughput differs from logical dataset bytes"
+            );
+        }
+        Task::FullCompaction => ensure!(
+            result.application.operations.is_empty()
+                && result.application.throughput.is_empty()
+                && result.application.latency.is_empty(),
+            "full compaction must not record application calls"
+        ),
+        _ => unreachable!("checked preparation task"),
+    }
     Ok(())
 }
 

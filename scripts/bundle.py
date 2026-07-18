@@ -42,6 +42,11 @@ def read_result(path, task, golden):
         raise ValueError(f"{path} contains task {result.get('task')!r}, expected {task!r}")
     if result.get("golden_id") != golden:
         raise ValueError(f"{path} belongs to another golden data set")
+    if result.get("recorded_interval_ns", 0) <= 0:
+        raise ValueError(f"{path} has no recorded metrics")
+    for field in ("environment", "application", "object_store", "process", "machine"):
+        if not isinstance(result.get(field), dict):
+            raise ValueError(f"{path} has no {field} metrics")
     return result
 
 

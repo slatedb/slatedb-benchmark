@@ -50,6 +50,21 @@ stop recorders
 write and validate the result
 ```
 
+A measured preparation phase follows this sequence:
+
+```text
+open database and caches
+reset recorders and take counter baselines
+run bulk load through its final flush, or run full compaction to completion
+stop recorders
+close database and create checkpoint
+write and validate the result
+```
+
+Database cloning, opening, closing, checkpoint creation, and validation stay
+outside preparation metrics. Bulk-load `write` rows count 1,024-record API
+batches. Full compaction has no application rows.
+
 The runner implements the metric definitions in
 [`BENCHMARKS.md`](BENCHMARKS.md) at these boundaries:
 
@@ -74,6 +89,7 @@ Iterator creation and the total time to consume a scan are not recorded as
 `scan` latency.
 
 API and object-store rate percentiles use complete one-second client windows.
+Preparation tasks also retain their final partial rate bucket.
 Resource statistics continue to use one-second buckets through the drain. API
 and durability latencies use HDR histograms with microsecond precision and three
 significant digits. The worker keeps these structures in memory until result
@@ -310,9 +326,10 @@ results/<version>/
 
 `run.json` records the golden ID, preparation and benchmark runner commits,
 resolved configuration, matrix concurrency, and result checksums. Preparation
-results describe the golden data and checkpoints. Workload results contain the
-environment, initial database identity, and summaries defined in
-[`BENCHMARKS.md`](BENCHMARKS.md).
+results describe the golden data and checkpoints. Both result types contain
+the environment and metric summaries defined in
+[`BENCHMARKS.md`](BENCHMARKS.md). Workload results also contain their initial
+database identity.
 
 The worker reads each result through strict Serde models and runs one semantic
 validation pass. That pass checks internal counts, samples, durability
@@ -320,7 +337,7 @@ coverage, database identity, and the invariants in
 [`BENCHMARKS.md`](BENCHMARKS.md). JSON schemas remain the published contract;
 the runner does not repeat validation through a schema engine.
 
-Successful workloads publish summaries and discard histograms and one-second
+Successful tasks publish summaries and discard histograms and one-second
 buckets. Failed tasks may include raw diagnostic files in their GitHub artifact.
 Published files contain no credentials, signed URLs, cache paths, or session
 tokens.
@@ -379,9 +396,9 @@ GitHub Pages. It has no database service or charting code.
 /<version>/workload/<name>/
 ```
 
-Preparation pages display golden dataset and checkpoint information. Workload
-pages display the tables defined in [`BENCHMARKS.md`](BENCHMARKS.md), omit
-inapplicable rows, and keep measured zeroes visible. Result files and source
+Preparation pages display golden dataset and checkpoint information alongside
+the applicable metric tables. Workload pages display the same tables. Both omit
+inapplicable rows and keep measured zeroes visible. Result files and source
 commits remain linked from each page.
 
 The site uses the SlateDB logo, colors, and fonts: Marcellus for headings, Inter

@@ -1,6 +1,7 @@
 ---
 import Base from '../../../layouts/Base.astro';
 import ConfigurationTable from '../../../components/ConfigurationTable.astro';
+import MetricTables from '../../../components/MetricTables.astro';
 import ResultContext from '../../../components/ResultContext.astro';
 import SiteHeader from '../../../components/SiteHeader.astro';
 import {
@@ -61,6 +62,9 @@ if (result.source_checkpoint) {
       <header class="page-heading">
         <p class="eyebrow">Dataset preparation</p>
         <h1>{route.name}</h1>
+        <dl class="heading-metadata">
+          <div><dt>Recorded interval</dt><dd>{(result.recorded_interval_ns / 1e9).toLocaleString('en-US', { maximumFractionDigits: 2 })}s</dd></div>
+        </dl>
       </header>
 
       <section class="metric-section">
@@ -77,6 +81,8 @@ if (result.source_checkpoint) {
           </table>
         </div>
       </section>
+
+      <MetricTables result={result} showEmptyApplication={false} />
 
       <section class="metric-section">
         <div class="section-heading"><h2>Checkpoint</h2></div>

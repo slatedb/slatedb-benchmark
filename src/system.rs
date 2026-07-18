@@ -4,7 +4,7 @@ use crate::model::{
     ApplicationMetrics, DistributionSummary, Environment, MachineStatistics, ObjectStoreMetrics,
     ProcessStatistics, RateSummary, ThroughputSummary,
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use slatedb_common::metrics::{
     CounterFn, DefaultMetricsRecorder, GaugeFn, HistogramFn, Metrics, MetricsRecorder,
     UpDownCounterFn,
@@ -596,6 +596,31 @@ pub(crate) async fn sample_until_stopped_with_rate_control(
         store_windows,
         resources,
     })
+}
+
+pub async fn measure_until_complete<T, F>(
+    registry: Arc<ApplicationRegistry>,
+    store_metrics: Arc<StoreMetrics>,
+    operation: F,
+) -> Result<(T, SampledMeasurement)>
+where
+    F: Future<Output = Result<T>>,
+{
+    let (stop_tx, stop_rx) = watch::channel(false);
+    let (ready_tx, ready_rx) = oneshot::channel();
+    let sampler = tokio::spawn(sample_until_stopped(
+        registry,
+        store_metrics,
+        stop_rx,
+        Some(ready_tx),
+    ));
+    ready_rx
+        .await
+        .context("metric sampler stopped before taking its baselines")?;
+    let value = operation.await;
+    let _ = stop_tx.send(true);
+    let measurement = sampler.await.context("joining metric sampler")??;
+    Ok((value?, measurement))
 }
 
 fn rate(value: u64, duration: Duration) -> f64 {

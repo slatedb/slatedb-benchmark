@@ -94,10 +94,22 @@ pub struct PreparationResult {
     pub golden_id: String,
     pub timestamp: String,
     pub source: SourceIdentity,
+    #[serde(default)]
+    pub environment: Environment,
     pub configuration: ResultConfiguration,
     pub source_checkpoint: Option<CheckpointReference>,
     pub checkpoint: CheckpointReference,
     pub dataset: GoldenDatasetMetadata,
+    #[serde(default)]
+    pub recorded_interval_ns: u64,
+    #[serde(default)]
+    pub application: ApplicationMetrics,
+    #[serde(default)]
+    pub object_store: ObjectStoreMetrics,
+    #[serde(default)]
+    pub process: ProcessStatistics,
+    #[serde(default)]
+    pub machine: MachineStatistics,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
