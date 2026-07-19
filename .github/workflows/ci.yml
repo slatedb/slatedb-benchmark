@@ -71,9 +71,6 @@ jobs:
           path: .slatedb-source
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@1.89.0
-      - name: Apply SlateDB main cache patch
-        if: ${{ matrix.slate-ref == 'main' }}
-        run: git -C .slatedb-source apply --unidiff-zero "$GITHUB_WORKSPACE/patches/slatedb-main-cache-range-copy.patch"
       - name: Configure selected SlateDB source
         run: |
           cargo add --quiet --path "$GITHUB_WORKSPACE/.slatedb-source/slatedb" \

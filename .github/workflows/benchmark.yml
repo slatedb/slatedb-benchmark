@@ -156,9 +156,6 @@ jobs:
           fi
           echo "commit=$commit" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-      - name: Apply SlateDB main cache patch
-        if: ${{ inputs.slatedb_ref == 'main' }}
-        run: git -C .slatedb-source apply --unidiff-zero "$GITHUB_WORKSPACE/patches/slatedb-main-cache-range-copy.patch"
       - name: Configure selected SlateDB source
         shell: bash
         run: |
