@@ -288,7 +288,9 @@ calculates each column from complete one-second samples.
 | Disk write ops/s | 320 | 311 | 446 | 502 | 558 | 124 | 558 |
 
 Result bundles record the resolved preparation or workload definition, source
-commits, scale, caches, and SlateDB settings.
+commits, scale, caches, and SlateDB settings. Preparation results identify the
+SlateDB source that created the golden data. Workload results identify the
+independently selected SlateDB source being measured.
 
 ## Validation
 

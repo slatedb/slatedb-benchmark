@@ -26,6 +26,8 @@ jobs:
           jq empty schema/*.json
           PYTHONPYCACHEPREFIX=/tmp/slatedb-benchmark-pycache \
             python3 -m py_compile scripts/bundle.py
+          PYTHONPYCACHEPREFIX=/tmp/slatedb-benchmark-pycache \
+            python3 -m unittest scripts.test_bundle
           bash -n scripts/*.sh
       - uses: actions/setup-node@v4
         with:

@@ -118,6 +118,23 @@ def write_json(path, value):
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def validate_source_identities(preparation, workloads):
+    source = workloads[WORKLOADS[0]]["source"]
+    slate_commit = source["slate_commit"]
+    runner_commit = source["runner_commit"]
+    for task, result in workloads.items():
+        if result["source"]["slate_commit"] != slate_commit:
+            raise ValueError(f"{task} used a different SlateDB commit")
+        if result["source"]["runner_commit"] != runner_commit:
+            raise ValueError(f"{task} used a different benchmark runner commit")
+
+    golden_commit = preparation[PREPARATION[0]]["source"]["slate_commit"]
+    for task, result in preparation.items():
+        if result["source"]["slate_commit"] != golden_commit:
+            raise ValueError(f"{task} used a different golden-data SlateDB commit")
+    return source
+
+
 def main():
     args = arguments()
     if args.max_parallel < 1:
@@ -141,10 +158,8 @@ def main():
     if compaction.get("source_checkpoint") != bulk["checkpoint"]:
         raise ValueError("compaction did not use the published bulk-load checkpoint")
 
-    source = workloads[WORKLOADS[0]]["source"]
+    source = validate_source_identities(preparation, workloads)
     version = source["slate_version"]
-    slate_commit = source["slate_commit"]
-    runner_commit = source["runner_commit"]
     scale = workloads[WORKLOADS[0]]["configuration"]["scale"]
     if not re.fullmatch(r"[A-Za-z0-9._-]{1,128}", version) or version in {".", ".."}:
         raise ValueError(f"invalid SlateDB version {version!r}")
@@ -152,10 +167,6 @@ def main():
     if len(sessions) != 1:
         raise ValueError("workload results belong to different sessions")
     for task, result in workloads.items():
-        if result["source"]["slate_commit"] != slate_commit:
-            raise ValueError(f"{task} used a different SlateDB commit")
-        if result["source"]["runner_commit"] != runner_commit:
-            raise ValueError(f"{task} used a different benchmark runner commit")
         if result["configuration"]["scale"] != scale:
             raise ValueError(f"{task} used a different scale")
         if task == "sustained-ingest":
@@ -171,8 +182,6 @@ def main():
             ):
                 raise ValueError(f"{task} did not start from the golden checkpoint")
     for task, result in preparation.items():
-        if result["source"]["slate_commit"] != slate_commit:
-            raise ValueError(f"{task} used a different SlateDB commit")
         if result["configuration"]["scale"] != scale:
             raise ValueError(f"{task} used a different scale")
 

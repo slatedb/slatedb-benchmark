@@ -3,6 +3,11 @@ name: Run benchmarks
 on:
   workflow_dispatch:
     inputs:
+      slatedb_ref:
+        description: SlateDB tag, branch, or commit to benchmark
+        required: true
+        default: v0.14.1
+        type: string
       golden_id:
         description: Existing golden data name
         required: true
@@ -32,8 +37,6 @@ jobs:
     runs-on: ubuntu-latest
     environment: benchmark
     outputs:
-      slate_version: ${{ steps.validate.outputs.version }}
-      slate_commit: ${{ steps.validate.outputs.commit }}
       started_at: ${{ steps.validate.outputs.started_at }}
     steps:
       - uses: actions/checkout@v4
@@ -101,9 +104,8 @@ jobs:
               exit 1
             fi
           done
-          commit=$(jq -r .source.slate_commit "$compaction")
-          version=$(jq -r .source.slate_version "$compaction")
-          test "$commit" = "$(jq -r .source.slate_commit "$bulk")"
+          test "$(jq -r .source.slate_commit "$compaction")" = \
+            "$(jq -r .source.slate_commit "$bulk")"
           jq -e --argjson scale "$BENCHMARK_SCALE" \
             '.configuration.scale == $scale' "$bulk" >/dev/null
           jq -e --argjson scale "$BENCHMARK_SCALE" \
@@ -117,8 +119,6 @@ jobs:
               "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
               --jq .created_at)
           fi
-          echo "commit=$commit" >> "$GITHUB_OUTPUT"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "started_at=$started_at" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         with:
@@ -137,11 +137,26 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: slatedb/slatedb
-          ref: ${{ needs.validate-golden.outputs.slate_commit }}
+          ref: ${{ inputs.slatedb_ref }}
           path: .slatedb-source
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@1.89.0
-      - name: Configure recorded SlateDB source
+      - name: Resolve SlateDB source
+        id: source
+        shell: bash
+        env:
+          SLATEDB_REF: ${{ inputs.slatedb_ref }}
+        run: |
+          set -euo pipefail
+          commit=$(git -C .slatedb-source rev-parse HEAD)
+          if [[ "$SLATEDB_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            version=${SLATEDB_REF#v}
+          else
+            version=sha-${commit:0:12}
+          fi
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Configure selected SlateDB source
         shell: bash
         run: |
           set -euo pipefail
@@ -151,8 +166,8 @@ jobs:
             --features serde
       - name: Build runner
         env:
-          SLATEDB_COMMIT: ${{ needs.validate-golden.outputs.slate_commit }}
-          SLATEDB_VERSION: ${{ needs.validate-golden.outputs.slate_version }}
+          SLATEDB_COMMIT: ${{ steps.source.outputs.commit }}
+          SLATEDB_VERSION: ${{ steps.source.outputs.version }}
         run: cargo build --release --locked
       - uses: actions/upload-artifact@v4
         with:

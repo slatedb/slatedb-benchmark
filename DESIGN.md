@@ -232,11 +232,15 @@ store.
 
 | Input | Required | Example |
 | --- | --- | --- |
+| `slatedb_ref` | Yes | `main` |
 | `golden_id` | Yes | `slatedb-v0.14.1-001` |
 | `publish` | Yes | `true` |
 | `scale` | Yes | `1.0` |
 
 `scale` is decimal. `1.0` runs the published size; `0.01` runs one percent.
+The two workflows resolve `slatedb_ref` independently. A benchmark can use a
+golden checkpoint prepared by another SlateDB commit, provided the requested
+build can read it.
 
 A published run starts with these commands:
 
@@ -247,6 +251,7 @@ $ gh workflow run golden.yml \
     -f scale=1.0
 
 $ gh workflow run benchmark.yml \
+    -f slatedb_ref=main \
     -f golden_id=slatedb-v0.14.1-001 \
     -f publish=true \
     -f scale=1.0
@@ -275,7 +280,7 @@ after changing the SlateDB commit or preparation configuration.
 | Job | Work |
 | --- | --- |
 | `validate-golden` | Verify and upload both preparation results |
-| `build` | Build the current runner against the recorded SlateDB commit |
+| `build` | Resolve the requested SlateDB ref and build the runner against it |
 | `transfer-capacity` | Record diagnostic Tigris upload and download bandwidth |
 | `workloads` | Run the workload matrix |
 | `bundle` | Assemble and checksum all run results |
@@ -341,11 +346,12 @@ results/<version>/
       series.json
 ```
 
-`run.json` records the golden ID, preparation and benchmark runner commits,
-resolved configuration, matrix concurrency, diagnostic Tigris bandwidth, and
-result checksums. Preparation results describe the golden data and
-checkpoints. Both result types contain the environment and metric summaries
-defined in
+`run.json` records the golden ID, measured SlateDB source, preparation and
+benchmark runner commits, resolved configuration, matrix concurrency,
+diagnostic Tigris bandwidth, and result checksums. Preparation results record
+the SlateDB source that created the golden data. Workload results record the
+independently selected SlateDB source being measured. Both result types contain
+the environment and metric summaries defined in
 [`BENCHMARKS.md`](BENCHMARKS.md). Workload results also contain their initial
 database identity.
 
@@ -388,6 +394,7 @@ $ act workflow_dispatch \
 
 $ act workflow_dispatch \
     -W .github/workflows/benchmark.yml \
+    --input slatedb_ref=v0.14.1 \
     --input golden_id=local-smoke \
     --input publish=false \
     --input scale=0.01

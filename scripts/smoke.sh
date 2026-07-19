@@ -51,6 +51,7 @@ act workflow_dispatch \
 
 act workflow_dispatch \
   -W .github/workflows/benchmark.yml \
+  --input "slatedb_ref=$slatedb_ref" \
   --input "golden_id=$golden_id" \
   --input publish=false \
   --input "scale=$scale"

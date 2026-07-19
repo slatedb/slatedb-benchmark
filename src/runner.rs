@@ -199,7 +199,7 @@ async fn run_compaction(
     let bulk_path = golden_task_root(context, &args.golden, Task::BulkLoad).join("result.json");
     let bulk: PreparationResult = load_required(Arc::clone(&context.control), &bulk_path).await?;
     validate_preparation_result(&bulk)?;
-    ensure_shared_configuration(&bulk.configuration, config, false)?;
+    ensure_shared_configuration(&bulk.configuration, config)?;
     if bulk.source.slate_commit != env!("BENCHMARK_SLATE_COMMIT") {
         bail!("bulk-load checkpoint was created by a different SlateDB commit");
     }
@@ -304,10 +304,7 @@ async fn run_workload(
         let golden: PreparationResult =
             load_required(Arc::clone(&context.control), &compaction_path).await?;
         validate_preparation_result(&golden)?;
-        ensure_shared_configuration(&golden.configuration, config, true)?;
-        if golden.source.slate_commit != env!("BENCHMARK_SLATE_COMMIT") {
-            bail!("golden checkpoint was created by a different SlateDB commit");
-        }
+        ensure_shared_configuration(&golden.configuration, config)?;
         verify_checkpoint_reference(Arc::clone(&context.control), &golden.checkpoint).await?;
         Some(golden)
     } else {
@@ -519,7 +516,6 @@ fn ensure_workload_matches(
 fn ensure_shared_configuration(
     existing: &ResultConfiguration,
     config: &ResolvedConfig,
-    include_settings: bool,
 ) -> Result<()> {
     let current = ResultConfiguration::from(config);
     anyhow::ensure!(
@@ -542,12 +538,6 @@ fn ensure_shared_configuration(
         existing.enabled_features == current.enabled_features,
         "golden SlateDB features do not match"
     );
-    if include_settings {
-        anyhow::ensure!(
-            existing.slate_settings == current.slate_settings,
-            "golden SlateDB settings do not match"
-        );
-    }
     Ok(())
 }
 
@@ -957,8 +947,13 @@ fn manifest_lsm_digest(manifest: &VersionedManifest) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{sha256_bytes, validate_name, validate_series_digest};
-    use crate::model::SeriesReference;
+    use super::{
+        ensure_shared_configuration, sha256_bytes, validate_name, validate_series_digest,
+        SETTINGS_PATH,
+    };
+    use crate::config::{self, BenchmarkScale, Task};
+    use crate::model::{ResultConfiguration, SeriesReference};
+    use std::path::Path;
 
     #[test]
     fn names_reject_path_components() {
@@ -975,5 +970,19 @@ mod tests {
         };
         validate_series_digest(&reference, b"original").expect("matching digest");
         assert!(validate_series_digest(&reference, b"modified").is_err());
+    }
+
+    #[test]
+    fn golden_compatibility_ignores_version_specific_slate_settings() {
+        let config = config::load(
+            Task::Balanced,
+            BenchmarkScale::FULL,
+            Path::new(SETTINGS_PATH),
+        )
+        .expect("resolved config");
+        let mut golden = ResultConfiguration::from(&config);
+        golden.slate_settings = serde_json::json!({"defaults_from_another_version": true});
+
+        ensure_shared_configuration(&golden, &config).expect("compatible golden data");
     }
 }
