@@ -489,16 +489,11 @@ mod tests {
         let cache = &config.slate_settings["object_store_cache_options"];
         assert_eq!(
             cache
-                .get("cache_puts")
-                .and_then(serde_json::Value::as_bool)
-                .or_else(|| {
-                    cache
-                        .get("cache_on_flush")
-                        .and_then(serde_json::Value::as_bool)
-                }),
-            Some(false)
+                .get("cache_on_flush")
+                .and_then(serde_json::Value::as_bool),
+            Some(true)
         );
-        assert_ne!(
+        assert_eq!(
             cache
                 .get("cache_on_compaction")
                 .and_then(serde_json::Value::as_bool),
