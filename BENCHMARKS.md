@@ -232,14 +232,19 @@ writes. All values use milliseconds.
 
 Rows use physical HTTP methods such as `GET`, `PUT`, `HEAD`, `DELETE`, and
 `POST`. Each retry counts as another operation, so request totals match the
-traffic sent to the object store. All columns except `total` use operations per
-second.
+traffic sent to the object store. Rate columns use operations per second. The
+`$` column prices the observed requests. The `$/month` column extends `avg/s`
+over 30 days.
 
-| Method | total | avg/s | p50/s | p95/s | p99/s | p99.9/s | min/s | max/s |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `GET` | 2,840,100 | 3,155.7 | 3,141 | 3,388 | 3,510 | 3,622 | 2,801 | 3,622 |
-| `PUT` | 84,200 | 93.6 | 92 | 108 | 116 | 124 | 71 | 124 |
-| `HEAD` | 18,400 | 20.4 | 20 | 25 | 28 | 31 | 13 | 31 |
+Costs use Amazon S3 Standard prices in US East (N. Virginia): $0.005 per 1,000
+`PUT` and `POST` requests, $0.0004 per 1,000 `GET`, `HEAD`, and other requests,
+and no charge for `DELETE`. They include API request charges only.
+
+| Method | total | avg/s | p50/s | p95/s | p99/s | p99.9/s | min/s | max/s | $ | $/month |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `GET` | 2,840,100 | 3,155.7 | 3,141 | 3,388 | 3,510 | 3,622 | 2,801 | 3,622 | $1.14 | $3,271.83 |
+| `PUT` | 84,200 | 93.6 | 92 | 108 | 116 | 124 | 71 | 124 | $0.4210 | $1,213.06 |
+| `HEAD` | 18,400 | 20.4 | 20 | 25 | 28 | 31 | 13 | 31 | $0.007360 | $21.15 |
 
 ### Object-store throughput
 
