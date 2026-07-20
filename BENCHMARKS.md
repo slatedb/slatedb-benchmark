@@ -13,7 +13,7 @@ results.
 
 ## Benchmark environment
 
-Release runs use a WarpBuild `warp-ubuntu-latest-x64-16x` runner in Hetzner's
+Release runs use a WarpBuild `warp-ubuntu-latest-arm64-8x` runner in Hetzner's
 Frankfurt, Germany data center. Tigris uses its Frankfurt (`fra`) region. Each
 preparation phase and workload has one published configuration. The release
 does not vary clients, values, caches, machines, object stores, or SlateDB

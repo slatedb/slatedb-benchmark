@@ -28,7 +28,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: warp-ubuntu-latest-x64-16x
+    runs-on: warp-ubuntu-latest-arm64-8x
     outputs:
       slate_version: ${{ steps.source.outputs.version }}
       slate_commit: ${{ steps.source.outputs.commit }}
@@ -88,7 +88,7 @@ jobs:
 
   bulk-load:
     needs: build
-    runs-on: warp-ubuntu-latest-x64-16x
+    runs-on: warp-ubuntu-latest-arm64-8x
     timeout-minutes: 1440
     environment: benchmark
     concurrency:
@@ -120,7 +120,7 @@ jobs:
           export SLATEDB_BENCH_BUCKET=${SLATEDB_BENCH_BUCKET:-${TIGRIS_BUCKET_PREFIX}-slatedb}
           export SLATEDB_BENCH_PREFIX=${SLATEDB_BENCH_PREFIX:-benchmark}
           export SLATEDB_BENCH_REGION=${SLATEDB_BENCH_REGION:-fra}
-          export SLATEDB_BENCH_RUNNER_TYPE=${SLATEDB_BENCH_RUNNER_TYPE:-warp-ubuntu-latest-x64-16x}
+          export SLATEDB_BENCH_RUNNER_TYPE=${SLATEDB_BENCH_RUNNER_TYPE:-warp-ubuntu-latest-arm64-8x}
           bin/slatedb-benchmark run \
             --task bulk-load \
             --golden "$GOLDEN_ID" \
@@ -137,7 +137,7 @@ jobs:
 
   compaction:
     needs: [build, bulk-load]
-    runs-on: warp-ubuntu-latest-x64-16x
+    runs-on: warp-ubuntu-latest-arm64-8x
     timeout-minutes: 1440
     environment: benchmark
     concurrency:
@@ -169,7 +169,7 @@ jobs:
           export SLATEDB_BENCH_BUCKET=${SLATEDB_BENCH_BUCKET:-${TIGRIS_BUCKET_PREFIX}-slatedb}
           export SLATEDB_BENCH_PREFIX=${SLATEDB_BENCH_PREFIX:-benchmark}
           export SLATEDB_BENCH_REGION=${SLATEDB_BENCH_REGION:-fra}
-          export SLATEDB_BENCH_RUNNER_TYPE=${SLATEDB_BENCH_RUNNER_TYPE:-warp-ubuntu-latest-x64-16x}
+          export SLATEDB_BENCH_RUNNER_TYPE=${SLATEDB_BENCH_RUNNER_TYPE:-warp-ubuntu-latest-arm64-8x}
           bin/slatedb-benchmark run \
             --task compaction \
             --golden "$GOLDEN_ID" \

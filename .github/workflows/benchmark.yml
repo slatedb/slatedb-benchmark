@@ -129,7 +129,7 @@ jobs:
 
   build:
     needs: validate-golden
-    runs-on: warp-ubuntu-latest-x64-16x
+    runs-on: warp-ubuntu-latest-arm64-8x
     steps:
       - uses: actions/checkout@v4
         with:
@@ -186,7 +186,7 @@ jobs:
 
   transfer-capacity:
     needs: validate-golden
-    runs-on: warp-ubuntu-latest-x64-16x
+    runs-on: warp-ubuntu-latest-arm64-8x
     timeout-minutes: 60
     environment: benchmark
     steps:
@@ -217,7 +217,7 @@ jobs:
           export SLATEDB_BENCH_BUCKET=${SLATEDB_BENCH_BUCKET:-${TIGRIS_BUCKET_PREFIX}-slatedb}
           export SLATEDB_BENCH_PREFIX=${SLATEDB_BENCH_PREFIX:-benchmark}
           export SLATEDB_BENCH_REGION=${SLATEDB_BENCH_REGION:-fra}
-          export SLATEDB_BENCH_RUNNER_TYPE=${SLATEDB_BENCH_RUNNER_TYPE:-warp-ubuntu-latest-x64-16x}
+          export SLATEDB_BENCH_RUNNER_TYPE=${SLATEDB_BENCH_RUNNER_TYPE:-warp-ubuntu-latest-arm64-8x}
           ./scripts/transfer-capacity.sh .runs/transfer-capacity/result.json
       - uses: actions/upload-artifact@v4
         with:
@@ -228,7 +228,7 @@ jobs:
 
   workloads:
     needs: [validate-golden, build, transfer-capacity]
-    runs-on: warp-ubuntu-latest-x64-16x
+    runs-on: warp-ubuntu-latest-arm64-8x
     timeout-minutes: 1440
     environment: benchmark
     strategy:
@@ -283,7 +283,7 @@ jobs:
           export SLATEDB_BENCH_BUCKET=${SLATEDB_BENCH_BUCKET:-${TIGRIS_BUCKET_PREFIX}-slatedb}
           export SLATEDB_BENCH_PREFIX=${SLATEDB_BENCH_PREFIX:-benchmark}
           export SLATEDB_BENCH_REGION=${SLATEDB_BENCH_REGION:-fra}
-          export SLATEDB_BENCH_RUNNER_TYPE=${SLATEDB_BENCH_RUNNER_TYPE:-warp-ubuntu-latest-x64-16x}
+          export SLATEDB_BENCH_RUNNER_TYPE=${SLATEDB_BENCH_RUNNER_TYPE:-warp-ubuntu-latest-arm64-8x}
           bin/slatedb-benchmark run \
             --task "$BENCHMARK_TASK" \
             --golden "$GOLDEN_ID" \

@@ -966,16 +966,13 @@ pub fn inspect_environment(provider: &str, endpoint: &str, region: &str) -> Envi
 
 pub fn verify_environment(environment: &Environment) -> Result<()> {
     anyhow::ensure!(
-        environment.runner_type == "warp-ubuntu-latest-x64-16x",
-        "published runs require warp-ubuntu-latest-x64-16x"
+        environment.runner_type == "warp-ubuntu-latest-arm64-8x",
+        "published runs require warp-ubuntu-latest-arm64-8x"
     );
+    anyhow::ensure!(environment.cpu_cores == 8, "published runs require 8 CPUs");
     anyhow::ensure!(
-        environment.cpu_cores == 16,
-        "published runs require 16 CPUs"
-    );
-    anyhow::ensure!(
-        environment.ram_bytes >= 60 * 1024 * 1024 * 1024,
-        "published runs require at least 60 GiB RAM"
+        environment.ram_bytes >= 30 * 1024 * 1024 * 1024,
+        "published runs require at least 30 GiB RAM"
     );
     anyhow::ensure!(
         environment.object_store == "Tigris",
