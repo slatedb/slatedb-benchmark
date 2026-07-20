@@ -16,7 +16,7 @@ const IDLE_MS: u64 = 5 * 60 * 1_000;
 const INGEST_MS: u64 = 20 * 60 * 1_000;
 const BLOCK_CACHE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const METADATA_CACHE_BYTES: u64 = 512 * 1024 * 1024;
-const OBJECT_STORE_CACHE_BYTES: u64 = 16 * 1024 * 1024 * 1024;
+const OBJECT_STORE_CACHE_BYTES: u64 = 40 * 1024 * 1024 * 1024;
 const MIN_DURATION_MS: u64 = 2_000;
 const MIN_BLOCK_CACHE_BYTES: u64 = 8 * 1024 * 1024;
 const MIN_METADATA_CACHE_BYTES: u64 = 2 * 1024 * 1024;
@@ -484,7 +484,7 @@ mod tests {
                 .settings
                 .object_store_cache_options
                 .max_cache_size_bytes,
-            Some(171_798_692)
+            Some(429_496_730)
         );
         let cache = &config.slate_settings["object_store_cache_options"];
         assert_eq!(

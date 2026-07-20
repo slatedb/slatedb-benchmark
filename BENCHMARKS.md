@@ -24,7 +24,7 @@ workload says otherwise. It configures these caches:
 
 - 4 GiB block cache
 - 512 MiB metadata/index cache
-- 16 GiB local object-store cache
+- 40 GiB local object-store cache
 
 ## Dataset
 
