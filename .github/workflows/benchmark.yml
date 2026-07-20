@@ -298,7 +298,7 @@ jobs:
     environment: benchmark
     strategy:
       fail-fast: false
-      max-parallel: 4
+      max-parallel: ${{ github.actor == 'nektos/act' && 1 || 4 }}
       matrix:
         task:
           - idle
