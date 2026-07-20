@@ -113,27 +113,44 @@ monotonic_ns() {
   python3 -c 'import time; print(time.monotonic_ns())'
 }
 
+retry_upload_files() {
+  local description=$1
+  local directory=$2
+  local remote=$3
+  local attempts=3
+  local attempt
+  local started
+
+  for ((attempt = 1; attempt <= attempts; attempt++)); do
+    started=$(monotonic_ns)
+    if upload_files "$directory" "$remote"; then
+      last_upload_elapsed_ns=$(($(monotonic_ns) - started))
+      return 0
+    fi
+    if ((attempt == attempts)); then
+      echo "$description failed after $attempts attempts" >&2
+      return 1
+    fi
+    echo "$description failed on attempt $attempt; retrying in 5s" >&2
+    sleep 5
+  done
+}
+
 echo "Generating transfer-capacity probe data"
 create_files "$work/source/warmup" "$warmup_mib_per_object"
 create_files "$work/source/measured" "$measured_mib_per_object"
 
 echo "Warming up $object_store uploads"
-upload_files "$work/source/warmup" "$probe_prefix/warmup"
+retry_upload_files \
+  "$object_store upload warmup" \
+  "$work/source/warmup" \
+  "$probe_prefix/warmup"
 echo "Measuring parallel $object_store uploads"
-upload_attempts=3
-for ((upload_attempt = 1; upload_attempt <= upload_attempts; upload_attempt++)); do
-  upload_started=$(monotonic_ns)
-  if upload_files "$work/source/measured" "$probe_prefix/measured"; then
-    upload_elapsed_ns=$(($(monotonic_ns) - upload_started))
-    break
-  fi
-  if ((upload_attempt == upload_attempts)); then
-    echo "Parallel $object_store upload measurement failed after $upload_attempts attempts" >&2
-    exit 1
-  fi
-  echo "Parallel $object_store upload measurement failed on attempt $upload_attempt; retrying in 5s" >&2
-  sleep 5
-done
+retry_upload_files \
+  "Parallel $object_store upload measurement" \
+  "$work/source/measured" \
+  "$probe_prefix/measured"
+upload_elapsed_ns=$last_upload_elapsed_ns
 
 rm -rf "$work/source"
 echo "Warming up $object_store downloads"
