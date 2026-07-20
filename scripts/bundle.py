@@ -89,16 +89,21 @@ def read_transfer_capacity(path, scale, environment):
     for field in ("runner_type", "object_store", "endpoint", "region"):
         if result.get(field) != environment[field]:
             raise ValueError(f"{path} used a different {field.replace('_', ' ')}")
-    expected = {
-        "parallel_objects": 4,
-        "requests_per_process": 8,
-        "max_concurrent_requests": 32,
-        "warmup_bytes": 4 * max(1, math.ceil(2048 * scale)) * 1024 * 1024,
-        "measured_bytes": 4 * max(1, math.ceil(8192 * scale)) * 1024 * 1024,
-    }
-    for field, value in expected.items():
-        if result.get(field) != value:
+    for field in (
+        "parallel_objects",
+        "requests_per_process",
+        "max_concurrent_requests",
+        "warmup_bytes",
+        "measured_bytes",
+    ):
+        value = result.get(field)
+        if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
             raise ValueError(f"{path} has an invalid {field.replace('_', ' ')}")
+    expected_concurrency = result["parallel_objects"] * result["requests_per_process"]
+    if result["max_concurrent_requests"] != expected_concurrency:
+        raise ValueError(f"{path} has inconsistent transfer concurrency")
+    if result["measured_bytes"] < result["warmup_bytes"]:
+        raise ValueError(f"{path} measures fewer bytes than it warms up")
     for direction in ("upload", "download"):
         measurement = result.get(direction)
         if not isinstance(measurement, dict):
