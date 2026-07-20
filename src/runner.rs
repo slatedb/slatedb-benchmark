@@ -407,6 +407,9 @@ async fn run_workload(
         golden_id: args.golden.clone(),
         session: session.to_string(),
         timestamp: Utc::now().to_rfc3339(),
+        actions_log_url: std::env::var("BENCHMARK_ACTIONS_LOG_URL")
+            .ok()
+            .filter(|value| !value.is_empty()),
         source: SourceIdentity::current(),
         environment,
         configuration: ResultConfiguration::from(config),

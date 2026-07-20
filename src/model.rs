@@ -290,6 +290,8 @@ pub struct WorkloadResult {
     pub golden_id: String,
     pub session: String,
     pub timestamp: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actions_log_url: Option<String>,
     pub source: SourceIdentity,
     pub environment: Environment,
     pub configuration: ResultConfiguration,

@@ -98,6 +98,9 @@ pub fn validate_workload_result(result: &WorkloadResult) -> Result<()> {
     ensure!(!result.golden_id.is_empty(), "golden ID is empty");
     ensure!(!result.session.is_empty(), "session is empty");
     validate_timestamp(&result.timestamp)?;
+    if let Some(url) = &result.actions_log_url {
+        validate_actions_log_url(url)?;
+    }
     validate_source(&result.source)?;
     validate_configuration(&result.configuration, result.task)?;
     validate_environment(&result.environment)?;
@@ -685,6 +688,34 @@ fn validate_timestamp(timestamp: &str) -> Result<()> {
         .map_err(anyhow::Error::from)
 }
 
+fn validate_actions_log_url(value: &str) -> Result<()> {
+    let url = reqwest::Url::parse(value)?;
+    ensure!(
+        url.scheme() == "https" && url.host_str() == Some("github.com"),
+        "Actions log URL must use https://github.com"
+    );
+    let segments = url
+        .path_segments()
+        .map(|segments| segments.collect::<Vec<_>>())
+        .unwrap_or_default();
+    ensure!(
+        segments.len() == 7
+            && !segments[0].is_empty()
+            && !segments[1].is_empty()
+            && segments[2] == "actions"
+            && segments[3] == "runs"
+            && segments[4].parse::<u64>().is_ok_and(|value| value > 0)
+            && segments[5] == "job"
+            && segments[6].parse::<u64>().is_ok_and(|value| value > 0),
+        "Actions log URL path is invalid"
+    );
+    ensure!(
+        url.query().is_none() && url.fragment().is_none(),
+        "Actions log URL must not contain a query or fragment"
+    );
+    Ok(())
+}
+
 fn validate_configuration(
     configuration: &ResultConfiguration,
     task: crate::config::Task,
@@ -1094,7 +1125,7 @@ fn validate_nonnegative<const N: usize>(values: [f64; N]) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_distribution;
+    use super::{validate_actions_log_url, validate_distribution};
     use crate::model::DistributionSummary;
 
     #[test]
@@ -1104,5 +1135,17 @@ mod tests {
             ..Default::default()
         };
         assert!(validate_distribution(&summary).is_err());
+    }
+
+    #[test]
+    fn validates_actions_job_log_urls() {
+        assert!(validate_actions_log_url(
+            "https://github.com/slatedb/slatedb-benchmark/actions/runs/29703191748/job/88238450184"
+        )
+        .is_ok());
+        assert!(validate_actions_log_url(
+            "https://example.com/slatedb/slatedb-benchmark/actions/runs/1/job/2"
+        )
+        .is_err());
     }
 }

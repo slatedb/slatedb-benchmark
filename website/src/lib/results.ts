@@ -158,6 +158,7 @@ export type WorkloadResult = {
   golden_id: string;
   session: string;
   timestamp: string;
+  actions_log_url?: string;
   source: SourceIdentity;
   environment: Environment;
   configuration: ResolvedConfiguration;

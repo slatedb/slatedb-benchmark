@@ -16,10 +16,21 @@ interface Props {
   source: SourceIdentity;
   timestamp: string;
   rawResult: string;
+  actionsLogUrl?: string;
   routes: ResultRoute<unknown>[];
 }
 
-const { version, kind, name, goldenId, source, timestamp, rawResult, routes } = Astro.props;
+const {
+  version,
+  kind,
+  name,
+  goldenId,
+  source,
+  timestamp,
+  rawResult,
+  actionsLogUrl,
+  routes,
+} = Astro.props;
 const versions = [...new Set(
   routes
     .filter((route) => route.kind === 'workload' || route.name === 'compaction')
@@ -92,6 +103,7 @@ const hasDataset = versionRoutes.some(
   </dl>
 
   <div class="context-links">
+    {actionsLogUrl && <a href={actionsLogUrl}>Actions log ↗</a>}
     <a href={rawResult}>Raw result</a>
     <a href={`https://github.com/slatedb/slatedb/commit/${source.slate_commit}`}>SlateDB source ↗</a>
     <a href={`https://github.com/slatedb/slatedb-benchmark/commit/${source.runner_commit}`}>Runner source ↗</a>
