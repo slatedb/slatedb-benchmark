@@ -246,8 +246,12 @@ jobs:
           echo "::endgroup::"
 
           echo "::group::Network"
-          ip -brief address
-          ip route
+          if command -v ip >/dev/null 2>&1; then
+            ip -brief address
+            ip route
+          else
+            echo "::warning::ip command unavailable"
+          fi
           echo "Public egress:"
           curl --fail --location --silent --show-error --max-time 10 \
             https://ipinfo.io/json || true
@@ -294,7 +298,7 @@ jobs:
     environment: benchmark
     strategy:
       fail-fast: false
-      max-parallel: ${{ github.actor == 'nektos/act' && 1 || 4 }}
+      max-parallel: 4
       matrix:
         task:
           - idle
