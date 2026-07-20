@@ -1,10 +1,10 @@
 {
-  "finished_at": "2026-07-19T22:01:34.744192Z",
-  "golden_id": "slatedb-v0.14.1",
+  "finished_at": "2026-07-20T06:09:09.874068Z",
+  "golden_id": "golden",
   "max_parallel": 4,
   "preparation_runner_commits": {
-    "bulk-load": "c2b02b5a6178061735e08ac49c01831b2684966c",
-    "compaction": "08ab8802a241c30425e64568c2a29da804d8bb2a"
+    "bulk-load": "bc9195d40460d1f915881d9732f6173f7e236b09",
+    "compaction": "bc9195d40460d1f915881d9732f6173f7e236b09"
   },
   "resolved_configuration": {
     "balanced": {
@@ -86,9 +86,9 @@
             "min_age": "300s"
           }
         },
-        "l0_flush_parallelism": 4,
-        "l0_max_ssts": 16,
-        "l0_max_ssts_per_key": 8,
+        "l0_flush_parallelism": 8,
+        "l0_max_ssts": 32,
+        "l0_max_ssts_per_key": 16,
         "l0_sst_size_bytes": 67108864,
         "manifest_poll_interval": "1s",
         "manifest_update_timeout": "300s",
@@ -152,6 +152,7 @@
         "default_ttl": null,
         "flush_interval": "100ms",
         "garbage_collector_options": {
+          "boundary_files_enabled": true,
           "compacted_options": {
             "dry_run": false,
             "interval": "60s",
@@ -171,6 +172,7 @@
             "min_age": "300s"
           },
           "metric_level": null,
+          "object_store_max_retries": null,
           "wal_fence_options": {
             "dry_run": true,
             "interval": "60s",
@@ -182,7 +184,7 @@
             "min_age": "300s"
           }
         },
-        "l0_flush_parallelism": 4,
+        "l0_flush_parallelism": 8,
         "l0_max_ssts": 4294967295,
         "l0_max_ssts_per_key": 4294967295,
         "l0_sst_size_bytes": 67108864,
@@ -193,7 +195,8 @@
         "metric_level": "Info",
         "min_filter_keys": 1000,
         "object_store_cache_options": {
-          "cache_puts": false,
+          "cache_on_compaction": true,
+          "cache_on_flush": true,
           "max_cache_size_bytes": 17179869184,
           "max_open_file_handles": 1000,
           "part_size_bytes": 4194304,
@@ -201,6 +204,7 @@
           "root_folder": null,
           "scan_interval": "3600s"
         },
+        "object_store_max_retries": null,
         "wal_enabled": true
       },
       "task": {
@@ -243,14 +247,14 @@
           "manifest_update_timeout": "300s",
           "max_concurrent_compactions": 4,
           "metric_level": null,
-          "poll_interval": "5s",
+          "object_store_max_retries": null,
+          "poll_interval": "1s",
           "scheduler_options": {},
           "worker": {
             "bytes_to_fetch": 2097152,
-            "compactions_poll_interval": "5s",
+            "compactions_poll_interval": "1s",
             "compression_codec": null,
-            "heartbeat_bytes": 5242880,
-            "heartbeat_min_interval": "5s",
+            "heartbeat_interval": "10s",
             "max_concurrent_compactions": 4,
             "max_fetch_tasks": 4,
             "max_sst_size": 268435456,
@@ -264,6 +268,7 @@
         "default_ttl": null,
         "flush_interval": "100ms",
         "garbage_collector_options": {
+          "boundary_files_enabled": true,
           "compacted_options": {
             "dry_run": false,
             "interval": "60s",
@@ -283,6 +288,7 @@
             "min_age": "300s"
           },
           "metric_level": null,
+          "object_store_max_retries": null,
           "wal_fence_options": {
             "dry_run": true,
             "interval": "60s",
@@ -294,9 +300,9 @@
             "min_age": "300s"
           }
         },
-        "l0_flush_parallelism": 4,
-        "l0_max_ssts": 8,
-        "l0_max_ssts_per_key": 8,
+        "l0_flush_parallelism": 8,
+        "l0_max_ssts": 32,
+        "l0_max_ssts_per_key": 16,
         "l0_sst_size_bytes": 67108864,
         "manifest_poll_interval": "1s",
         "manifest_update_timeout": "300s",
@@ -305,7 +311,8 @@
         "metric_level": "Info",
         "min_filter_keys": 1000,
         "object_store_cache_options": {
-          "cache_puts": false,
+          "cache_on_compaction": true,
+          "cache_on_flush": true,
           "max_cache_size_bytes": 17179869184,
           "max_open_file_handles": 1000,
           "part_size_bytes": 4194304,
@@ -313,6 +320,7 @@
           "root_folder": null,
           "scan_interval": "3600s"
         },
+        "object_store_max_retries": null,
         "wal_enabled": true
       },
       "task": {
@@ -408,9 +416,9 @@
             "min_age": "300s"
           }
         },
-        "l0_flush_parallelism": 4,
-        "l0_max_ssts": 16,
-        "l0_max_ssts_per_key": 8,
+        "l0_flush_parallelism": 8,
+        "l0_max_ssts": 32,
+        "l0_max_ssts_per_key": 16,
         "l0_sst_size_bytes": 67108864,
         "manifest_poll_interval": "1s",
         "manifest_update_timeout": "300s",
@@ -524,9 +532,9 @@
             "min_age": "300s"
           }
         },
-        "l0_flush_parallelism": 4,
-        "l0_max_ssts": 16,
-        "l0_max_ssts_per_key": 8,
+        "l0_flush_parallelism": 8,
+        "l0_max_ssts": 32,
+        "l0_max_ssts_per_key": 16,
         "l0_sst_size_bytes": 67108864,
         "manifest_poll_interval": "1s",
         "manifest_update_timeout": "300s",
@@ -642,9 +650,9 @@
             "min_age": "300s"
           }
         },
-        "l0_flush_parallelism": 4,
-        "l0_max_ssts": 16,
-        "l0_max_ssts_per_key": 8,
+        "l0_flush_parallelism": 8,
+        "l0_max_ssts": 32,
+        "l0_max_ssts_per_key": 16,
         "l0_sst_size_bytes": 67108864,
         "manifest_poll_interval": "1s",
         "manifest_update_timeout": "300s",
@@ -760,9 +768,9 @@
             "min_age": "300s"
           }
         },
-        "l0_flush_parallelism": 4,
-        "l0_max_ssts": 16,
-        "l0_max_ssts_per_key": 8,
+        "l0_flush_parallelism": 8,
+        "l0_max_ssts": 32,
+        "l0_max_ssts_per_key": 16,
         "l0_sst_size_bytes": 67108864,
         "manifest_poll_interval": "1s",
         "manifest_update_timeout": "300s",
@@ -878,9 +886,9 @@
             "min_age": "300s"
           }
         },
-        "l0_flush_parallelism": 4,
-        "l0_max_ssts": 16,
-        "l0_max_ssts_per_key": 8,
+        "l0_flush_parallelism": 8,
+        "l0_max_ssts": 32,
+        "l0_max_ssts_per_key": 16,
         "l0_sst_size_bytes": 67108864,
         "manifest_poll_interval": "1s",
         "manifest_update_timeout": "300s",
@@ -996,9 +1004,9 @@
             "min_age": "300s"
           }
         },
-        "l0_flush_parallelism": 4,
-        "l0_max_ssts": 16,
-        "l0_max_ssts_per_key": 8,
+        "l0_flush_parallelism": 8,
+        "l0_max_ssts": 32,
+        "l0_max_ssts_per_key": 16,
         "l0_sst_size_bytes": 67108864,
         "manifest_poll_interval": "1s",
         "manifest_update_timeout": "300s",
@@ -1115,9 +1123,9 @@
             "min_age": "300s"
           }
         },
-        "l0_flush_parallelism": 4,
-        "l0_max_ssts": 16,
-        "l0_max_ssts_per_key": 8,
+        "l0_flush_parallelism": 8,
+        "l0_max_ssts": 32,
+        "l0_max_ssts_per_key": 16,
         "l0_sst_size_bytes": 67108864,
         "manifest_poll_interval": "1s",
         "manifest_update_timeout": "300s",
@@ -1142,7 +1150,7 @@
         "clients": 64,
         "initial_state": "empty",
         "key_selection": "unique-sequential",
-        "measurement_ms": 1500000,
+        "measurement_ms": 1200000,
         "operation_mix": {
           "put": 1.0
         },
@@ -1233,9 +1241,9 @@
             "min_age": "300s"
           }
         },
-        "l0_flush_parallelism": 4,
-        "l0_max_ssts": 16,
-        "l0_max_ssts_per_key": 8,
+        "l0_flush_parallelism": 8,
+        "l0_max_ssts": 32,
+        "l0_max_ssts_per_key": 16,
         "l0_sst_size_bytes": 67108864,
         "manifest_poll_interval": "1s",
         "manifest_update_timeout": "300s",
@@ -1351,9 +1359,9 @@
             "min_age": "300s"
           }
         },
-        "l0_flush_parallelism": 4,
-        "l0_max_ssts": 16,
-        "l0_max_ssts_per_key": 8,
+        "l0_flush_parallelism": 8,
+        "l0_max_ssts": 32,
+        "l0_max_ssts_per_key": 16,
         "l0_sst_size_bytes": 67108864,
         "manifest_poll_interval": "1s",
         "manifest_update_timeout": "300s",
@@ -1393,42 +1401,42 @@
     }
   },
   "results": {
-    "preparation/bulk-load/result.json": "fbd6f076050b90ef0c6ede339580665b9fe9197018eb7839b36b88184351f96c",
-    "preparation/compaction/result.json": "f843a21b217f72af031a2624a86fa0e9e810aa1515fb60bdc262580e8ab25842",
-    "workload/balanced/result.json": "c7bc9d2b1aed09dad186237e8d9a372e9cf0379dbed1b5e321da692a1318c9bb",
-    "workload/balanced/series.json": "545853bcb88a031a7b29979ca4f93767abc1f73d1ac58f384d365e450e9d5adb",
-    "workload/idle/result.json": "f4b64b31d26268a2d108702f77bebdc633236b53adf2ffaebba8e49076df2fc1",
-    "workload/idle/series.json": "3e9217a5bdf513fb9062bcfb15fe07b2a19c237f3609c7275661e4819228574a",
-    "workload/point-read-missing/result.json": "fb69f0193dd36e43d3091c4bd2e5c77b9b56194f9992cf2b91d83376c60496c5",
-    "workload/point-read-missing/series.json": "50f5329582a4e74af93058a7e5fc3c764a765dfcedba80e7b67374bf22d4cb70",
-    "workload/point-read-skewed/result.json": "3f523f109d5c82355807d893d2a4b34591b35ae2e99284369982b756344fc254",
-    "workload/point-read-skewed/series.json": "06d8b63290dd254a7c317e501d635b6fbc8eeede55d143b8758991c47a4fd49a",
-    "workload/point-read-uniform/result.json": "c8e36a1f1e6ee5e3dfff22b8f8157cb42229f127ef3e2b89397c3a2ca8262656",
-    "workload/point-read-uniform/series.json": "d46d4b2905af68581f6b35d9856df46be57e2962c7cb530f23efe212099ade98",
-    "workload/range-scan/result.json": "e0594f23308193ed22956d4f5621bd04980195bcd2b2e147b46c42ac1b84c63a",
-    "workload/range-scan/series.json": "f9f1e5598fe5887122bd9d92928b02c8dba1e31bf610ba363b28577951ecd438",
-    "workload/read-heavy/result.json": "7dd72f751016f87b3d6339e0ef078b5bf58e961e0bd6ab23685ee625a3559049",
-    "workload/read-heavy/series.json": "db68459eda34459caa67236df1d7bb27575d311006068582679493c45eb25c6b",
-    "workload/sustained-ingest/result.json": "f6eaf446cdd8303592a371211ff248449ebfd785f37c8a36f8011ca14e9610ef",
-    "workload/sustained-ingest/series.json": "00d0218751301ce402b764a9aa3aff309ef0a28f138f9b74f8ab2a109721548c",
-    "workload/transaction-contention/result.json": "819e3cb06d12750e539edd311981e546278f6dc976e917049b58efe992ce4899",
-    "workload/transaction-contention/series.json": "821be418d5d89032b5cd53b80b4ab01ce13d53a405b5db45388ec44fe844775b",
-    "workload/update-heavy/result.json": "4bdbfdae5e23840db498c45000240677ded9fe6b2d1b58f2289d0aee792b116b",
-    "workload/update-heavy/series.json": "1a9217d0093f2b7419b39998cd14ba20e8027b661c995c743dd9aec18ceecec9"
+    "preparation/bulk-load/result.json": "e5293d302aab18cd9bc6e09a3b99c1ea0719378ba127a8d46142f99e6198a8d5",
+    "preparation/compaction/result.json": "796a91020f80df667137461aeeb9f2232d5bf456f8d1fadb283c425cc01ca3e1",
+    "workload/balanced/result.json": "f6ed51e8b2a3a4c5c93d50129f308323262190ce3360c1300d5d7a46f7114e94",
+    "workload/balanced/series.json": "0edda217ac470530b3d6a589e2cc272ad633e8357c9b838d4bda7b5b75b34014",
+    "workload/idle/result.json": "b1f2d4035f7712790a89bd378e430753f22da28e93f520a48b781d37e5e6cdef",
+    "workload/idle/series.json": "995ced0c6073aecbddb20a689722bc2b882a813c76ceaba2141dfa9166ade0cf",
+    "workload/point-read-missing/result.json": "580de48e053de8f381d4b3db7a2af787fd9340196ca3e34f23f832fd1bf62353",
+    "workload/point-read-missing/series.json": "c7598df49d0a7bf73d89c93e4ca015feb11fe67c33e615031a994e72420ced29",
+    "workload/point-read-skewed/result.json": "ef86fb2cc5ef1387789465aca24d622b3e86cc063b8238ebe67625c8df366c4b",
+    "workload/point-read-skewed/series.json": "bdefe67c8a690a8bfe19eece7a1aef10d1022d7f6d4198c17189408b3e41f5d4",
+    "workload/point-read-uniform/result.json": "3033e483203f1b6da5abc61ae4bbe05143a06d1ebaa8945a61b07be3586d64bd",
+    "workload/point-read-uniform/series.json": "3ee0eeb6820ce23c8450f173df90f3575be884a09ba0af40aff40458b71a3f74",
+    "workload/range-scan/result.json": "d950136bac109b532c2cf6d5adf5a0cfcf03086c5d9951600d8c3ec44aa03bb8",
+    "workload/range-scan/series.json": "4eff62a1c42b43a8a3ac706340ecbc3918913623841ddbf7853193f9a1526ca6",
+    "workload/read-heavy/result.json": "9965e38daa7629d31d8f152cabb641234f23bf1559177e38c16d9aac13c8047b",
+    "workload/read-heavy/series.json": "ecf794e98c90939e76108d9f369251ede6deae9fc573f72a44e814516a449ed3",
+    "workload/sustained-ingest/result.json": "eaa7f801600e3db61d1ce2364746212241f5fcfc81e2286ddb784c3e4324dfa8",
+    "workload/sustained-ingest/series.json": "f0a2385f62835d943644477aca52d5533fe44565f800272d940d50bd79e41305",
+    "workload/transaction-contention/result.json": "0310087e512a9bad4e2ce1118bdd2ce7447be19173d240d29070b218499172d7",
+    "workload/transaction-contention/series.json": "6dfb5f5ca62889a7851c2fca7e3def84b1ca00660bf48f591c1fd0a7fb854c18",
+    "workload/update-heavy/result.json": "27d42866978d861fcfba221ee37a584e63400186a470a7aa6e94ba6e543ad075",
+    "workload/update-heavy/series.json": "4aac78f552ca1d72cd9e3856c5038a5b4f3b9f09e5134352c17fd313c273e77f"
   },
   "source": {
     "lockfile_sha256": "23353a50b884e4433eb14b840b2b74aedd0eb983280948e188e8dc7143d64953",
-    "runner_commit": "86b122ff62a98efddc6a8ae0c4c20654c6a388e8",
+    "runner_commit": "bc9195d40460d1f915881d9732f6173f7e236b09",
     "runner_version": "0.1.0",
     "slate_commit": "2e7684a19a72a4e94ab75a204cf91d1d53a31cda",
     "slate_version": "sha-2e7684a19a72"
   },
-  "started_at": "2026-07-19T20:48:08Z",
+  "started_at": "2026-07-20T05:01:41Z",
   "status": "ok",
   "transfer_capacity": {
     "download": {
-      "elapsed_seconds": 172.03798583,
-      "mib_per_second": 190.46956311369414
+      "elapsed_seconds": 72.040456929,
+      "mib_per_second": 454.855526975554
     },
     "endpoint": "https://t3.storage.dev",
     "max_concurrent_requests": 32,
@@ -1437,13 +1445,13 @@
     "parallel_objects": 4,
     "region": "fra",
     "requests_per_process": 8,
-    "runner_type": "warp-ubuntu-latest-x64-16x",
+    "runner_type": "warp-ubuntu-latest-arm64-8x",
     "scale": 1.0,
     "status": "ok",
-    "timestamp": "2026-07-19T20:56:14.435279Z",
+    "timestamp": "2026-07-20T05:07:04.952910Z",
     "upload": {
-      "elapsed_seconds": 77.263205246,
-      "mib_per_second": 424.10873190762993
+      "elapsed_seconds": 61.836785323,
+      "mib_per_second": 529.9111172878523
     },
     "warmup_bytes": 8589934592
   }
