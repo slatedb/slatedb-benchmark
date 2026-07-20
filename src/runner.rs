@@ -530,10 +530,6 @@ fn ensure_shared_configuration(
         "golden dataset does not match"
     );
     anyhow::ensure!(
-        existing.caches == current.caches,
-        "golden caches do not match"
-    );
-    anyhow::ensure!(
         existing.build_profile == current.build_profile,
         "golden build profile does not match"
     );
@@ -985,6 +981,22 @@ mod tests {
         .expect("resolved config");
         let mut golden = ResultConfiguration::from(&config);
         golden.slate_settings = serde_json::json!({"defaults_from_another_version": true});
+
+        ensure_shared_configuration(&golden, &config).expect("compatible golden data");
+    }
+
+    #[test]
+    fn golden_compatibility_ignores_cache_sizes() {
+        let config = config::load(
+            Task::Balanced,
+            BenchmarkScale::FULL,
+            Path::new(SETTINGS_PATH),
+        )
+        .expect("resolved config");
+        let mut golden = ResultConfiguration::from(&config);
+        golden.caches.block_bytes = 1;
+        golden.caches.metadata_bytes = 1;
+        golden.caches.object_store_bytes = 1;
 
         ensure_shared_configuration(&golden, &config).expect("compatible golden data");
     }
