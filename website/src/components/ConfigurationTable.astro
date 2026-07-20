@@ -47,16 +47,24 @@ const flatten = (value: unknown, current: string[] = []): Row[] => {
   return [{ path: current, value: formatScalar(value, current) }];
 };
 const groups: [string, Row[]][] = [
-  ['Benchmark', flatten(runnerConfiguration)],
-  ['SlateDB', flatten(slateSettings)],
+  ['Benchmark configuration', flatten(runnerConfiguration)],
+  ['SlateDB configuration', flatten(slateSettings)],
 ];
 ---
 
 {groups.map(([name, rows]) => (
-  <section class="configuration-group">
-    <h3>{name}</h3>
+  <section class="metric-section">
+    <div class="section-heading">
+      <h2>{name}</h2>
+    </div>
     <div class="table-scroll">
       <table>
+        <thead>
+          <tr>
+            <th scope="col">Key</th>
+            <th scope="col">Value</th>
+          </tr>
+        </thead>
         <tbody>
           {rows.map((row) => (
             <tr>
