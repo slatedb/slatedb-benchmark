@@ -66,21 +66,19 @@ pub async fn execute(
         .task
         .task
         .may_write()
-        .then(|| DurabilityTracker::start(Arc::clone(&db), registry.recorder()));
-    let durability = tracker.as_ref().map(DurabilityTracker::sender);
+        .then(|| DurabilityTracker::start(Arc::clone(&db), Arc::clone(&registry)));
     let client_started = Instant::now();
     let stats = closed::run_phase(
         Arc::clone(&db),
         config,
         Duration::from_millis(config.task.measurement_ms),
         Some(Arc::clone(&registry)),
-        durability.clone(),
+        tracker.as_mut(),
     )
     .await;
     let client_measurement = client_started.elapsed();
     rate_windows.finish();
     tracing::info!(task = %config.task.task, "workload clients stopped");
-    drop(durability);
     let stats = match stats {
         Ok(stats) => stats,
         Err(error) => {
@@ -125,11 +123,11 @@ pub async fn execute(
     let durable_result = durable_result?;
 
     if let Some(result) = durable_result {
-        if result.lag.len() != stats.writes {
+        if result.count != stats.writes {
             bail!(
                 "durability coverage mismatch: {} writes, {} latency samples",
                 stats.writes,
-                result.lag.len()
+                result.count
             );
         }
         if let Some(last_write_sequence) = stats.last_write_sequence {

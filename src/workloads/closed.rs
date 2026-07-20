@@ -1,4 +1,4 @@
-use super::durability::DurabilitySender;
+use super::durability::{DurabilitySender, DurabilityTracker};
 use super::stats::{record_error, record_success, WorkerStats};
 use super::util::{key_for_id, missing_key_for_id, KeySelector, ValueGenerator};
 use crate::config::{ResolvedConfig, Task, TaskConfig};
@@ -78,7 +78,7 @@ pub async fn run_phase(
     config: &ResolvedConfig,
     duration: Duration,
     registry: Option<Arc<ApplicationRegistry>>,
-    durability: Option<DurabilitySender>,
+    mut durability: Option<&mut DurabilityTracker>,
 ) -> Result<WorkerStats> {
     if config.task.task == Task::Idle {
         tokio::time::sleep(duration).await;
@@ -92,7 +92,7 @@ pub async fn run_phase(
         let db = Arc::clone(&db);
         let config = config.clone();
         let recorder = registry.as_ref().map(|registry| registry.recorder());
-        let durability = durability.clone();
+        let durability = durability.as_deref_mut().map(DurabilityTracker::sender);
         let next_insert = Arc::clone(&next_insert);
         let operations = Arc::clone(&operations);
         tasks.spawn(async move {
