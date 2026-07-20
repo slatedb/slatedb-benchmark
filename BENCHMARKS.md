@@ -13,11 +13,11 @@ results.
 
 ## Benchmark environment
 
-Release runs use a WarpBuild `warp-ubuntu-latest-arm64-8x` runner in Hetzner's
-Frankfurt, Germany data center. Tigris uses its Frankfurt (`fra`) region. Each
-preparation phase and workload has one published configuration. The release
-does not vary clients, values, caches, machines, object stores, or SlateDB
-settings within a preparation phase or workload.
+Release runs use a WarpBuild `warp-ubuntu-latest-arm64-8x` runner. Tigris uses
+its Frankfurt (`fra`) region in Germany. Each preparation phase and workload
+has one published configuration. The release does not vary clients, values,
+caches, machines, object stores, or SlateDB settings within a preparation phase
+or workload.
 
 The suite uses the SlateDB release defaults unless a preparation phase or
 workload says otherwise. It configures these caches:

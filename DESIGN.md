@@ -292,7 +292,8 @@ build. Four AWS CLI processes transfer 8 GiB of warmup data and then 32 GiB of
 measured data in each direction. Upload and download run separately. Scaled
 local runs reduce both sizes. Workloads wait for the probe, so its traffic
 never overlaps their measurements. The probe is diagnostic data and does not
-appear on the website.
+appear on the website. Its log includes host, CPU, memory, disk, public egress,
+DNS, routing, and a TCP traceroute to Tigris.
 
 The workload matrix uses one WarpBuild machine per task and runs up to four
 tasks at once. Act runs one task at a time because its jobs share the local

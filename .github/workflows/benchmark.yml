@@ -203,6 +203,67 @@ jobs:
             --output /tmp/awscliv2.zip
           unzip -q /tmp/awscliv2.zip -d /tmp
           sudo /tmp/aws/install
+      - name: Install runner diagnostics
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v traceroute >/dev/null 2>&1; then
+            if ! sudo apt-get update -qq || \
+              ! sudo apt-get install -y --no-install-recommends traceroute; then
+              echo "::warning::traceroute installation failed"
+            fi
+          fi
+      - name: Record runner diagnostics
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          echo "::group::Host"
+          hostname
+          uname -a
+          cat /etc/os-release
+          systemd-detect-virt || true
+          for field in sys_vendor product_name; do
+            if [[ -r /sys/devices/virtual/dmi/id/$field ]]; then
+              printf '%s: ' "$field"
+              cat "/sys/devices/virtual/dmi/id/$field"
+            fi
+          done
+          echo "::endgroup::"
+
+          echo "::group::CPU"
+          lscpu
+          echo "::endgroup::"
+
+          echo "::group::Memory"
+          free -h
+          echo "::endgroup::"
+
+          echo "::group::Disk"
+          lsblk -o NAME,MODEL,SIZE,TYPE,FSTYPE,MOUNTPOINTS
+          df -h
+          du -sh "$GITHUB_WORKSPACE"
+          echo "::endgroup::"
+
+          echo "::group::Network"
+          ip -brief address
+          ip route
+          echo "Public egress:"
+          curl --fail --location --silent --show-error --max-time 10 \
+            https://ipinfo.io/json || true
+          echo
+          echo "Tigris DNS:"
+          getent ahosts t3.storage.dev || true
+          echo "Tigris connection:"
+          curl --location --silent --show-error --max-time 20 \
+            --output /dev/null \
+            --write-out 'remote_ip=%{remote_ip} http_code=%{http_code} connect_seconds=%{time_connect} tls_seconds=%{time_appconnect} total_seconds=%{time_total}\n' \
+            https://t3.storage.dev || true
+          echo "::endgroup::"
+
+          echo "::group::TCP traceroute to Tigris"
+          sudo traceroute -T -p 443 -m 20 -w 2 -q 1 t3.storage.dev || true
+          echo "::endgroup::"
       - name: Measure Tigris transfer capacity
         shell: bash
         env:
