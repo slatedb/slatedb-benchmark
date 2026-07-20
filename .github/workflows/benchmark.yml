@@ -59,11 +59,11 @@ jobs:
           AWS_REGION: auto
           AWS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
           GOLDEN_ID: ${{ inputs.golden_id }}
-          TIGRIS_BUCKET_PREFIX: ${{ vars.TIGRIS_BUCKET_PREFIX }}
+          SLATEDB_BENCH_BUCKET: ${{ vars.SLATEDB_BENCH_BUCKET }}
         run: |
           set -euo pipefail
           endpoint=${AWS_ENDPOINT_URL_S3:-https://t3.storage.dev}
-          bucket=${SLATEDB_BENCH_BUCKET:-${TIGRIS_BUCKET_PREFIX}-slatedb}
+          bucket=${SLATEDB_BENCH_BUCKET:?SLATEDB_BENCH_BUCKET is required}
           prefix=${SLATEDB_BENCH_PREFIX:-benchmark}
           for task in bulk-load compaction; do
             mkdir -p ".runs/bundle/preparation/$task"
@@ -271,11 +271,11 @@ jobs:
           AWS_REGION: auto
           AWS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
           BENCHMARK_SCALE: ${{ inputs.scale }}
-          TIGRIS_BUCKET_PREFIX: ${{ vars.TIGRIS_BUCKET_PREFIX }}
+          SLATEDB_BENCH_BUCKET: ${{ vars.SLATEDB_BENCH_BUCKET }}
         run: |
           set -euo pipefail
           export AWS_ENDPOINT_URL_S3=${AWS_ENDPOINT_URL_S3:-https://t3.storage.dev}
-          export SLATEDB_BENCH_BUCKET=${SLATEDB_BENCH_BUCKET:-${TIGRIS_BUCKET_PREFIX}-slatedb}
+          : "${SLATEDB_BENCH_BUCKET:?SLATEDB_BENCH_BUCKET is required}"
           export SLATEDB_BENCH_PREFIX=${SLATEDB_BENCH_PREFIX:-benchmark}
           export SLATEDB_BENCH_REGION=${SLATEDB_BENCH_REGION:-fra}
           export SLATEDB_BENCH_RUNNER_TYPE=${SLATEDB_BENCH_RUNNER_TYPE:-warp-ubuntu-latest-arm64-8x}
@@ -329,7 +329,7 @@ jobs:
           BENCHMARK_SESSION: github-${{ github.run_id }}
           BENCHMARK_TASK: ${{ matrix.task }}
           GOLDEN_ID: ${{ inputs.golden_id }}
-          TIGRIS_BUCKET_PREFIX: ${{ vars.TIGRIS_BUCKET_PREFIX }}
+          SLATEDB_BENCH_BUCKET: ${{ vars.SLATEDB_BENCH_BUCKET }}
           SLATEDB_BENCH_PUBLISHED: ${{ inputs.publish }}
         run: |
           set -euo pipefail
@@ -341,7 +341,7 @@ jobs:
           export AWS_REGION=${AWS_REGION:-auto}
           export AWS_ENDPOINT_URL_S3=${AWS_ENDPOINT_URL_S3:-https://t3.storage.dev}
           export AWS_ENDPOINT_URL_IAM=${AWS_ENDPOINT_URL_IAM:-https://iam.storage.dev}
-          export SLATEDB_BENCH_BUCKET=${SLATEDB_BENCH_BUCKET:-${TIGRIS_BUCKET_PREFIX}-slatedb}
+          : "${SLATEDB_BENCH_BUCKET:?SLATEDB_BENCH_BUCKET is required}"
           export SLATEDB_BENCH_PREFIX=${SLATEDB_BENCH_PREFIX:-benchmark}
           export SLATEDB_BENCH_REGION=${SLATEDB_BENCH_REGION:-fra}
           export SLATEDB_BENCH_RUNNER_TYPE=${SLATEDB_BENCH_RUNNER_TYPE:-warp-ubuntu-latest-arm64-8x}
@@ -461,11 +461,11 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
           AWS_REGION: auto
           AWS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
-          TIGRIS_BUCKET_PREFIX: ${{ vars.TIGRIS_BUCKET_PREFIX }}
+          SLATEDB_BENCH_BUCKET: ${{ vars.SLATEDB_BENCH_BUCKET }}
         run: |
           set -euo pipefail
           endpoint=${AWS_ENDPOINT_URL_S3:-https://t3.storage.dev}
-          bucket=${SLATEDB_BENCH_BUCKET:-${TIGRIS_BUCKET_PREFIX}-slatedb}
+          bucket=${SLATEDB_BENCH_BUCKET:?SLATEDB_BENCH_BUCKET is required}
           prefix=${SLATEDB_BENCH_PREFIX:-benchmark}
           for task in \
             idle point-read-uniform point-read-skewed point-read-missing \

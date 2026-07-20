@@ -110,14 +110,14 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
           BENCHMARK_SCALE: ${{ inputs.scale }}
           GOLDEN_ID: ${{ inputs.golden_id }}
-          TIGRIS_BUCKET_PREFIX: ${{ vars.TIGRIS_BUCKET_PREFIX }}
+          SLATEDB_BENCH_BUCKET: ${{ vars.SLATEDB_BENCH_BUCKET }}
         run: |
           set -euo pipefail
           export CLOUD_PROVIDER=aws
           export AWS_REGION=${AWS_REGION:-auto}
           export AWS_ENDPOINT_URL_S3=${AWS_ENDPOINT_URL_S3:-https://t3.storage.dev}
           export AWS_ENDPOINT_URL_IAM=${AWS_ENDPOINT_URL_IAM:-https://iam.storage.dev}
-          export SLATEDB_BENCH_BUCKET=${SLATEDB_BENCH_BUCKET:-${TIGRIS_BUCKET_PREFIX}-slatedb}
+          : "${SLATEDB_BENCH_BUCKET:?SLATEDB_BENCH_BUCKET is required}"
           export SLATEDB_BENCH_PREFIX=${SLATEDB_BENCH_PREFIX:-benchmark}
           export SLATEDB_BENCH_REGION=${SLATEDB_BENCH_REGION:-fra}
           export SLATEDB_BENCH_RUNNER_TYPE=${SLATEDB_BENCH_RUNNER_TYPE:-warp-ubuntu-latest-arm64-8x}
@@ -159,14 +159,14 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
           BENCHMARK_SCALE: ${{ inputs.scale }}
           GOLDEN_ID: ${{ inputs.golden_id }}
-          TIGRIS_BUCKET_PREFIX: ${{ vars.TIGRIS_BUCKET_PREFIX }}
+          SLATEDB_BENCH_BUCKET: ${{ vars.SLATEDB_BENCH_BUCKET }}
         run: |
           set -euo pipefail
           export CLOUD_PROVIDER=aws
           export AWS_REGION=${AWS_REGION:-auto}
           export AWS_ENDPOINT_URL_S3=${AWS_ENDPOINT_URL_S3:-https://t3.storage.dev}
           export AWS_ENDPOINT_URL_IAM=${AWS_ENDPOINT_URL_IAM:-https://iam.storage.dev}
-          export SLATEDB_BENCH_BUCKET=${SLATEDB_BENCH_BUCKET:-${TIGRIS_BUCKET_PREFIX}-slatedb}
+          : "${SLATEDB_BENCH_BUCKET:?SLATEDB_BENCH_BUCKET is required}"
           export SLATEDB_BENCH_PREFIX=${SLATEDB_BENCH_PREFIX:-benchmark}
           export SLATEDB_BENCH_REGION=${SLATEDB_BENCH_REGION:-fra}
           export SLATEDB_BENCH_RUNNER_TYPE=${SLATEDB_BENCH_RUNNER_TYPE:-warp-ubuntu-latest-arm64-8x}
