@@ -18,8 +18,8 @@ if [[ $endpoint == "https://t3.storage.dev" || $endpoint == *tigris.dev* || \
   $endpoint == *tigrisdata.com* ]]; then
   object_store=Tigris
 fi
-parallel_objects=4
-requests_per_process=8
+parallel_objects=2
+requests_per_process=4
 max_concurrent_requests=$((parallel_objects * requests_per_process))
 probe_id="${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}"
 probe_prefix="$root_prefix/probes/$probe_id"
