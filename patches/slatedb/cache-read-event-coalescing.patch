@@ -1,0 +1,212 @@
+diff --git a/slatedb/src/cached_object_store/storage_fs.rs b/slatedb/src/cached_object_store/storage_fs.rs
+index 8a1500e..502b795 100644
+--- a/slatedb/src/cached_object_store/storage_fs.rs
++++ b/slatedb/src/cached_object_store/storage_fs.rs
+@@ -558,8 +558,11 @@ struct FsCacheEvictor {
+     tx: tokio::sync::mpsc::Sender<FsCacheEvictorWork>,
+     rx: Mutex<Option<tokio::sync::mpsc::Receiver<FsCacheEvictorWork>>>,
+     started: AtomicBool,
+-    queue_full_count: AtomicU64,
++    queue_full_read_count: AtomicU64,
++    queue_full_write_count: AtomicU64,
++    queue_full_delete_count: AtomicU64,
+     last_queue_full_log_ms: AtomicI64,
++    pending_reads: Arc<std::sync::Mutex<HashSet<std::path::PathBuf>>>,
+     background_evict_handle: OnceCell<tokio::task::JoinHandle<()>>,
+     background_scan_handle: OnceCell<tokio::task::JoinHandle<()>>,
+     stats: Arc<CachedObjectStoreStats>,
+@@ -586,8 +589,11 @@ impl FsCacheEvictor {
+             tx,
+             rx: Mutex::new(Some(rx)),
+             started: AtomicBool::new(false),
+-            queue_full_count: AtomicU64::new(0),
++            queue_full_read_count: AtomicU64::new(0),
++            queue_full_write_count: AtomicU64::new(0),
++            queue_full_delete_count: AtomicU64::new(0),
+             last_queue_full_log_ms: AtomicI64::new(i64::MIN),
++            pending_reads: Arc::new(std::sync::Mutex::new(HashSet::new())),
+             background_evict_handle: OnceCell::new(),
+             background_scan_handle: OnceCell::new(),
+             stats,
+@@ -627,6 +633,7 @@ impl FsCacheEvictor {
+                 inner,
+                 rx,
+                 self.system_clock.clone(),
++                self.pending_reads.clone(),
+             )))
+             .ok();
+     }
+@@ -639,11 +646,16 @@ impl FsCacheEvictor {
+         inner: Arc<FsCacheEvictorInner>,
+         mut rx: tokio::sync::mpsc::Receiver<FsCacheEvictorWork>,
+         system_clock: Arc<dyn SystemClock>,
++        pending_reads: Arc<std::sync::Mutex<HashSet<std::path::PathBuf>>>,
+     ) {
+         loop {
+             match rx.recv().await {
+                 Some((path, access)) => match access {
+                     EntryAccess::Read(bytes) => {
++                        pending_reads
++                            .lock()
++                            .expect("pending reads lock should not be poisoned")
++                            .remove(&path);
+                         inner
+                             .track_entry_accessed(path, bytes, system_clock.now(), false)
+                             .await;
+@@ -686,10 +698,36 @@ impl FsCacheEvictor {
+             return true;
+         }
+ 
++        if matches!(&access, EntryAccess::Read(_))
++            && !self
++                .pending_reads
++                .lock()
++                .expect("pending reads lock should not be poisoned")
++                .insert(path.clone())
++        {
++            return true;
++        }
++
+         match self.tx.try_send((path, access)) {
+             Ok(()) => true,
+-            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+-                self.queue_full_count.fetch_add(1, Ordering::AcqRel);
++            Err(tokio::sync::mpsc::error::TrySendError::Full((path, access))) => {
++                if matches!(&access, EntryAccess::Read(_)) {
++                    self.pending_reads
++                        .lock()
++                        .expect("pending reads lock should not be poisoned")
++                        .remove(&path);
++                }
++                match &access {
++                    EntryAccess::Read(_) => {
++                        self.queue_full_read_count.fetch_add(1, Ordering::AcqRel);
++                    }
++                    EntryAccess::Write(_) => {
++                        self.queue_full_write_count.fetch_add(1, Ordering::AcqRel);
++                    }
++                    EntryAccess::Delete => {
++                        self.queue_full_delete_count.fetch_add(1, Ordering::AcqRel);
++                    }
++                }
+                 let now_ms = self.system_clock.now().timestamp_millis();
+                 let last_log_ms = self.last_queue_full_log_ms.load(Ordering::Acquire);
+                 if now_ms.saturating_sub(last_log_ms) >= QUEUE_FULL_LOG_INTERVAL_MS
+@@ -698,15 +736,29 @@ impl FsCacheEvictor {
+                         .compare_exchange(last_log_ms, now_ms, Ordering::AcqRel, Ordering::Acquire)
+                         .is_ok()
+                 {
+-                    let queue_full_count = self.queue_full_count.swap(0, Ordering::AcqRel);
++                    let read_count = self.queue_full_read_count.swap(0, Ordering::AcqRel);
++                    let write_count = self.queue_full_write_count.swap(0, Ordering::AcqRel);
++                    let delete_count = self.queue_full_delete_count.swap(0, Ordering::AcqRel);
++                    let queue_full_count = read_count + write_count + delete_count;
+                     warn!(
+-                        "evictor queue skipped cache write/access event because it was full {} times in the last 30s",
++                        "evictor queue skipped cache event because it was full {} times in the last 30s [reads={}, writes={}, deletes={}]",
+                         queue_full_count,
++                        read_count,
++                        write_count,
++                        delete_count,
+                     );
+                 }
+                 false
+             }
+-            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => false,
++            Err(tokio::sync::mpsc::error::TrySendError::Closed((path, access))) => {
++                if matches!(&access, EntryAccess::Read(_)) {
++                    self.pending_reads
++                        .lock()
++                        .expect("pending reads lock should not be poisoned")
++                        .remove(&path);
++                }
++                false
++            }
+         }
+     }
+ }
+@@ -1252,6 +1304,10 @@ mod tests {
+ 
+         // Simulate started state without a running receiver so the channel can fill.
+         evictor.started.store(true, Ordering::Release);
++        evictor.last_queue_full_log_ms.store(
++            evictor.system_clock.now().timestamp_millis(),
++            Ordering::Release,
++        );
+ 
+         for idx in 0..100 {
+             let accepted = evictor
+@@ -1267,6 +1323,73 @@ mod tests {
+             .track_entry_accessed(std::path::PathBuf::from("overflow"), EntryAccess::Write(1))
+             .await;
+         assert!(!accepted);
++        let accepted = evictor
++            .track_entry_accessed(
++                std::path::PathBuf::from("overflow-read"),
++                EntryAccess::Read(1),
++            )
++            .await;
++        assert!(!accepted);
++        let accepted = evictor
++            .track_entry_accessed(
++                std::path::PathBuf::from("overflow-delete"),
++                EntryAccess::Delete,
++            )
++            .await;
++        assert!(!accepted);
++        assert_eq!(evictor.queue_full_read_count.load(Ordering::Acquire), 1);
++        assert_eq!(evictor.queue_full_write_count.load(Ordering::Acquire), 1);
++        assert_eq!(evictor.queue_full_delete_count.load(Ordering::Acquire), 1);
++        assert!(!evictor
++            .pending_reads
++            .lock()
++            .expect("pending reads lock should not be poisoned")
++            .contains(&std::path::PathBuf::from("overflow-read")));
++    }
++
++    #[tokio::test]
++    async fn test_evictor_coalesces_pending_reads() {
++        let temp_dir = tempfile::Builder::new()
++            .prefix("objstore_cache_test_evictor_coalescing_")
++            .tempdir()
++            .unwrap();
++        let recorder = slatedb_common::metrics::MetricsRecorderHelper::noop();
++
++        let evictor = FsCacheEvictor::new(
++            temp_dir.path().to_path_buf(),
++            1024,
++            None,
++            Arc::new(CachedObjectStoreStats::new(&recorder)),
++            Arc::new(DefaultSystemClock::new()),
++            Arc::new(DbRand::default()),
++            FileHandleCache::new(1000),
++        );
++
++        // Simulate started state without a running receiver so pending reads stay queued.
++        evictor.started.store(true, Ordering::Release);
++        let path = std::path::PathBuf::from("hot-part");
++
++        assert!(
++            evictor
++                .track_entry_accessed(path.clone(), EntryAccess::Read(1024))
++                .await
++        );
++        let remaining_capacity = evictor.tx.capacity();
++        assert!(
++            evictor
++                .track_entry_accessed(path.clone(), EntryAccess::Read(1024))
++                .await
++        );
++
++        assert_eq!(evictor.tx.capacity(), remaining_capacity);
++        assert_eq!(
++            evictor
++                .pending_reads
++                .lock()
++                .expect("pending reads lock should not be poisoned")
++                .len(),
++            1
++        );
+     }
+ 
+     #[tokio::test]
