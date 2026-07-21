@@ -14,7 +14,7 @@ const WARMUP_MS: u64 = 5 * 60 * 1_000;
 const MEASUREMENT_MS: u64 = 15 * 60 * 1_000;
 const IDLE_MS: u64 = 5 * 60 * 1_000;
 const INGEST_MS: u64 = 20 * 60 * 1_000;
-const BLOCK_CACHE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+const BLOCK_CACHE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 const METADATA_CACHE_BYTES: u64 = 512 * 1024 * 1024;
 const OBJECT_STORE_CACHE_BYTES: u64 = 40 * 1024 * 1024 * 1024;
 const MIN_DURATION_MS: u64 = 2_000;
@@ -462,9 +462,17 @@ mod tests {
         assert_eq!(config.task.measurement_ms, 900_000);
         assert_eq!(config.task.operation_mix["get"], 0.5);
         assert_eq!(config.task.operation_mix["put"], 0.5);
+        assert_eq!(config.caches.block_bytes, 8 * 1024 * 1024 * 1024);
         assert_eq!(
             config.settings.object_store_cache_options.part_size_bytes,
             1_048_576
+        );
+        assert_eq!(
+            config
+                .settings
+                .object_store_cache_options
+                .max_open_file_handles,
+            16_384
         );
     }
 
