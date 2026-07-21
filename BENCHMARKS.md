@@ -22,9 +22,12 @@ or workload.
 The suite uses the SlateDB release defaults unless a preparation phase or
 workload says otherwise. It configures these caches:
 
-- 4 GiB block cache
+- 4 GiB Foyer block-cache memory tier
+- 40 GiB Foyer block-cache disk tier
 - 512 MiB metadata/index cache
-- 40 GiB local object-store cache
+
+The local object-store cache is disabled. This avoids caching the same data in
+both the object-store cache and Foyer's disk tier.
 
 ## Dataset
 
@@ -78,8 +81,7 @@ its activity appears in the object-store, process, and machine tables.
 The measured steady-state workloads clone the golden checkpoint and do not
 inherit another workload's writes.
 
-Each clone starts with an empty local object-store cache. Warmup may fill it.
-PUT caching and startup preloading stay disabled.
+Each clone starts with an empty Foyer block-cache disk tier. Warmup may fill it.
 
 `sustained-ingest` starts with an empty database. It does not use the golden
 checkpoint.

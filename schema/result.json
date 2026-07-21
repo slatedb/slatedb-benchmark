@@ -81,9 +81,20 @@
       "required": ["block_bytes", "metadata_bytes", "object_store_bytes"],
       "properties": {
         "block_bytes": { "type": "integer", "minimum": 1 },
+        "block_disk_bytes": { "type": "integer", "minimum": 1 },
         "metadata_bytes": { "type": "integer", "minimum": 1 },
-        "object_store_bytes": { "type": "integer", "minimum": 1 }
-      }
+        "object_store_bytes": { "type": "integer", "minimum": 0 }
+      },
+      "oneOf": [
+        {
+          "required": ["block_disk_bytes"],
+          "properties": { "object_store_bytes": { "const": 0 } }
+        },
+        {
+          "not": { "required": ["block_disk_bytes"] },
+          "properties": { "object_store_bytes": { "minimum": 1 } }
+        }
+      ]
     },
     "taskConfiguration": {
       "type": "object",
