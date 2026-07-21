@@ -630,11 +630,27 @@ async fn create_bytes(
     bytes: Vec<u8>,
     description: &str,
 ) -> Result<()> {
-    store
-        .put_opts(path, PutPayload::from(bytes), PutMode::Create.into())
+    match store
+        .put_opts(
+            path,
+            PutPayload::from(bytes.clone()),
+            PutMode::Create.into(),
+        )
         .await
-        .with_context(|| format!("creating {description} {path}"))?;
-    Ok(())
+    {
+        Ok(_) => Ok(()),
+        Err(object_store::Error::AlreadyExists { .. }) => {
+            let existing = load_required_bytes(store, path)
+                .await
+                .with_context(|| format!("verifying existing {description} {path}"))?;
+            anyhow::ensure!(
+                existing.as_ref() == bytes.as_slice(),
+                "{description} {path} already exists with different contents"
+            );
+            Ok(())
+        }
+        Err(error) => Err(error).with_context(|| format!("creating {description} {path}")),
+    }
 }
 
 async fn create_result(
@@ -956,12 +972,16 @@ fn manifest_lsm_digest(manifest: &VersionedManifest) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ensure_shared_configuration, sha256_bytes, validate_name, validate_series_digest,
-        SETTINGS_PATH,
+        create_bytes, ensure_shared_configuration, sha256_bytes, validate_name,
+        validate_series_digest, SETTINGS_PATH,
     };
     use crate::config::{self, BenchmarkScale, Task};
     use crate::model::{ResultConfiguration, SeriesReference};
+    use object_store::memory::InMemory;
+    use object_store::path::Path as ObjectPath;
+    use object_store::ObjectStore;
     use std::path::Path;
+    use std::sync::Arc;
 
     #[test]
     fn names_reject_path_components() {
@@ -978,6 +998,34 @@ mod tests {
         };
         validate_series_digest(&reference, b"original").expect("matching digest");
         assert!(validate_series_digest(&reference, b"modified").is_err());
+    }
+
+    #[tokio::test]
+    async fn create_bytes_accepts_matching_existing_object() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let path = ObjectPath::from("sessions/run/idle/series.json");
+
+        create_bytes(Arc::clone(&store), &path, b"series".to_vec(), "series")
+            .await
+            .expect("initial create");
+        create_bytes(Arc::clone(&store), &path, b"series".to_vec(), "series")
+            .await
+            .expect("matching retry");
+    }
+
+    #[tokio::test]
+    async fn create_bytes_rejects_different_existing_object() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let path = ObjectPath::from("sessions/run/idle/series.json");
+
+        create_bytes(Arc::clone(&store), &path, b"first".to_vec(), "series")
+            .await
+            .expect("initial create");
+        let error = create_bytes(Arc::clone(&store), &path, b"second".to_vec(), "series")
+            .await
+            .expect_err("different retry must fail");
+
+        assert!(error.to_string().contains("different contents"));
     }
 
     #[test]
