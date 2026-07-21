@@ -462,6 +462,10 @@ mod tests {
         assert_eq!(config.task.measurement_ms, 900_000);
         assert_eq!(config.task.operation_mix["get"], 0.5);
         assert_eq!(config.task.operation_mix["put"], 0.5);
+        assert_eq!(
+            config.settings.object_store_cache_options.part_size_bytes,
+            1_048_576
+        );
     }
 
     #[test]
