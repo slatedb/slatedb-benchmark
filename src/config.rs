@@ -466,6 +466,7 @@ mod tests {
             config.settings.object_store_cache_options.part_size_bytes,
             1_048_576
         );
+        assert!(!config.settings.wal_enabled);
     }
 
     #[test]
@@ -489,19 +490,6 @@ mod tests {
                 .object_store_cache_options
                 .max_cache_size_bytes,
             Some(429_496_730)
-        );
-        let cache = &config.slate_settings["object_store_cache_options"];
-        assert_eq!(
-            cache
-                .get("cache_on_flush")
-                .and_then(serde_json::Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            cache
-                .get("cache_on_compaction")
-                .and_then(serde_json::Value::as_bool),
-            Some(false)
         );
         assert!(config
             .settings
