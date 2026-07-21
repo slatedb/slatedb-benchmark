@@ -27,8 +27,8 @@ fn main() {
         enabled_features.join(",")
     );
 
-    let version = std::env::var("SLATEDB_VERSION").unwrap_or_else(|_| "0.14.1".to_string());
-    let commit = std::env::var("SLATEDB_COMMIT").unwrap_or_else(|_| "v0.14.1".to_string());
+    let version = std::env::var("SLATEDB_VERSION").unwrap_or_else(|_| "unknown".to_string());
+    let commit = std::env::var("SLATEDB_COMMIT").unwrap_or_else(|_| "unknown".to_string());
     println!("cargo:rustc-env=BENCHMARK_SLATE_VERSION={version}");
     println!("cargo:rustc-env=BENCHMARK_SLATE_COMMIT={commit}");
 }
