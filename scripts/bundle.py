@@ -30,7 +30,6 @@ def arguments():
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--golden", required=True)
     parser.add_argument("--started-at", required=True)
-    parser.add_argument("--max-parallel", required=True, type=int)
     return parser.parse_args()
 
 
@@ -142,8 +141,6 @@ def validate_source_identities(preparation, workloads):
 
 def main():
     args = arguments()
-    if args.max_parallel < 1:
-        raise ValueError("max parallel must be positive")
 
     preparation = {
         task: read_result(args.input / "preparation" / task / "result.json", task, args.golden)
@@ -225,7 +222,7 @@ def main():
             task: preparation[task]["source"]["runner_commit"] for task in PREPARATION
         },
         "resolved_configuration": configurations,
-        "max_parallel": args.max_parallel,
+        "max_parallel": len(workloads),
         "transfer_capacity": transfer_capacity,
         "results": checksums,
     }
