@@ -418,7 +418,21 @@ fn classify_s3_request(
         return None;
     }
 
+    if request.method() == http::Method::GET
+        && request.uri().query().is_some_and(is_list_objects_query)
+    {
+        return Some(HttpMethod::List);
+    }
+
     Some(HttpMethod::from_http(request.method()))
+}
+
+fn is_list_objects_query(query: &str) -> bool {
+    query.split('&').any(|parameter| {
+        parameter
+            .split_once('=')
+            .is_some_and(|(key, value)| key == "list-type" && value == "2")
+    })
 }
 
 fn matches_target_authority(authority: &http::uri::Authority, target: &str) -> bool {
@@ -483,7 +497,12 @@ mod tests {
             (
                 "GET",
                 "https://s3.example/bucket?list-type=2",
-                HttpMethod::Get,
+                HttpMethod::List,
+            ),
+            (
+                "GET",
+                "https://s3.example/bucket?prefix=data&list-type=2",
+                HttpMethod::List,
             ),
             ("POST", "https://s3.example/bucket?delete", HttpMethod::Post),
             (

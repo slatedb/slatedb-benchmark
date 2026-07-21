@@ -5,6 +5,7 @@ export const S3_STANDARD_REQUEST_PRICING = {
   monthDays: 30,
   requestsPer1000Usd: {
     GET: 0.0004,
+    LIST: 0.005,
     PUT: 0.005,
     HEAD: 0.0004,
     DELETE: 0,

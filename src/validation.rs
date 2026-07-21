@@ -633,7 +633,7 @@ fn validate_recorded_metrics(
         ensure!(
             matches!(
                 method.as_str(),
-                "GET" | "PUT" | "HEAD" | "DELETE" | "POST" | "OTHER"
+                "GET" | "LIST" | "PUT" | "HEAD" | "DELETE" | "POST" | "OTHER"
             ),
             "unknown HTTP method {method}"
         );

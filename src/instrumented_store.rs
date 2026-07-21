@@ -12,8 +12,9 @@ use std::fmt::{Debug, Display, Formatter};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-const HTTP_METHODS: [HttpMethod; 6] = [
+const HTTP_METHODS: [HttpMethod; 7] = [
     HttpMethod::Get,
+    HttpMethod::List,
     HttpMethod::Put,
     HttpMethod::Head,
     HttpMethod::Delete,
@@ -24,11 +25,12 @@ const HTTP_METHODS: [HttpMethod; 6] = [
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum HttpMethod {
     Get = 0,
-    Put = 1,
-    Head = 2,
-    Delete = 3,
-    Post = 4,
-    Other = 5,
+    List = 1,
+    Put = 2,
+    Head = 3,
+    Delete = 4,
+    Post = 5,
+    Other = 6,
 }
 
 impl HttpMethod {
@@ -50,6 +52,7 @@ impl HttpMethod {
     fn name(self) -> &'static str {
         match self {
             Self::Get => "GET",
+            Self::List => "LIST",
             Self::Put => "PUT",
             Self::Head => "HEAD",
             Self::Delete => "DELETE",
