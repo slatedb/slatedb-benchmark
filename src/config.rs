@@ -495,13 +495,13 @@ mod tests {
             cache
                 .get("cache_on_flush")
                 .and_then(serde_json::Value::as_bool),
-            Some(true)
+            Some(false)
         );
         assert_eq!(
             cache
                 .get("cache_on_compaction")
                 .and_then(serde_json::Value::as_bool),
-            Some(true)
+            Some(false)
         );
         assert!(config
             .settings
