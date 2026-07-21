@@ -14,13 +14,13 @@ const WARMUP_MS: u64 = 5 * 60 * 1_000;
 const MEASUREMENT_MS: u64 = 15 * 60 * 1_000;
 const IDLE_MS: u64 = 5 * 60 * 1_000;
 const INGEST_MS: u64 = 20 * 60 * 1_000;
-const BLOCK_CACHE_MEMORY_BYTES: u64 = 4 * 1024 * 1024 * 1024;
-const BLOCK_CACHE_DISK_BYTES: u64 = 40 * 1024 * 1024 * 1024;
+const BLOCK_CACHE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const METADATA_CACHE_BYTES: u64 = 512 * 1024 * 1024;
+const OBJECT_STORE_CACHE_BYTES: u64 = 40 * 1024 * 1024 * 1024;
 const MIN_DURATION_MS: u64 = 2_000;
-const MIN_BLOCK_CACHE_MEMORY_BYTES: u64 = 8 * 1024 * 1024;
-const MIN_BLOCK_CACHE_DISK_BYTES: u64 = 16 * 1024 * 1024;
+const MIN_BLOCK_CACHE_BYTES: u64 = 8 * 1024 * 1024;
 const MIN_METADATA_CACHE_BYTES: u64 = 2 * 1024 * 1024;
+const MIN_OBJECT_STORE_CACHE_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -172,8 +172,6 @@ impl DatasetConfig {
 #[serde(deny_unknown_fields)]
 pub struct CacheConfig {
     pub block_bytes: u64,
-    #[serde(default)]
-    pub block_disk_bytes: u64,
     pub metadata_bytes: u64,
     pub object_store_bytes: u64,
 }
@@ -316,16 +314,18 @@ pub fn load(task: Task, scale: BenchmarkScale, settings_path: &Path) -> Result<R
         value_compression_ratio: 1.0,
     };
     let caches = CacheConfig {
-        block_bytes: scaled_u64(
-            BLOCK_CACHE_MEMORY_BYTES,
-            MIN_BLOCK_CACHE_MEMORY_BYTES,
+        block_bytes: scaled_u64(BLOCK_CACHE_BYTES, MIN_BLOCK_CACHE_BYTES, scale),
+        metadata_bytes: scaled_u64(METADATA_CACHE_BYTES, MIN_METADATA_CACHE_BYTES, scale),
+        object_store_bytes: scaled_u64(
+            OBJECT_STORE_CACHE_BYTES,
+            MIN_OBJECT_STORE_CACHE_BYTES,
             scale,
         ),
-        block_disk_bytes: scaled_u64(BLOCK_CACHE_DISK_BYTES, MIN_BLOCK_CACHE_DISK_BYTES, scale),
-        metadata_bytes: scaled_u64(METADATA_CACHE_BYTES, MIN_METADATA_CACHE_BYTES, scale),
-        object_store_bytes: 0,
     };
-    settings.object_store_cache_options.max_cache_size_bytes = None;
+    settings.object_store_cache_options.max_cache_size_bytes = Some(
+        usize::try_from(caches.object_store_bytes)
+            .context("object-store cache capacity exceeds the platform limit")?,
+    );
     settings.object_store_cache_options.root_folder = None;
     settings
         .object_store_cache_options
@@ -462,20 +462,10 @@ mod tests {
         assert_eq!(config.task.measurement_ms, 900_000);
         assert_eq!(config.task.operation_mix["get"], 0.5);
         assert_eq!(config.task.operation_mix["put"], 0.5);
-        assert_eq!(config.caches.block_bytes, 4_294_967_296);
-        assert_eq!(config.caches.block_disk_bytes, 42_949_672_960);
-        assert_eq!(config.caches.metadata_bytes, 536_870_912);
-        assert_eq!(config.caches.object_store_bytes, 0);
-        assert!(config
-            .settings
-            .object_store_cache_options
-            .root_folder
-            .is_none());
-        assert!(config
-            .settings
-            .object_store_cache_options
-            .max_cache_size_bytes
-            .is_none());
+        assert_eq!(
+            config.settings.object_store_cache_options.part_size_bytes,
+            1_048_576
+        );
     }
 
     #[test]
@@ -493,13 +483,26 @@ mod tests {
         assert_eq!(config.dataset.value_bytes, 400);
         assert_eq!(config.task.clients, 64);
         assert_eq!(config.task.measurement_ms, 12_000);
-        assert_eq!(config.caches.block_disk_bytes, 429_496_730);
-        assert_eq!(config.caches.object_store_bytes, 0);
-        assert!(config
-            .settings
-            .object_store_cache_options
-            .max_cache_size_bytes
-            .is_none());
+        assert_eq!(
+            config
+                .settings
+                .object_store_cache_options
+                .max_cache_size_bytes,
+            Some(429_496_730)
+        );
+        let cache = &config.slate_settings["object_store_cache_options"];
+        assert_eq!(
+            cache
+                .get("cache_on_flush")
+                .and_then(serde_json::Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            cache
+                .get("cache_on_compaction")
+                .and_then(serde_json::Value::as_bool),
+            Some(true)
+        );
         assert!(config
             .settings
             .object_store_cache_options

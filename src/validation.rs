@@ -749,13 +749,12 @@ fn validate_configuration(
     }
     ensure!(configuration.caches.block_bytes > 0, "block cache is empty");
     ensure!(
-        (configuration.caches.block_disk_bytes > 0)
-            != (configuration.caches.object_store_bytes > 0),
-        "exactly one disk cache tier must be configured"
-    );
-    ensure!(
         configuration.caches.metadata_bytes > 0,
         "metadata cache is empty"
+    );
+    ensure!(
+        configuration.caches.object_store_bytes > 0,
+        "object-store cache is empty"
     );
     ensure!(
         configuration.slate_settings.is_object(),

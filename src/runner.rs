@@ -17,9 +17,6 @@ use crate::workloads::{self, DatasetLoadMetrics};
 use anyhow::{bail, Context, Result};
 use bytes::Bytes;
 use chrono::Utc;
-use foyer::{
-    BlockEngineConfig, DeviceBuilder, FsDeviceBuilder, HybridCacheBuilder, PsyncIoEngineConfig,
-};
 use object_store::path::Path;
 use object_store::{ObjectStore, ObjectStoreExt, PutMode, PutPayload};
 use serde::de::DeserializeOwned;
@@ -30,8 +27,7 @@ use slatedb::compactor::CompactionStatus;
 use slatedb::config::{CheckpointOptions, Settings};
 use slatedb::db_cache::{
     foyer::{FoyerCache, FoyerCacheOptions},
-    foyer_hybrid::FoyerHybridCache,
-    CachedEntry, CachedKey, DbCache, SplitCache,
+    DbCache, SplitCache,
 };
 use slatedb::{Db, VersionedManifest};
 use slatedb_common::metrics::MetricsRecorder;
@@ -43,9 +39,6 @@ use uuid::Uuid;
 
 const SETTINGS_PATH: &str = "config/settings.toml";
 const COMPACTION_QUIET: Duration = Duration::from_secs(60);
-const FOYER_DISK_BLOCK_ALIGNMENT: usize = 4 * 1024;
-const FOYER_MIN_DISK_BLOCK_SIZE: usize = 16 * 1024 * 1024;
-const FOYER_MAX_DISK_PARTITIONS: usize = 512;
 
 pub async fn execute(args: RunArgs) -> Result<()> {
     validate_name(&args.golden, "golden")?;
@@ -139,14 +132,14 @@ async fn run_bulk_load(
     }
     delete_prefix(Arc::clone(&context.control), &task_root).await?;
     let database_path = task_root.clone().join("database");
-    let cache_directory = hybrid_cache_directory()?;
+    let cache = object_store_cache_directory()?;
     let recorder = Arc::new(BenchmarkMetricsRecorder::new());
-    let (db, db_cache) = open_database(
+    let db = open_database(
         database_path.clone(),
         context.instrumented.clone(),
         &config,
         &config.settings,
-        cache_directory.path(),
+        Some(cache.path()),
         Arc::clone(&recorder),
     )
     .await?;
@@ -165,8 +158,7 @@ async fn run_bulk_load(
         ),
     )
     .await;
-    let ((), measurement) =
-        close_database_after(&db, db_cache.as_ref(), load, "closing bulk-load database").await?;
+    let ((), measurement) = close_database_after(&db, load, "closing bulk-load database").await?;
     ensure_measurement_has_no_application_errors(&measurement)?;
     let checkpoint = checkpoint_database(
         database_path,
@@ -241,14 +233,14 @@ async fn run_compaction(
         parse_checkpoint_id(&bulk.checkpoint)?,
     )
     .await?;
-    let cache_directory = hybrid_cache_directory()?;
+    let cache = object_store_cache_directory()?;
     let recorder = Arc::new(BenchmarkMetricsRecorder::new());
-    let (db, db_cache) = open_database(
+    let db = open_database(
         database_path.clone(),
         context.instrumented.clone(),
         config,
         &config.settings,
-        cache_directory.path(),
+        Some(cache.path()),
         recorder,
     )
     .await?;
@@ -264,13 +256,8 @@ async fn run_compaction(
         wait_for_compactor_quiet(&admin),
     )
     .await;
-    let ((), measurement) = close_database_after(
-        &db,
-        db_cache.as_ref(),
-        compaction,
-        "closing compaction database",
-    )
-    .await?;
+    let ((), measurement) =
+        close_database_after(&db, compaction, "closing compaction database").await?;
     tracing::info!(
         quiet_seconds = COMPACTION_QUIET.as_secs(),
         "normal compaction settled"
@@ -376,33 +363,27 @@ async fn run_workload(
             lsm_digest_sha256: String::new(),
         }
     };
-    let cache_directory = hybrid_cache_directory()?;
+    let cache = object_store_cache_directory()?;
     let recorder = Arc::new(BenchmarkMetricsRecorder::new());
-    let (db, db_cache) = open_database(
+    let db = open_database(
         database_path.clone(),
         context.instrumented.clone(),
         config,
         &config.settings,
-        cache_directory.path(),
+        Some(cache.path()),
         recorder,
     )
     .await?;
     let actual_digest = match lsm_digest(&db) {
         Ok(digest) => digest,
         Err(error) => {
-            let _ = close_database(
-                &db,
-                db_cache.as_ref(),
-                "closing workload database after digest failure",
-            )
-            .await;
+            let _ = db.close().await;
             return Err(error);
         }
     };
     if args.task.uses_golden() {
         if actual_digest != initial.lsm_digest_sha256 {
-            let close =
-                close_database(&db, db_cache.as_ref(), "closing invalid workload clone").await;
+            let close = db.close().await.context("closing invalid workload clone");
             close?;
             bail!("workload clone does not match the golden checkpoint");
         }
@@ -411,7 +392,7 @@ async fn run_workload(
     }
     let execution =
         workloads::execute(Arc::clone(&db), config, context.instrumented.metrics()).await;
-    let close = close_database(&db, db_cache.as_ref(), "closing workload database").await;
+    let close = db.close().await.context("closing workload database");
     let compaction_check =
         ensure_no_failed_compactions(database_path, Arc::clone(&context.control)).await;
     let execution = execution?;
@@ -719,106 +700,57 @@ async fn open_database(
     store: Arc<dyn ObjectStore>,
     config: &ResolvedConfig,
     settings: &Settings,
-    hybrid_cache_root: &FsPath,
+    object_store_cache_root: Option<&FsPath>,
     recorder: Arc<BenchmarkMetricsRecorder>,
-) -> Result<(Arc<Db>, Arc<dyn DbCache>)> {
-    let cache = cache_for(config, hybrid_cache_root).await?;
+) -> Result<Arc<Db>> {
+    let mut settings = settings.clone();
+    settings.object_store_cache_options.root_folder =
+        object_store_cache_root.map(FsPath::to_path_buf);
+    settings.object_store_cache_options.max_cache_size_bytes = Some(
+        usize::try_from(config.caches.object_store_bytes)
+            .context("object-store cache capacity exceeds the platform limit")?,
+    );
     let metrics: Arc<dyn MetricsRecorder> = recorder;
     let db = Db::builder(path, store)
-        .with_settings(settings.clone())
+        .with_settings(settings)
         .with_metrics_recorder(metrics)
-        .with_db_cache(Arc::clone(&cache))
+        .with_db_cache(cache_for(config))
         .build()
         .await
         .context("opening SlateDB")?;
-    Ok((Arc::new(db), cache))
+    Ok(Arc::new(db))
 }
 
-async fn cache_for(
-    config: &ResolvedConfig,
-    hybrid_cache_root: &FsPath,
-) -> Result<Arc<dyn DbCache>> {
-    let memory_capacity = usize::try_from(config.caches.block_bytes)
-        .context("block-cache memory capacity exceeds the platform limit")?;
-    let disk_capacity = usize::try_from(config.caches.block_disk_bytes)
-        .context("block-cache disk capacity exceeds the platform limit")?;
-    let disk_block_size = foyer_disk_block_size(disk_capacity)?;
-    tracing::info!(
-        disk_capacity_bytes = disk_capacity,
-        disk_block_size_bytes = disk_block_size,
-        disk_partitions = disk_capacity / disk_block_size,
-        "configuring Foyer hybrid block cache"
-    );
-    let device = FsDeviceBuilder::new(hybrid_cache_root)
-        .with_capacity(disk_capacity)
-        .build()
-        .context("creating Foyer disk-cache device")?;
-    let hybrid = HybridCacheBuilder::<CachedKey, CachedEntry>::new()
-        .with_name("slatedb-benchmark-block-cache")
-        .with_flush_on_close(false)
-        .memory(memory_capacity)
-        .with_weighter(|_, value: &CachedEntry| value.size())
-        .storage()
-        .with_io_engine_config(PsyncIoEngineConfig::new())
-        .with_engine_config(BlockEngineConfig::new(device).with_block_size(disk_block_size))
-        .build()
-        .await
-        .context("opening Foyer hybrid block cache")?;
-    let block: Arc<dyn DbCache> = Arc::new(FoyerHybridCache::new_with_cache(hybrid));
+fn cache_for(config: &ResolvedConfig) -> Arc<dyn DbCache> {
+    let block: Arc<dyn DbCache> = Arc::new(FoyerCache::new_with_opts(FoyerCacheOptions {
+        max_capacity: config.caches.block_bytes,
+        ..Default::default()
+    }));
     let metadata: Arc<dyn DbCache> = Arc::new(FoyerCache::new_with_opts(FoyerCacheOptions {
         max_capacity: config.caches.metadata_bytes,
         ..Default::default()
     }));
-    Ok(Arc::new(
+    Arc::new(
         SplitCache::new()
             .with_block_cache(Some(block))
             .with_meta_cache(Some(metadata))
             .build(),
-    ))
+    )
 }
 
-fn foyer_disk_block_size(disk_capacity: usize) -> Result<usize> {
-    let aligned_capacity = disk_capacity - disk_capacity % FOYER_DISK_BLOCK_ALIGNMENT;
-    if aligned_capacity == 0 {
-        bail!(
-            "Foyer disk-cache capacity must be at least {} bytes",
-            FOYER_DISK_BLOCK_ALIGNMENT
-        );
-    }
-
-    let minimum_for_partition_limit = aligned_capacity.div_ceil(FOYER_MAX_DISK_PARTITIONS);
-    let aligned_minimum = minimum_for_partition_limit.div_ceil(FOYER_DISK_BLOCK_ALIGNMENT)
-        * FOYER_DISK_BLOCK_ALIGNMENT;
-    Ok(aligned_minimum
-        .max(FOYER_MIN_DISK_BLOCK_SIZE)
-        .min(aligned_capacity))
-}
-
-fn hybrid_cache_directory() -> Result<tempfile::TempDir> {
+fn object_store_cache_directory() -> Result<tempfile::TempDir> {
     tempfile::Builder::new()
-        .prefix("slatedb-benchmark-foyer-cache-")
+        .prefix("slatedb-benchmark-object-store-cache-")
         .tempdir()
-        .context("creating temporary Foyer cache directory")
-}
-
-async fn close_database(
-    db: &Db,
-    db_cache: &dyn DbCache,
-    close_context: &'static str,
-) -> Result<()> {
-    let db_close = db.close().await.context(close_context);
-    let cache_close = db_cache.close().await.context("closing Foyer hybrid cache");
-    db_close?;
-    cache_close
+        .context("creating temporary object-store cache")
 }
 
 async fn close_database_after<T>(
     db: &Db,
-    db_cache: &dyn DbCache,
     operation: Result<T>,
     close_context: &'static str,
 ) -> Result<T> {
-    let close = close_database(db, db_cache, close_context).await;
+    let close = db.close().await.context(close_context);
     let value = operation?;
     close?;
     Ok(value)
@@ -1015,8 +947,7 @@ fn manifest_lsm_digest(manifest: &VersionedManifest) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        cache_for, ensure_shared_configuration, foyer_disk_block_size, hybrid_cache_directory,
-        sha256_bytes, validate_name, validate_series_digest, FOYER_MAX_DISK_PARTITIONS,
+        ensure_shared_configuration, sha256_bytes, validate_name, validate_series_digest,
         SETTINGS_PATH,
     };
     use crate::config::{self, BenchmarkScale, Task};
@@ -1064,41 +995,9 @@ mod tests {
         .expect("resolved config");
         let mut golden = ResultConfiguration::from(&config);
         golden.caches.block_bytes = 1;
-        golden.caches.block_disk_bytes = 1;
         golden.caches.metadata_bytes = 1;
         golden.caches.object_store_bytes = 1;
 
         ensure_shared_configuration(&golden, &config).expect("compatible golden data");
-    }
-
-    #[tokio::test]
-    async fn hybrid_block_cache_opens_and_closes() {
-        let scale = "0.0001".parse::<BenchmarkScale>().expect("scale");
-        let config = config::load(Task::PointReadSkewed, scale, Path::new(SETTINGS_PATH))
-            .expect("resolved config");
-        let directory = hybrid_cache_directory().expect("cache directory");
-        let cache = cache_for(&config, directory.path())
-            .await
-            .expect("hybrid cache");
-
-        cache.close().await.expect("close hybrid cache");
-    }
-
-    #[test]
-    fn foyer_disk_block_size_limits_full_cache_partitions() {
-        let capacity = 40 * 1024 * 1024 * 1024;
-        let block_size = foyer_disk_block_size(capacity).expect("block size");
-
-        assert_eq!(block_size, 80 * 1024 * 1024);
-        assert_eq!(capacity / block_size, FOYER_MAX_DISK_PARTITIONS);
-    }
-
-    #[test]
-    fn foyer_disk_block_size_uses_one_block_for_minimum_scaled_cache() {
-        let capacity = 16 * 1024 * 1024;
-        let block_size = foyer_disk_block_size(capacity).expect("block size");
-
-        assert_eq!(block_size, capacity);
-        assert_eq!(capacity / block_size, 1);
     }
 }

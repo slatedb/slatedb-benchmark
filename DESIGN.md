@@ -26,11 +26,10 @@ SlateDB instance, client tasks, recorders, and local caches. GitHub runs each
 workload on a separate WarpBuild machine. `act` runs the same jobs in local
 Docker containers. Only worker samples enter task results.
 
-Each worker creates a new Foyer hybrid block cache with memory and disk tiers,
-plus a separate in-memory metadata cache. The SlateDB object-store cache is
-disabled to avoid duplicate disk writes. Golden workloads open separate shallow
-clones of the golden checkpoint. The `sustained-ingest` initial state and all
-client behavior come from [`BENCHMARKS.md`](BENCHMARKS.md).
+Each worker creates new block, metadata, and local object-store caches. Golden
+workloads open separate shallow clones of the golden checkpoint. The
+`sustained-ingest` initial state and all client behavior come from
+[`BENCHMARKS.md`](BENCHMARKS.md).
 
 The worker uses monotonic time for intervals and latency. Wall-clock time is
 used only for timestamps and logs.
