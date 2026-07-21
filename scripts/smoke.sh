@@ -5,7 +5,7 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$repo_root"
 
 scale=${BENCHMARK_SCALE:-0.00001}
-slatedb_ref=${SLATEDB_REF:-v0.14.1}
+slatedb_ref=${SLATEDB_REF:-main}
 golden_id=${BENCHMARK_GOLDEN_ID:-local-smoke-${scale//./-}}
 created_env=false
 created_secrets=false

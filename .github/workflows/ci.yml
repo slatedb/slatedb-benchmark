@@ -71,6 +71,9 @@ jobs:
           path: .slatedb-source
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@1.89.0
+      - name: Apply experimental SlateDB patch
+        if: matrix.slate-ref == 'main'
+        run: bash scripts/apply-slatedb-patch.sh .slatedb-source
       - name: Configure selected SlateDB source
         run: |
           cargo add --quiet --path "$GITHUB_WORKSPACE/.slatedb-source/slatedb" \

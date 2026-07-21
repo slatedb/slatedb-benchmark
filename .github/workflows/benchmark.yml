@@ -141,10 +141,14 @@ jobs:
           path: .slatedb-source
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@1.89.0
+      - name: Apply SlateDB patch
+        id: patches
+        run: bash scripts/apply-slatedb-patch.sh .slatedb-source
       - name: Resolve SlateDB source
         id: source
         shell: bash
         env:
+          SLATEDB_PATCHED: ${{ steps.patches.outputs.applied }}
           SLATEDB_REF: ${{ inputs.slatedb_ref }}
         run: |
           set -euo pipefail
@@ -153,6 +157,9 @@ jobs:
             version=${SLATEDB_REF#v}
           else
             version=sha-${commit:0:12}
+          fi
+          if [[ "$SLATEDB_PATCHED" == true ]]; then
+            version="$version-patched"
           fi
           echo "commit=$commit" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"

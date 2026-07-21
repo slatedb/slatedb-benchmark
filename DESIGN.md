@@ -240,7 +240,11 @@ store.
 `scale` is decimal. `1.0` runs the published size; `0.01` runs one percent.
 The two workflows resolve `slatedb_ref` independently. A benchmark can use a
 golden checkpoint prepared by another SlateDB commit, provided the requested
-build can read it.
+build can read it. Before building the benchmark runner, every `*.patch` file
+in `patches/slatedb` is applied in filename order. Patched results retain the
+base SlateDB commit and append `-patched` to `slate_version`, keeping them
+separate from unpatched results while the benchmark commit identifies the
+exact patch contents.
 
 A published run starts with these commands:
 
@@ -395,7 +399,7 @@ $ act workflow_dispatch \
 
 $ act workflow_dispatch \
     -W .github/workflows/benchmark.yml \
-    --input slatedb_ref=v0.14.1 \
+    --input slatedb_ref=main \
     --input golden_id=local-smoke \
     --input publish=false \
     --input scale=0.01
