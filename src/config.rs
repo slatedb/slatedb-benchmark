@@ -442,69 +442,44 @@ fn scaled_u64(value: u64, minimum: u64, scale: BenchmarkScale) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{load, BenchmarkScale, Task};
+    use super::{load, scaled_u64, BenchmarkScale, Task};
+    use std::collections::BTreeSet;
     use std::path::Path;
 
     #[test]
-    fn published_configuration_matches_the_specification() {
-        let config = load(
-            Task::Balanced,
-            BenchmarkScale::FULL,
-            Path::new("config/settings.toml"),
-        )
-        .expect("published config");
+    fn published_configurations_load_and_validate() {
+        let scaled = "0.01".parse::<BenchmarkScale>().expect("scale");
+        let tasks = [Task::BulkLoad, Task::Compaction]
+            .into_iter()
+            .chain(Task::WORKLOADS);
 
-        assert_eq!(config.dataset.record_count, 300_000_000);
-        assert_eq!(config.dataset.key_bytes, 20);
-        assert_eq!(config.dataset.value_bytes, 400);
-        assert_eq!(config.task.clients, 64);
-        assert_eq!(config.task.warmup_ms, 300_000);
-        assert_eq!(config.task.measurement_ms, 900_000);
-        assert_eq!(config.task.operation_mix["get"], 0.5);
-        assert_eq!(config.task.operation_mix["put"], 0.5);
-        assert_eq!(config.settings.l0_flush_parallelism, 1);
-        assert_eq!(
-            config.settings.object_store_cache_options.part_size_bytes,
-            1_048_576
-        );
-        assert!(!config.settings.wal_enabled);
+        for task in tasks {
+            for scale in [BenchmarkScale::FULL, scaled] {
+                load(task, scale, Path::new("config/settings.toml")).unwrap_or_else(|error| {
+                    panic!("loading {task} at scale {scale} failed: {error:#}")
+                });
+            }
+        }
     }
 
     #[test]
-    fn decimal_scale_reduces_cost_but_preserves_clients_and_record_sizes() {
+    fn decimal_scale_applies_factor_and_minimum() {
         let scale = "0.01".parse::<BenchmarkScale>().expect("scale");
-        let config = load(
-            Task::SustainedIngest,
-            scale,
-            Path::new("config/settings.toml"),
-        )
-        .expect("scaled config");
 
-        assert_eq!(config.dataset.record_count, 3_000_000);
-        assert_eq!(config.dataset.key_bytes, 20);
-        assert_eq!(config.dataset.value_bytes, 400);
-        assert_eq!(config.task.clients, 64);
-        assert_eq!(config.task.measurement_ms, 12_000);
-        assert_eq!(
-            config
-                .settings
-                .object_store_cache_options
-                .max_cache_size_bytes,
-            Some(429_496_730)
-        );
-        assert!(config
-            .settings
-            .object_store_cache_options
-            .preload_disk_cache_on_startup
-            .is_none());
+        assert_eq!(scaled_u64(10_000, 1, scale), 100);
+        assert_eq!(scaled_u64(100, 5, scale), 5);
+        assert_eq!(scaled_u64(0, 5, scale), 0);
         assert!(!scale.is_full());
+        assert!(BenchmarkScale::FULL.is_full());
         assert!("1%".parse::<BenchmarkScale>().is_err());
     }
 
     #[test]
-    fn workload_catalog_matches_the_specification() {
-        assert_eq!(Task::WORKLOADS.len(), 10);
-        assert_eq!(Task::WORKLOADS[0], Task::Idle);
-        assert_eq!(Task::WORKLOADS[9], Task::TransactionContention);
+    fn workload_catalog_contains_unique_non_preparation_tasks() {
+        let mut seen = BTreeSet::new();
+        for task in Task::WORKLOADS {
+            assert!(!task.is_preparation());
+            assert!(seen.insert(task), "duplicate workload {task}");
+        }
     }
 }

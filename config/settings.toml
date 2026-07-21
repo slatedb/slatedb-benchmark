@@ -1,12 +1,17 @@
-# SlateDB release defaults are used unless an override is added here.
+l0_max_ssts = 32
+l0_max_ssts_per_key = 32
+l0_flush_parallelism = 16
+max_unflushed_bytes = 2147483648
 wal_enabled = false
-l0_flush_parallelism = 1
 
 [compactor_options]
 poll_interval = "1s"
 
 [compactor_options.worker]
 compactions_poll_interval = "1s"
+
+[compactor_options.scheduler_options]
+max_compaction_sources = "16"
 
 [object_store_cache_options]
 part_size_bytes = 1048576
