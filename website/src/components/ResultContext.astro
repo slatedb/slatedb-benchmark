@@ -100,7 +100,11 @@ const hasDataset = versionRoutes.some(
     </div>
     <div>
       <dt>Recorded</dt>
-      <dd>{new Date(timestamp).toLocaleString('en-US', { timeZone: 'UTC', timeZoneName: 'short' })}</dd>
+      <dd>
+        <time datetime={timestamp} data-local-timestamp>
+          {new Date(timestamp).toLocaleString('en-US', { timeZone: 'UTC', timeZoneName: 'short' })}
+        </time>
+      </dd>
     </div>
   </dl>
 
@@ -114,6 +118,13 @@ const hasDataset = versionRoutes.some(
 </aside>
 
 <script>
+  document.querySelectorAll<HTMLTimeElement>('[data-local-timestamp]').forEach((time) => {
+    const date = new Date(time.dateTime);
+    if (!Number.isNaN(date.getTime())) {
+      time.textContent = date.toLocaleString('en-US', { timeZoneName: 'short' });
+    }
+  });
+
   document.querySelectorAll<HTMLSelectElement>('[data-route-select]').forEach((select) => {
     select.addEventListener('change', () => {
       if (select.value) window.location.assign(select.value);
