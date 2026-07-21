@@ -45,12 +45,14 @@ docker compose run --rm minio-init
 
 act workflow_dispatch \
   -W .github/workflows/golden.yml \
+  --concurrent-jobs 1 \
   --input "slatedb_ref=$slatedb_ref" \
   --input "golden_id=$golden_id" \
   --input "scale=$scale"
 
 act workflow_dispatch \
   -W .github/workflows/benchmark.yml \
+  --concurrent-jobs 1 \
   --input "slatedb_ref=$slatedb_ref" \
   --input "golden_id=$golden_id" \
   --input publish=false \
