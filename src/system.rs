@@ -7,8 +7,8 @@ use crate::model::{
 };
 use anyhow::{Context, Result};
 use slatedb_common::metrics::{
-    CounterFn, DefaultMetricsRecorder, GaugeFn, HistogramFn, Metrics, MetricsRecorder,
-    UpDownCounterFn,
+    CounterFn, DefaultMetricsRecorder, GaugeFn, HistogramFn, Metric, MetricValue, Metrics,
+    MetricsRecorder, UpDownCounterFn,
 };
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -18,6 +18,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use sysinfo::{Disks, Networks, Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 use tokio::sync::{oneshot, watch};
+
+const DEFAULT_SLATE_METRICS_LOG_INTERVAL: Duration = Duration::from_secs(30);
+const SLATE_METRICS_LOG_INTERVAL_ENV: &str = "SLATEDB_BENCH_METRICS_LOG_INTERVAL";
 
 tokio::task_local! {
     static BACKPRESSURE_MEASUREMENT: RefCell<BackpressureMeasurement>;
@@ -71,6 +74,202 @@ impl BenchmarkMetricsRecorder {
 impl Default for BenchmarkMetricsRecorder {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+pub struct SlateMetricsReporter {
+    stop: Option<oneshot::Sender<()>>,
+    task: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl SlateMetricsReporter {
+    pub fn start(recorder: Arc<BenchmarkMetricsRecorder>) -> Self {
+        Self::start_with_interval(recorder, slate_metrics_log_interval())
+    }
+
+    fn start_with_interval(
+        recorder: Arc<BenchmarkMetricsRecorder>,
+        interval: Option<Duration>,
+    ) -> Self {
+        let Some(interval) = interval else {
+            return Self {
+                stop: None,
+                task: None,
+            };
+        };
+        let (stop_tx, stop_rx) = oneshot::channel();
+        let task = tokio::spawn(report_slate_metrics(recorder, interval, stop_rx));
+        Self {
+            stop: Some(stop_tx),
+            task: Some(task),
+        }
+    }
+
+    pub async fn stop(mut self) {
+        self.signal_stop();
+        if let Some(task) = self.task.take() {
+            if let Err(error) = task.await {
+                tracing::warn!(%error, "SlateDB metrics reporter failed");
+            }
+        }
+    }
+
+    fn signal_stop(&mut self) {
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
+        }
+    }
+}
+
+impl Drop for SlateMetricsReporter {
+    fn drop(&mut self) {
+        self.signal_stop();
+    }
+}
+
+fn slate_metrics_log_interval() -> Option<Duration> {
+    let Ok(value) = std::env::var(SLATE_METRICS_LOG_INTERVAL_ENV) else {
+        return Some(DEFAULT_SLATE_METRICS_LOG_INTERVAL);
+    };
+    match value.parse::<u64>() {
+        Ok(0) => None,
+        Ok(seconds) => Some(Duration::from_secs(seconds)),
+        Err(error) => {
+            tracing::warn!(
+                variable = SLATE_METRICS_LOG_INTERVAL_ENV,
+                %value,
+                %error,
+                default_seconds = DEFAULT_SLATE_METRICS_LOG_INTERVAL.as_secs(),
+                "invalid SlateDB metrics log interval; using default"
+            );
+            Some(DEFAULT_SLATE_METRICS_LOG_INTERVAL)
+        }
+    }
+}
+
+async fn report_slate_metrics(
+    recorder: Arc<BenchmarkMetricsRecorder>,
+    interval: Duration,
+    mut stop: oneshot::Receiver<()>,
+) {
+    let mut previous = recorder.snapshot();
+    let mut previous_at = Instant::now();
+    let mut ticker = tokio::time::interval(interval);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    ticker.tick().await;
+    loop {
+        let final_snapshot = tokio::select! {
+            _ = ticker.tick() => false,
+            _ = &mut stop => true,
+        };
+        let now = Instant::now();
+        let elapsed = now.saturating_duration_since(previous_at);
+        let current = recorder.snapshot();
+        tracing::info!(
+            target: "slatedb_metrics",
+            interval_seconds = elapsed.as_secs_f64(),
+            final_snapshot,
+            metrics = %format_slate_metrics(&current, &previous, elapsed),
+            "SlateDB metrics snapshot"
+        );
+        if final_snapshot {
+            break;
+        }
+        previous = current;
+        previous_at = now;
+    }
+}
+
+fn format_slate_metrics(current: &Metrics, previous: &Metrics, elapsed: Duration) -> String {
+    let previous = previous
+        .all()
+        .iter()
+        .map(|metric| (metric_key(metric), &metric.value))
+        .collect::<BTreeMap<_, _>>();
+    let mut current = current
+        .all()
+        .iter()
+        .map(|metric| (metric_key(metric), &metric.value))
+        .collect::<Vec<_>>();
+    current.sort_by(|left, right| left.0.cmp(&right.0));
+    current
+        .into_iter()
+        .map(|(key, value)| {
+            let value = format_metric_value(value, previous.get(&key).copied(), elapsed);
+            format!("{key}={value}")
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn metric_key(metric: &Metric) -> String {
+    if metric.labels.is_empty() {
+        return metric.name.clone();
+    }
+    let mut labels = metric.labels.clone();
+    labels.sort();
+    let labels = labels
+        .into_iter()
+        .map(|(key, value)| format!("{key}={value:?}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    format!("{}{{{labels}}}", metric.name)
+}
+
+fn format_metric_value(
+    current: &MetricValue,
+    previous: Option<&MetricValue>,
+    elapsed: Duration,
+) -> String {
+    let seconds = elapsed.as_secs_f64().max(f64::EPSILON);
+    match (current, previous) {
+        (MetricValue::Counter(value), Some(MetricValue::Counter(previous))) => {
+            let delta = value.saturating_sub(*previous);
+            format!(
+                "counter(value={value},delta={delta},rate_per_second={:.3})",
+                delta as f64 / seconds
+            )
+        }
+        (MetricValue::Counter(value), _) => format!("counter(value={value})"),
+        (MetricValue::Gauge(value), _) => format!("gauge(value={value})"),
+        (MetricValue::UpDownCounter(value), Some(MetricValue::UpDownCounter(previous))) => format!(
+            "up_down_counter(value={value},delta={})",
+            value.saturating_sub(*previous)
+        ),
+        (MetricValue::UpDownCounter(value), _) => {
+            format!("up_down_counter(value={value})")
+        }
+        (
+            MetricValue::Histogram {
+                count,
+                sum,
+                min,
+                max,
+                ..
+            },
+            Some(MetricValue::Histogram {
+                count: previous_count,
+                sum: previous_sum,
+                ..
+            }),
+        ) => {
+            let delta_count = count.saturating_sub(*previous_count);
+            let delta_sum = sum - previous_sum;
+            format!(
+                "histogram(count={count},delta_count={delta_count},rate_per_second={:.3},sum={sum},delta_sum={delta_sum},min={min},max={max})",
+                delta_count as f64 / seconds
+            )
+        }
+        (
+            MetricValue::Histogram {
+                count,
+                sum,
+                min,
+                max,
+                ..
+            },
+            _,
+        ) => format!("histogram(count={count},sum={sum},min={min},max={max})"),
     }
 }
 
@@ -1145,10 +1344,12 @@ pub fn counter_value(metrics: &Metrics, name: &str) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        sample_until_stopped, sample_until_stopped_with_rate_control, summarize_values,
-        ApplicationRegistry, RateWindowControl,
+        format_slate_metrics, sample_until_stopped, sample_until_stopped_with_rate_control,
+        summarize_values, ApplicationRegistry, BenchmarkMetricsRecorder, RateWindowControl,
+        SlateMetricsReporter,
     };
     use crate::instrumented_store::{HttpMethod, StoreMetrics};
+    use slatedb_common::metrics::MetricsRecorder;
     use std::sync::Arc;
     use std::time::Duration;
     use tokio::sync::{oneshot, watch};
@@ -1175,6 +1376,53 @@ mod tests {
         assert_eq!(delta.operations["put"].calls, 1);
         assert!(!delta.operations.contains_key("durable"));
         assert_eq!(delta.histograms.summaries_with_prefix("api/").len(), 3);
+    }
+
+    #[test]
+    fn slate_metric_snapshot_formats_values_and_interval_deltas() {
+        let recorder = BenchmarkMetricsRecorder::new();
+        let counter =
+            recorder.register_counter("slatedb.test.counter", "test counter", &[("kind", "test")]);
+        let gauge = recorder.register_gauge("slatedb.test.gauge", "test gauge", &[]);
+        let up_down =
+            recorder.register_up_down_counter("slatedb.test.up_down", "test up-down counter", &[]);
+        let histogram = recorder.register_histogram(
+            "slatedb.test.histogram",
+            "test histogram",
+            &[],
+            &[1.0, 5.0],
+        );
+        counter.increment(10);
+        gauge.set(5);
+        up_down.increment(3);
+        histogram.record(2.0);
+        let previous = recorder.snapshot();
+
+        counter.increment(5);
+        gauge.set(7);
+        up_down.increment(-1);
+        histogram.record(4.0);
+        let current = recorder.snapshot();
+        let formatted = format_slate_metrics(&current, &previous, Duration::from_secs(5));
+
+        assert!(formatted.contains(
+            "slatedb.test.counter{kind=\"test\"}=counter(value=15,delta=5,rate_per_second=1.000)"
+        ));
+        assert!(formatted.contains("slatedb.test.gauge=gauge(value=7)"));
+        assert!(formatted.contains("slatedb.test.up_down=up_down_counter(value=2,delta=-1)"));
+        assert!(formatted.contains(
+            "slatedb.test.histogram=histogram(count=2,delta_count=1,rate_per_second=0.200,sum=6,delta_sum=4,min=2,max=4)"
+        ));
+    }
+
+    #[tokio::test]
+    async fn slate_metrics_reporter_stops_and_flushes() {
+        let recorder = Arc::new(BenchmarkMetricsRecorder::new());
+        let reporter =
+            SlateMetricsReporter::start_with_interval(recorder, Some(Duration::from_secs(60)));
+        tokio::time::timeout(Duration::from_secs(1), reporter.stop())
+            .await
+            .expect("reporter should stop promptly");
     }
 
     #[tokio::test]

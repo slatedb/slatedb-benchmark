@@ -11,12 +11,12 @@ on:
       golden_id:
         description: Existing golden data name
         required: true
-        default: slatedb-v0.14.1-001
+        default: golden
         type: string
       publish:
         description: Publish results to website
         required: true
-        default: false
+        default: true
         type: boolean
       scale:
         description: Decimal scale factor
@@ -299,7 +299,7 @@ jobs:
           overwrite: true
 
   workloads:
-    needs: [validate-golden, build, transfer-capacity]
+    needs: [validate-golden, build]
     runs-on: warp-ubuntu-latest-arm64-8x
     timeout-minutes: 1440
     environment: benchmark

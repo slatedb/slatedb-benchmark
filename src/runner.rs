@@ -8,7 +8,7 @@ use crate::model::{
 use crate::object_store::{delete_prefix, ObjectStoreContext};
 use crate::system::{
     duration_ns, inspect_environment, measure_until_complete, verify_environment,
-    ApplicationRegistry, BenchmarkMetricsRecorder, SampledMeasurement,
+    ApplicationRegistry, BenchmarkMetricsRecorder, SampledMeasurement, SlateMetricsReporter,
 };
 use crate::validation::{
     validate_preparation_result, validate_workload_result, validate_workload_series,
@@ -143,6 +143,7 @@ async fn run_bulk_load(
         Arc::clone(&recorder),
     )
     .await?;
+    let metrics_reporter = SlateMetricsReporter::start(Arc::clone(&recorder));
     let application = Arc::new(ApplicationRegistry::default());
     let load = measure_until_complete(
         Arc::clone(&application),
@@ -158,7 +159,9 @@ async fn run_bulk_load(
         ),
     )
     .await;
-    let ((), measurement) = close_database_after(&db, load, "closing bulk-load database").await?;
+    let closed = close_database_after(&db, load, "closing bulk-load database").await;
+    metrics_reporter.stop().await;
+    let ((), measurement) = closed?;
     ensure_measurement_has_no_application_errors(&measurement)?;
     let checkpoint = checkpoint_database(
         database_path,
@@ -241,9 +244,10 @@ async fn run_compaction(
         config,
         &config.settings,
         Some(cache.path()),
-        recorder,
+        Arc::clone(&recorder),
     )
     .await?;
+    let metrics_reporter = SlateMetricsReporter::start(recorder);
     let application = Arc::new(ApplicationRegistry::default());
     let admin = AdminBuilder::new(database_path.clone(), Arc::clone(&context.control)).build();
     tracing::info!(
@@ -256,8 +260,9 @@ async fn run_compaction(
         wait_for_compactor_quiet(&admin),
     )
     .await;
-    let ((), measurement) =
-        close_database_after(&db, compaction, "closing compaction database").await?;
+    let closed = close_database_after(&db, compaction, "closing compaction database").await;
+    metrics_reporter.stop().await;
+    let ((), measurement) = closed?;
     tracing::info!(
         quiet_seconds = COMPACTION_QUIET.as_secs(),
         "normal compaction settled"
@@ -371,19 +376,22 @@ async fn run_workload(
         config,
         &config.settings,
         Some(cache.path()),
-        recorder,
+        Arc::clone(&recorder),
     )
     .await?;
+    let metrics_reporter = SlateMetricsReporter::start(recorder);
     let actual_digest = match lsm_digest(&db) {
         Ok(digest) => digest,
         Err(error) => {
             let _ = db.close().await;
+            metrics_reporter.stop().await;
             return Err(error);
         }
     };
     if args.task.uses_golden() {
         if actual_digest != initial.lsm_digest_sha256 {
             let close = db.close().await.context("closing invalid workload clone");
+            metrics_reporter.stop().await;
             close?;
             bail!("workload clone does not match the golden checkpoint");
         }
@@ -393,6 +401,7 @@ async fn run_workload(
     let execution =
         workloads::execute(Arc::clone(&db), config, context.instrumented.metrics()).await;
     let close = db.close().await.context("closing workload database");
+    metrics_reporter.stop().await;
     let compaction_check =
         ensure_no_failed_compactions(database_path, Arc::clone(&context.control)).await;
     let execution = execution?;
