@@ -43,7 +43,9 @@ use uuid::Uuid;
 
 const SETTINGS_PATH: &str = "config/settings.toml";
 const COMPACTION_QUIET: Duration = Duration::from_secs(60);
-const FOYER_DISK_BLOCK_SIZE: usize = 64 * 1024;
+const FOYER_DISK_BLOCK_ALIGNMENT: usize = 4 * 1024;
+const FOYER_MIN_DISK_BLOCK_SIZE: usize = 16 * 1024 * 1024;
+const FOYER_MAX_DISK_PARTITIONS: usize = 512;
 
 pub async fn execute(args: RunArgs) -> Result<()> {
     validate_name(&args.golden, "golden")?;
@@ -740,6 +742,13 @@ async fn cache_for(
         .context("block-cache memory capacity exceeds the platform limit")?;
     let disk_capacity = usize::try_from(config.caches.block_disk_bytes)
         .context("block-cache disk capacity exceeds the platform limit")?;
+    let disk_block_size = foyer_disk_block_size(disk_capacity)?;
+    tracing::info!(
+        disk_capacity_bytes = disk_capacity,
+        disk_block_size_bytes = disk_block_size,
+        disk_partitions = disk_capacity / disk_block_size,
+        "configuring Foyer hybrid block cache"
+    );
     let device = FsDeviceBuilder::new(hybrid_cache_root)
         .with_capacity(disk_capacity)
         .build()
@@ -751,7 +760,7 @@ async fn cache_for(
         .with_weighter(|_, value: &CachedEntry| value.size())
         .storage()
         .with_io_engine_config(PsyncIoEngineConfig::new())
-        .with_engine_config(BlockEngineConfig::new(device).with_block_size(FOYER_DISK_BLOCK_SIZE))
+        .with_engine_config(BlockEngineConfig::new(device).with_block_size(disk_block_size))
         .build()
         .await
         .context("opening Foyer hybrid block cache")?;
@@ -766,6 +775,23 @@ async fn cache_for(
             .with_meta_cache(Some(metadata))
             .build(),
     ))
+}
+
+fn foyer_disk_block_size(disk_capacity: usize) -> Result<usize> {
+    let aligned_capacity = disk_capacity - disk_capacity % FOYER_DISK_BLOCK_ALIGNMENT;
+    if aligned_capacity == 0 {
+        bail!(
+            "Foyer disk-cache capacity must be at least {} bytes",
+            FOYER_DISK_BLOCK_ALIGNMENT
+        );
+    }
+
+    let minimum_for_partition_limit = aligned_capacity.div_ceil(FOYER_MAX_DISK_PARTITIONS);
+    let aligned_minimum = minimum_for_partition_limit.div_ceil(FOYER_DISK_BLOCK_ALIGNMENT)
+        * FOYER_DISK_BLOCK_ALIGNMENT;
+    Ok(aligned_minimum
+        .max(FOYER_MIN_DISK_BLOCK_SIZE)
+        .min(aligned_capacity))
 }
 
 fn hybrid_cache_directory() -> Result<tempfile::TempDir> {
@@ -989,8 +1015,9 @@ fn manifest_lsm_digest(manifest: &VersionedManifest) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        cache_for, ensure_shared_configuration, hybrid_cache_directory, sha256_bytes,
-        validate_name, validate_series_digest, SETTINGS_PATH,
+        cache_for, ensure_shared_configuration, foyer_disk_block_size, hybrid_cache_directory,
+        sha256_bytes, validate_name, validate_series_digest, FOYER_MAX_DISK_PARTITIONS,
+        SETTINGS_PATH,
     };
     use crate::config::{self, BenchmarkScale, Task};
     use crate::model::{ResultConfiguration, SeriesReference};
@@ -1055,5 +1082,23 @@ mod tests {
             .expect("hybrid cache");
 
         cache.close().await.expect("close hybrid cache");
+    }
+
+    #[test]
+    fn foyer_disk_block_size_limits_full_cache_partitions() {
+        let capacity = 40 * 1024 * 1024 * 1024;
+        let block_size = foyer_disk_block_size(capacity).expect("block size");
+
+        assert_eq!(block_size, 80 * 1024 * 1024);
+        assert_eq!(capacity / block_size, FOYER_MAX_DISK_PARTITIONS);
+    }
+
+    #[test]
+    fn foyer_disk_block_size_uses_one_block_for_minimum_scaled_cache() {
+        let capacity = 16 * 1024 * 1024;
+        let block_size = foyer_disk_block_size(capacity).expect("block size");
+
+        assert_eq!(block_size, capacity);
+        assert_eq!(capacity / block_size, 1);
     }
 }
