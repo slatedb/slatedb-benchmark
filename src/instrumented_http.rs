@@ -228,19 +228,13 @@ fn build_reqwest_client(options: &ClientOptions) -> object_store::Result<reqwest
     if let Some(certificate) = options.get_config_value(&ClientConfigKey::ProxyCaCertificate) {
         let certificate = reqwest::tls::Certificate::from_pem(certificate.as_bytes())
             .map_err(object_store_client_error)?;
-        builder = builder.tls_certs_merge(std::iter::once(certificate));
-    }
-    if client_bool(options, ClientConfigKey::NoSystemCertificates)? {
-        builder = builder.tls_certs_only(std::iter::empty::<reqwest::tls::Certificate>());
+        builder = builder.add_root_certificate(certificate);
     }
     if let Some(timeout) = client_duration(options, ClientConfigKey::Timeout)? {
         builder = builder.timeout(timeout);
     }
     if let Some(timeout) = client_duration(options, ClientConfigKey::ConnectTimeout)? {
         builder = builder.connect_timeout(timeout);
-    }
-    if let Some(timeout) = client_duration(options, ClientConfigKey::ReadTimeout)? {
-        builder = builder.read_timeout(timeout);
     }
     if let Some(timeout) = client_duration(options, ClientConfigKey::PoolIdleTimeout)? {
         builder = builder.pool_idle_timeout(timeout);

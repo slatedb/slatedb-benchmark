@@ -177,7 +177,7 @@ Options:
           transaction-contention]
 
       --golden <GOLDEN_ID>
-          Golden data name, for example slatedb-v0.14.1-001
+          Golden data name, for example slatedb-v0.13.1-001
 
       --session <SESSION>
           Benchmark session name; required for workload tasks
@@ -193,13 +193,13 @@ Options:
           Print help
 
 Examples:
-  slatedb-benchmark run --task bulk-load --golden slatedb-v0.14.1-001 \
+  slatedb-benchmark run --task bulk-load --golden slatedb-v0.13.1-001 \
     --scale 1.0 --output .runs/bulk-load
 
-  slatedb-benchmark run --task compaction --golden slatedb-v0.14.1-001 \
+  slatedb-benchmark run --task compaction --golden slatedb-v0.13.1-001 \
     --scale 1.0 --output .runs/compaction
 
-  slatedb-benchmark run --task balanced --golden slatedb-v0.14.1-001 \
+  slatedb-benchmark run --task balanced --golden slatedb-v0.13.1-001 \
     --session github-123456 --scale 1.0 --output .runs/balanced
 ```
 
@@ -224,16 +224,16 @@ store.
 
 | Input | Required | Example |
 | --- | --- | --- |
-| `slatedb_ref` | Yes | `v0.14.1` |
-| `golden_id` | Yes | `slatedb-v0.14.1-001` |
+| `slatedb_ref` | Yes | `v0.13.1` |
+| `golden_id` | Yes | `slatedb-v0.13.1-001` |
 | `scale` | Yes | `1.0` |
 
 `benchmark.yml` accepts:
 
 | Input | Required | Example |
 | --- | --- | --- |
-| `slatedb_ref` | Yes | `main` |
-| `golden_id` | Yes | `slatedb-v0.14.1-001` |
+| `slatedb_ref` | Yes | `v0.13.1` |
+| `golden_id` | Yes | `slatedb-v0.13.1-001` |
 | `publish` | Yes | `true` |
 | `scale` | Yes | `1.0` |
 
@@ -250,13 +250,13 @@ A published run starts with these commands:
 
 ```console
 $ gh workflow run golden.yml \
-    -f slatedb_ref=v0.14.1 \
-    -f golden_id=slatedb-v0.14.1-001 \
+    -f slatedb_ref=v0.13.1 \
+    -f golden_id=slatedb-v0.13.1-001 \
     -f scale=1.0
 
 $ gh workflow run benchmark.yml \
-    -f slatedb_ref=main \
-    -f golden_id=slatedb-v0.14.1-001 \
+    -f slatedb_ref=v0.13.1 \
+    -f golden_id=slatedb-v0.13.1-001 \
     -f publish=true \
     -f scale=1.0
 ```
@@ -393,13 +393,13 @@ prefix. The two act files are gitignored.
 ```console
 $ act workflow_dispatch \
     -W .github/workflows/golden.yml \
-    --input slatedb_ref=v0.14.1 \
+    --input slatedb_ref=v0.13.1 \
     --input golden_id=local-smoke \
     --input scale=0.01
 
 $ act workflow_dispatch \
     -W .github/workflows/benchmark.yml \
-    --input slatedb_ref=main \
+    --input slatedb_ref=v0.13.1 \
     --input golden_id=local-smoke \
     --input publish=false \
     --input scale=0.01
