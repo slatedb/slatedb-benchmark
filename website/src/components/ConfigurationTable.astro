@@ -5,10 +5,14 @@ interface Props {
   configuration: ResolvedConfiguration;
 }
 
-type Row = { path: string[]; value: string };
+type Row = { path: string[]; value: string; nonDefault: boolean };
 
 const { configuration } = Astro.props;
-const { slate_settings: slateSettings, ...runnerConfiguration } = configuration;
+const {
+  slate_settings: slateSettings,
+  slate_default_settings: slateDefaultSettings,
+  ...runnerConfiguration
+} = configuration;
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 const label = (value: string) => value
@@ -36,19 +40,38 @@ const formatScalar = (value: unknown, path: string[]) => {
   }
   return String(value);
 };
-const flatten = (value: unknown, current: string[] = []): Row[] => {
-  if (value === null || value === undefined) return [{ path: current, value: '—' }];
-  if (Array.isArray(value)) return [{ path: current, value: value.join(', ') || '—' }];
+const equal = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right);
+const flatten = (
+  value: unknown,
+  current: string[] = [],
+  defaultValue?: unknown,
+  compareWithDefault = false,
+): Row[] => {
+  const row = (formatted: string): Row => ({
+    path: current,
+    value: formatted,
+    nonDefault: compareWithDefault && !equal(value, defaultValue),
+  });
+  if (value === null || value === undefined) return [row('—')];
+  if (Array.isArray(value)) return [row(value.join(', ') || '—')];
   if (isRecord(value)) {
     const entries = Object.entries(value);
-    if (entries.length === 0) return [{ path: current, value: 'Default' }];
-    return entries.flatMap(([key, nested]) => flatten(nested, [...current, key]));
+    if (entries.length === 0) return [row('Default')];
+    return entries.flatMap(([key, nested]) => flatten(
+      nested,
+      [...current, key],
+      isRecord(defaultValue) ? defaultValue[key] : undefined,
+      compareWithDefault,
+    ));
   }
-  return [{ path: current, value: formatScalar(value, current) }];
+  return [row(formatScalar(value, current))];
 };
 const groups: [string, Row[]][] = [
   ['Benchmark configuration', flatten(runnerConfiguration)],
-  ['SlateDB configuration', flatten(slateSettings)],
+  [
+    'SlateDB configuration',
+    flatten(slateSettings, [], slateDefaultSettings, slateDefaultSettings !== undefined),
+  ],
 ];
 ---
 
@@ -67,7 +90,7 @@ const groups: [string, Row[]][] = [
         </thead>
         <tbody>
           {rows.map((row) => (
-            <tr>
+            <tr class:list={{ 'non-default': row.nonDefault }}>
               <th scope="row">{row.path.map(label).join(' / ')}</th>
               <td><code>{row.value}</code></td>
             </tr>
@@ -77,3 +100,9 @@ const groups: [string, Row[]][] = [
     </div>
   </section>
 ))}
+
+<style>
+  tr.non-default :is(th, td) {
+    font-weight: 600;
+  }
+</style>

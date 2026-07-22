@@ -59,6 +59,7 @@ export type ResolvedConfiguration = {
     transaction_updates: number | null;
   };
   slate_settings: Record<string, unknown>;
+  slate_default_settings?: Record<string, unknown>;
   build_profile: string;
   enabled_features: string[];
 };

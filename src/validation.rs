@@ -761,6 +761,13 @@ fn validate_configuration(
         "SlateDB settings are not an object"
     );
     ensure!(
+        configuration
+            .slate_default_settings
+            .as_ref()
+            .is_none_or(serde_json::Value::is_object),
+        "default SlateDB settings are not an object"
+    );
+    ensure!(
         matches!(configuration.build_profile.as_str(), "debug" | "release"),
         "build profile is invalid"
     );

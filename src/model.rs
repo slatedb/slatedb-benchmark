@@ -68,6 +68,8 @@ pub struct ResultConfiguration {
     pub caches: CacheConfig,
     pub task: TaskConfig,
     pub slate_settings: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slate_default_settings: Option<serde_json::Value>,
     pub build_profile: String,
     pub enabled_features: Vec<String>,
 }
@@ -80,6 +82,7 @@ impl From<&ResolvedConfig> for ResultConfiguration {
             caches: config.caches.clone(),
             task: config.task.clone(),
             slate_settings: config.slate_settings.clone(),
+            slate_default_settings: Some(config.slate_default_settings.clone()),
             build_profile: config.build_profile.clone(),
             enabled_features: config.enabled_features.clone(),
         }

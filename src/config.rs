@@ -299,6 +299,7 @@ pub struct ResolvedConfig {
     pub caches: CacheConfig,
     pub task: TaskConfig,
     pub slate_settings: serde_json::Value,
+    pub slate_default_settings: serde_json::Value,
     pub build_profile: String,
     pub enabled_features: Vec<String>,
     pub settings: Settings,
@@ -341,6 +342,8 @@ pub fn load(task: Task, scale: BenchmarkScale, settings_path: &Path) -> Result<R
         task: task_config,
         slate_settings: serde_json::to_value(&settings)
             .context("serializing resolved SlateDB settings")?,
+        slate_default_settings: serde_json::to_value(Settings::default())
+            .context("serializing default SlateDB settings")?,
         build_profile: if cfg!(debug_assertions) {
             "debug".to_string()
         } else {
