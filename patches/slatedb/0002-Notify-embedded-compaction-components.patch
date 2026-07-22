@@ -1,0 +1,425 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Chris Riccomini <criccomini@apache.org>
+Date: Wed, 22 Jul 2026 10:30:00 -0700
+Subject: [PATCH] Notify embedded compaction components
+
+---
+ slatedb/src/compaction_worker.rs |  58 +++++++++++++++---
+ slatedb/src/compactor.rs         | 128 +++++++++++++++++++++++++++++++++------
+ slatedb/src/db/builder.rs        |   9 ++-
+ 3 files changed, 164 insertions(+), 31 deletions(-)
+
+diff --git a/slatedb/src/compaction_worker.rs b/slatedb/src/compaction_worker.rs
+index 5cf86efd311edcfd5df4c88af5cc444c14b7e71d..31ecea8ca483e35ea67582c044b39b03de9f4852 100644
+--- a/slatedb/src/compaction_worker.rs
++++ b/slatedb/src/compaction_worker.rs
+@@ -64,6 +64,7 @@ use ulid::Ulid;
+ 
+ use crate::compactions_store::{CompactionsStore, StoredCompactions};
+ use crate::compactor::stats::{CompactionStats, WorkerStats};
++use crate::compactor::CompactorMessage;
+ use crate::compactor_executor::{
+     CompactionExecutor, StartCompactionJobArgs, TokioCompactionExecutor,
+     TokioCompactionExecutorOptions,
+@@ -105,7 +106,8 @@ pub(crate) enum WorkerMessage {
+         /// The current compaction context, which may carry new output SSTs.
+         ctx: CompactionContext,
+     },
+-    /// Ticker-triggered message to poll `.compactions` for claimable jobs.
++    /// Poll `.compactions` for claimable jobs. Produced by the periodic ticker
++    /// for standalone workers and sent directly by an in-process coordinator.
+     PollCompactions,
+     /// Ticker-triggered message to refresh liveness for all jobs this worker
+     /// currently owns.
+@@ -188,6 +190,9 @@ pub(crate) struct CompactionWorkerHandler {
+     stored: Option<StoredCompactions>,
+     rand: Arc<DbRand>,
+     fp_registry: Arc<FailPointRegistry>,
++    /// Direct notification path to an in-process coordinator. A standalone
++    /// coordinator discovers these writes through its commit/poll tickers.
++    compactor_tx: Option<async_channel::Sender<CompactorMessage>>,
+     /// Latest compaction context reported by the executor for each active
+     /// job. Entry present iff the job is active. Buffered here and published
+     /// to `.compactions` with the next heartbeat tick (see
+@@ -217,10 +222,19 @@ impl CompactionWorkerHandler {
+             stored: None,
+             rand,
+             fp_registry,
++            compactor_tx: None,
+             job_progress: BTreeMap::new(),
+         }
+     }
+ 
++    fn with_compactor_tx(
++        mut self,
++        compactor_tx: Option<async_channel::Sender<CompactorMessage>>,
++    ) -> Self {
++        self.compactor_tx = compactor_tx;
++        self
++    }
++
+     /// Builds the worker's [`CompactionWorkerHandler`] and the receiver that
+     /// the handler reads completion messages from. Shared between the
+     /// standalone `run()` path and the embedded-worker path in `Compactor::run`.
+@@ -236,11 +250,13 @@ impl CompactionWorkerHandler {
+         system_clock: Arc<dyn SystemClock>,
+         fp_registry: Arc<FailPointRegistry>,
+         merge_operator: Option<MergeOperatorType>,
++        compactor_tx: Option<async_channel::Sender<CompactorMessage>>,
+         #[cfg(feature = "compaction_filters")] compaction_filter_supplier: Option<
+             Arc<dyn CompactionFilterSupplier>,
+         >,
+     ) -> (
+         CompactionWorkerHandler,
++        async_channel::Sender<WorkerMessage>,
+         async_channel::Receiver<WorkerMessage>,
+     ) {
+         let (tx, rx) = async_channel::unbounded::<WorkerMessage>();
+@@ -257,7 +273,7 @@ impl CompactionWorkerHandler {
+             TokioCompactionExecutorOptions {
+                 handle: worker_runtime.clone(),
+                 options: options.clone(),
+-                worker_tx: tx,
++                worker_tx: tx.clone(),
+                 table_store: table_store.clone(),
+                 rand: rand.clone(),
+                 stats: stats.clone(),
+@@ -279,8 +295,22 @@ impl CompactionWorkerHandler {
+             system_clock.clone(),
+             rand.clone(),
+             fp_registry,
+-        );
+-        (handler, rx)
++        )
++        .with_compactor_tx(compactor_tx);
++        (handler, tx, rx)
++    }
++
++    fn notify_compactor(&self) {
++        let Some(compactor_tx) = &self.compactor_tx else {
++            return;
++        };
++        #[allow(clippy::disallowed_methods)]
++        if let Err(e) = compactor_tx.try_send(CompactorMessage::CompactionsChanged) {
++            debug!(
++                "failed to notify in-process compactor (likely shutdown) [error={:?}]",
++                e
++            );
++        }
+     }
+ 
+     const EXPECT_LOADED: &'static str = "ensure_loaded should have set stored compactions";
+@@ -592,7 +622,7 @@ impl CompactionWorkerHandler {
+         &mut self,
+         compaction_id: Ulid,
+         sorted_run: SortedRun,
+-    ) -> Result<(), SlateDBError> {
++    ) -> Result<bool, SlateDBError> {
+         loop {
+             let stored = self.stored.as_mut().expect(Self::EXPECT_LOADED);
+             stored.refresh().await?;
+@@ -602,7 +632,7 @@ impl CompactionWorkerHandler {
+                     "compaction entry missing on completion; dropping [id={}]",
+                     compaction_id
+                 );
+-                return Ok(());
++                return Ok(false);
+             };
+             if existing.worker().map(|w| w.worker_id.as_str()) != Some(self.worker_id.as_str()) {
+                 info!(
+@@ -611,7 +641,7 @@ impl CompactionWorkerHandler {
+                     existing.status(),
+                     existing.worker().map(|w| &w.worker_id),
+                 );
+-                return Ok(());
++                return Ok(false);
+             }
+             let heartbeat_ms = self.clock.now().timestamp_millis() as u64;
+             let updated = existing
+@@ -621,7 +651,7 @@ impl CompactionWorkerHandler {
+                 .with_ctx(None);
+             dirty.value.insert(updated);
+             match stored.update(dirty).await {
+-                Ok(()) => return Ok(()),
++                Ok(()) => return Ok(true),
+                 Err(e) if e.is_sequenced_write_conflict() => continue,
+                 Err(e) => return Err(e),
+             }
+@@ -689,7 +719,11 @@ impl CompactionWorkerHandler {
+     ) -> Result<(), SlateDBError> {
+         self.job_progress.remove(&id);
+         match result {
+-            Ok(sorted_run) => self.write_compacted(id, sorted_run).await?,
++            Ok(sorted_run) => {
++                if self.write_compacted(id, sorted_run).await? {
++                    self.notify_compactor();
++                }
++            }
+             Err(e) => {
+                 error!("compaction job failed [id={}, error={:?}]", id, e);
+                 self.release_claim(id).await?;
+@@ -1099,6 +1133,8 @@ mod tests {
+     #[tokio::test]
+     async fn test_worker_writes_compacted_on_finish() {
+         let mut fx = WorkerFixture::new("worker-A").await;
++        let (compactor_tx, compactor_rx) = async_channel::unbounded();
++        fx.handler.compactor_tx = Some(compactor_tx);
+         let id = Ulid::from_parts(1, 0);
+         fx.seed_scheduled_compaction(id, vec![SourceId::SstView(fx.l0_view.id)])
+             .await;
+@@ -1131,6 +1167,10 @@ mod tests {
+         assert_eq!(c.worker().unwrap().worker_id, fx.worker_id);
+         // Active set is drained on finish.
+         assert!(!fx.handler.job_progress.contains_key(&id));
++        assert!(matches!(
++            compactor_rx.try_recv(),
++            Ok(CompactorMessage::CompactionsChanged)
++        ));
+     }
+ 
+     #[tokio::test]
+diff --git a/slatedb/src/compactor.rs b/slatedb/src/compactor.rs
+index c322496d86af78392f952b69cbea0a203fd996fa..604ac18ec515fa841d3a320535e463ac5789126f 100644
+--- a/slatedb/src/compactor.rs
++++ b/slatedb/src/compactor.rs
+@@ -71,7 +71,7 @@ use ulid::Ulid;
+ 
+ #[cfg(feature = "compaction_filters")]
+ use crate::compaction_filter::CompactionFilterSupplier;
+-use crate::compaction_worker::CompactionWorkerHandler;
++use crate::compaction_worker::{CompactionWorkerHandler, WorkerMessage};
+ use crate::compactions_store::{CompactionsStore, StoredCompactions};
+ use crate::compactor::stats::CompactionStats;
+ use crate::compactor_state_protocols::CompactorStateWriter;
+@@ -276,6 +276,10 @@ pub(crate) enum CompactorMessage {
+     /// Fast ticker to commit any `Compacted` entries written by workers without
+     /// waiting for the full `poll_interval` cycle.
+     CommitCompacted,
++    /// An in-process worker changed `.compactions`. Refresh coordinator state,
++    /// commit completed work, and schedule replacement work immediately instead
++    /// of waiting for the polling tickers.
++    CompactionsChanged,
+ }
+ 
+ /// The compactor is responsible for taking groups of sorted runs (this doc uses the term
+@@ -381,7 +385,26 @@ impl Compactor {
+     pub(crate) async fn start(&self) -> Result<(), crate::Error> {
+         // The coordinator delegates compaction execution to [`crate::compaction_worker::CompactionWorker`]
+         // either spawned in this process (set `worker: Some`) or running standalone (set `worker: None`).
+-        let (_tx, rx) = async_channel::unbounded::<CompactorMessage>();
++        let (compactor_tx, rx) = async_channel::unbounded::<CompactorMessage>();
++        let worker = self.options.worker.clone().map(|worker_options| {
++            CompactionWorkerHandler::build_worker_handler(
++                self.manifest_store.clone(),
++                self.compactions_store.clone(),
++                self.table_store.clone(),
++                Arc::new(worker_options),
++                self.compactor_runtime.clone(),
++                self.rand.clone(),
++                self.stats.clone(),
++                self.recorder.clone(),
++                self.system_clock.clone(),
++                self.fp_registry.clone(),
++                self.merge_operator.clone(),
++                Some(compactor_tx.clone()),
++                #[cfg(feature = "compaction_filters")]
++                self.compaction_filter_supplier.clone(),
++            )
++        });
++        let worker_tx = worker.as_ref().map(|(_, tx, _)| tx.clone());
+         let scheduler = Arc::from(self.scheduler_supplier.compaction_scheduler(&self.options));
+         let handler = CompactorEventHandler::new(
+             self.manifest_store.clone(),
+@@ -393,7 +416,8 @@ impl Compactor {
+             self.system_clock.clone(),
+             self.recorder.clone(),
+         )
+-        .await?;
++        .await?
++        .with_worker_tx(worker_tx);
+         self.task_executor
+             .add_handler(
+                 COMPACTOR_TASK_NAME.to_string(),
+@@ -406,22 +430,7 @@ impl Compactor {
+         // Spawn an in-process worker if configured. The worker runs under its
+         // own cancellation token; Compactor::stop and run() are responsible for
+         // shutting it down alongside the coordinator.
+-        if let Some(worker_options) = self.options.worker.clone() {
+-            let (worker_handler, worker_rx) = CompactionWorkerHandler::build_worker_handler(
+-                self.manifest_store.clone(),
+-                self.compactions_store.clone(),
+-                self.table_store.clone(),
+-                Arc::new(worker_options),
+-                self.compactor_runtime.clone(),
+-                self.rand.clone(),
+-                self.stats.clone(),
+-                self.recorder.clone(),
+-                self.system_clock.clone(),
+-                self.fp_registry.clone(),
+-                self.merge_operator.clone(),
+-                #[cfg(feature = "compaction_filters")]
+-                self.compaction_filter_supplier.clone(),
+-            );
++        if let Some((worker_handler, _worker_tx, worker_rx)) = worker {
+             self.task_executor
+                 .add_handler(
+                     crate::compaction_worker::COMPACTION_WORKER_TASK_NAME.to_string(),
+@@ -524,6 +533,9 @@ pub(crate) struct CompactorEventHandler {
+     /// Cached handles for per-worker `worker_last_heartbeat_ms` gauges. Handles are
+     /// retained for every worker id observed by this coordinator process.
+     worker_heartbeat_gauges: HashMap<String, Arc<dyn GaugeFn>>,
++    /// Direct notification path to an embedded worker. Standalone workers
++    /// discover the same state changes through their poll ticker.
++    worker_tx: Option<async_channel::Sender<WorkerMessage>>,
+ }
+ 
+ #[async_trait]
+@@ -548,7 +560,10 @@ impl MessageHandler<CompactorMessage> for CompactorEventHandler {
+     async fn handle(&mut self, message: CompactorMessage) -> Result<(), SlateDBError> {
+         match message {
+             CompactorMessage::LogStats => self.handle_log_ticker(),
+-            CompactorMessage::PollManifest => self.handle_ticker().await?,
++            CompactorMessage::PollManifest | CompactorMessage::CompactionsChanged => {
++                self.handle_ticker().await?;
++                self.notify_worker_if_ready();
++            }
+             CompactorMessage::CommitCompacted => {
+                 // A remote worker can only produce a new Compacted result for a
+                 // job the coordinator already tracks as active. When there are no
+@@ -604,9 +619,41 @@ impl CompactorEventHandler {
+             recorder,
+             prev_claimed: HashSet::new(),
+             worker_heartbeat_gauges: HashMap::new(),
++            worker_tx: None,
+         })
+     }
+ 
++    pub(crate) fn with_worker_tx(
++        mut self,
++        worker_tx: Option<async_channel::Sender<WorkerMessage>>,
++    ) -> Self {
++        self.worker_tx = worker_tx;
++        self
++    }
++
++    /// Wakes an embedded worker when the coordinator has persisted work that
++    /// is ready to claim. Distributed workers retain their jittered polling
++    /// ticker as the cross-process discovery path.
++    fn notify_worker_if_ready(&self) {
++        if !self
++            .state()
++            .compactions_with_status(&[CompactionStatus::Scheduled])
++            .any(|compaction| compaction.worker().is_none())
++        {
++            return;
++        }
++        let Some(worker_tx) = &self.worker_tx else {
++            return;
++        };
++        #[allow(clippy::disallowed_methods)]
++        if let Err(e) = worker_tx.try_send(WorkerMessage::PollCompactions) {
++            debug!(
++                "failed to notify embedded compaction worker (likely shutdown) [error={:?}]",
++                e
++            );
++        }
++    }
++
+     fn state(&self) -> &CompactorState {
+         &self.state_writer.state
+     }
+@@ -4807,6 +4854,47 @@ mod tests {
+         assert!(last_ts > starting_last_ts);
+     }
+ 
++    #[tokio::test]
++    async fn test_poll_manifest_notifies_embedded_worker_of_scheduled_compaction() {
++        let mut fixture = CompactorEventHandlerTestFixture::new().await;
++        let (worker_tx, worker_rx) = async_channel::unbounded();
++        fixture.handler.worker_tx = Some(worker_tx);
++        fixture.write_l0().await;
++        let compaction = fixture.build_l0_compaction().await;
++        fixture.scheduler.inject_compaction(compaction);
++
++        fixture
++            .handler
++            .handle(CompactorMessage::PollManifest)
++            .await
++            .unwrap();
++
++        assert!(matches!(
++            worker_rx.try_recv(),
++            Ok(WorkerMessage::PollCompactions)
++        ));
++    }
++
++    #[tokio::test]
++    async fn test_compactions_changed_commits_worker_result_without_ticker() {
++        let mut fixture = CompactorEventHandlerTestFixture::new().await;
++        fixture.write_l0().await;
++        let compaction = fixture.build_l0_compaction().await;
++        fixture.scheduler.inject_compaction(compaction);
++        fixture.handler.handle_ticker().await.unwrap();
++        fixture.simulate_worker_completes().await;
++
++        fixture
++            .handler
++            .handle(CompactorMessage::CompactionsChanged)
++            .await
++            .unwrap();
++
++        let db_state = fixture.latest_db_state().await;
++        assert!(db_state.tree.l0.is_empty());
++        assert_eq!(db_state.tree.compacted.len(), 1);
++    }
++
+     #[tokio::test]
+     async fn test_should_write_manifest_safely() {
+         // given:
+diff --git a/slatedb/src/db/builder.rs b/slatedb/src/db/builder.rs
+index 7cd3d173b32a96f71c0831f4319f590ff4d44a1f..c2daba5edb2512b224d857d5a6d1413e83e1beb8 100644
+--- a/slatedb/src/db/builder.rs
++++ b/slatedb/src/db/builder.rs
+@@ -1317,7 +1317,7 @@ impl<P: Into<Path>> CompactorBuilder<P> {
+         let scheduler_supplier = self
+             .scheduler_supplier
+             .unwrap_or(Arc::new(SizeTieredCompactionSchedulerSupplier));
+-        let (_tx, rx) = async_channel::unbounded();
++        let (compactor_tx, rx) = async_channel::unbounded();
+         let scheduler = Arc::from(scheduler_supplier.compaction_scheduler(&options));
+         let stats = Arc::new(CompactionStats::new(&recorder));
+         let handler = CompactorEventHandler::new(
+@@ -1344,10 +1344,14 @@ impl<P: Into<Path>> CompactorBuilder<P> {
+                 self.system_clock,
+                 self.fp_registry,
+                 self.merge_operator,
++                Some(compactor_tx.clone()),
+                 #[cfg(feature = "compaction_filters")]
+                 self.compaction_filter_supplier,
+             )
+         });
++        let worker_tx = worker.as_ref().map(|(_, tx, _)| tx.clone());
++        let handler = handler.with_worker_tx(worker_tx);
++        let worker = worker.map(|(handler, _tx, rx)| (handler, rx));
+         Ok(CompactorHandlers {
+             handler,
+             rx,
+@@ -1503,7 +1507,7 @@ impl<P: Into<Path>> CompactionWorkerBuilder<P> {
+             closed_result,
+             self.system_clock.clone(),
+         ));
+-        let (handler, rx) = CompactionWorkerHandler::build_worker_handler(
++        let (handler, _tx, rx) = CompactionWorkerHandler::build_worker_handler(
+             manifest_store,
+             compactions_store,
+             table_store,
+@@ -1515,6 +1519,7 @@ impl<P: Into<Path>> CompactionWorkerBuilder<P> {
+             self.system_clock,
+             self.fp_registry,
+             self.merge_operator,
++            None,
+             #[cfg(feature = "compaction_filters")]
+             self.compaction_filter_supplier,
+         );
+-- 
+2.50.1 (Apple Git-155)
