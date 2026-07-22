@@ -22,7 +22,7 @@ use object_store::{ObjectStore, ObjectStoreExt, PutMode, PutPayload};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use slatedb::admin::{Admin, AdminBuilder};
+use slatedb::admin::{Admin, AdminBuilder, CloneSourceSpec};
 use slatedb::compactor::CompactionStatus;
 use slatedb::config::{CheckpointOptions, Settings};
 use slatedb::db_cache::{
@@ -711,10 +711,13 @@ async fn clone_database(
 ) -> Result<()> {
     AdminBuilder::new(clone_path.clone(), store)
         .build()
-        .create_clone_builder(parent_path.clone(), Some(checkpoint_id))
+        .create_clone_builder_from_source(CloneSourceSpec::with_checkpoint(
+            parent_path.clone(),
+            checkpoint_id,
+        ))
         .build()
         .await
-        .map_err(|error| anyhow::anyhow!("creating shallow database clone: {error}"))
+        .context("creating shallow database clone")
 }
 
 async fn open_database(
@@ -915,6 +918,7 @@ async fn wait_for_compactor_quiet(admin: &Admin) -> Result<()> {
             for compaction in compactions.recent_compactions() {
                 match compaction.status() {
                     CompactionStatus::Submitted
+                    | CompactionStatus::Scheduled
                     | CompactionStatus::Running
                     | CompactionStatus::Compacted => active = true,
                     CompactionStatus::Failed => {

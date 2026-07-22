@@ -3,13 +3,13 @@ use clap::{Args, Parser, Subcommand};
 use std::path::PathBuf;
 
 const RUN_EXAMPLES: &str = r#"Examples:
-  slatedb-benchmark run --task bulk-load --golden slatedb-v0.13.1-001 \
+  slatedb-benchmark run --task bulk-load --golden slatedb-v0.14.1-001 \
     --scale 1.0 --output .runs/bulk-load
 
-  slatedb-benchmark run --task compaction --golden slatedb-v0.13.1-001 \
+  slatedb-benchmark run --task compaction --golden slatedb-v0.14.1-001 \
     --scale 1.0 --output .runs/compaction
 
-  slatedb-benchmark run --task balanced --golden slatedb-v0.13.1-001 \
+  slatedb-benchmark run --task balanced --golden slatedb-v0.14.1-001 \
     --session github-123456 --scale 1.0 --output .runs/balanced"#;
 
 #[derive(Debug, Parser)]
@@ -40,7 +40,7 @@ pub struct RunArgs {
     /// Preparation task or workload from BENCHMARKS.md.
     #[arg(long, value_enum)]
     pub task: Task,
-    /// Golden data name, for example slatedb-v0.13.1-001.
+    /// Golden data name, for example slatedb-v0.14.1-001.
     #[arg(long, value_name = "GOLDEN_ID")]
     pub golden: String,
     /// Benchmark session name; required for workload tasks.
@@ -68,7 +68,7 @@ mod tests {
             "--task",
             "balanced",
             "--golden",
-            "slatedb-v0.13.1-001",
+            "slatedb-v0.14.1-001",
             "--session",
             "github-123456",
             "--scale",
