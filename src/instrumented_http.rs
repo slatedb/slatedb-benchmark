@@ -418,6 +418,12 @@ fn classify_s3_request(
         return None;
     }
 
+    if request.method() == http::Method::POST
+        && request.uri().query().is_some_and(is_delete_objects_query)
+    {
+        return Some(HttpMethod::Delete);
+    }
+
     if request.method() == http::Method::GET
         && request.uri().query().is_some_and(is_list_objects_query)
     {
@@ -425,6 +431,12 @@ fn classify_s3_request(
     }
 
     Some(HttpMethod::from_http(request.method()))
+}
+
+fn is_delete_objects_query(query: &str) -> bool {
+    query
+        .split('&')
+        .any(|parameter| parameter == "delete" || parameter.starts_with("delete="))
 }
 
 fn is_list_objects_query(query: &str) -> bool {
@@ -504,7 +516,16 @@ mod tests {
                 "https://s3.example/bucket?prefix=data&list-type=2",
                 HttpMethod::List,
             ),
-            ("POST", "https://s3.example/bucket?delete", HttpMethod::Post),
+            (
+                "POST",
+                "https://s3.example/bucket?delete",
+                HttpMethod::Delete,
+            ),
+            (
+                "POST",
+                "https://s3.example/bucket?quiet=true&delete=",
+                HttpMethod::Delete,
+            ),
             (
                 "POST",
                 "https://s3.example/bucket/key?uploads",
