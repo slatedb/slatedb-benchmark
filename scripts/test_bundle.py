@@ -52,7 +52,36 @@ class TransferCapacityTests(unittest.TestCase):
             "endpoint": "https://t3.storage.dev",
             "region": "fra",
         }
-        self.result = {
+        self.result = self.warp_result()
+
+    def warp_result(self):
+        def benchmark(name, operation, size, concurrency, duration):
+            return {
+                "name": name,
+                "operation": operation,
+                "object_size_bytes": size,
+                "concurrency": concurrency,
+                "duration_seconds": duration,
+                "benchdata": f"warp/{name}.csv.zst",
+            }
+
+        return {
+            "version": 2,
+            "status": "ok",
+            "scale": 1.0,
+            **self.environment,
+            "tool": {"name": "warp", "version": "v1.5.0"},
+            "benchmarks": [
+                benchmark("large-put", "PUT", 4 * 1024 * 1024, 64, 60),
+                benchmark("large-get", "GET", 4 * 1024 * 1024, 64, 60),
+                benchmark("small-put", "PUT", 4 * 1024, 1, 30),
+                benchmark("small-get", "GET", 4 * 1024, 1, 30),
+                benchmark("small-list", "LIST", 4 * 1024, 1, 30),
+            ],
+        }
+
+    def legacy_result(self):
+        return {
             "status": "ok",
             "scale": 1.0,
             **self.environment,
@@ -80,10 +109,21 @@ class TransferCapacityTests(unittest.TestCase):
     def test_accepts_self_describing_probe_configuration(self):
         self.assertEqual(self.read(), self.result)
 
-    def test_rejects_inconsistent_transfer_concurrency(self):
-        self.result["max_concurrent_requests"] = 7
+    def test_accepts_legacy_transfer_capacity(self):
+        self.result = self.legacy_result()
 
-        with self.assertRaisesRegex(ValueError, "inconsistent transfer concurrency"):
+        self.assertEqual(self.read(), self.result)
+
+    def test_rejects_incorrect_warp_operation(self):
+        self.result["benchmarks"][1]["operation"] = "PUT"
+
+        with self.assertRaisesRegex(ValueError, "invalid large-get operation"):
+            self.read()
+
+    def test_rejects_incorrect_warp_benchdata(self):
+        self.result["benchmarks"][4]["benchdata"] = "other.csv.zst"
+
+        with self.assertRaisesRegex(ValueError, "invalid small-list benchmark data"):
             self.read()
 
 

@@ -88,6 +88,14 @@ def read_transfer_capacity(path, scale, environment):
     for field in ("runner_type", "object_store", "endpoint", "region"):
         if result.get(field) != environment[field]:
             raise ValueError(f"{path} used a different {field.replace('_', ' ')}")
+    if result.get("version") == 2:
+        validate_warp_transfer_capacity(path, result)
+        return result
+    validate_legacy_transfer_capacity(path, result)
+    return result
+
+
+def validate_legacy_transfer_capacity(path, result):
     for field in (
         "parallel_objects",
         "requests_per_process",
@@ -114,7 +122,43 @@ def read_transfer_capacity(path, scale, environment):
         expected_rate = result["measured_bytes"] / 1024 / 1024 / measurement["elapsed_seconds"]
         if not math.isclose(measurement["mib_per_second"], expected_rate, rel_tol=1e-9):
             raise ValueError(f"{path} has an inconsistent {direction} rate")
-    return result
+
+
+def validate_warp_transfer_capacity(path, result):
+    tool = result.get("tool")
+    if (
+        not isinstance(tool, dict)
+        or tool.get("name") != "warp"
+        or not isinstance(tool.get("version"), str)
+        or not tool["version"]
+    ):
+        raise ValueError(f"{path} has invalid Warp tool metadata")
+    benchmarks = result.get("benchmarks")
+    if (
+        not isinstance(benchmarks, list)
+        or len(benchmarks) != 5
+        or not all(isinstance(benchmark, dict) for benchmark in benchmarks)
+    ):
+        raise ValueError(f"{path} has invalid Warp benchmarks")
+    expected = {
+        "large-put": "PUT",
+        "large-get": "GET",
+        "small-put": "PUT",
+        "small-get": "GET",
+        "small-list": "LIST",
+    }
+    if {benchmark.get("name") for benchmark in benchmarks} != set(expected):
+        raise ValueError(f"{path} has unexpected Warp benchmarks")
+    for benchmark in benchmarks:
+        name = benchmark["name"]
+        if benchmark.get("operation") != expected[name]:
+            raise ValueError(f"{path} has invalid {name} operation")
+        for field in ("object_size_bytes", "concurrency", "duration_seconds"):
+            value = benchmark.get(field)
+            if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+                raise ValueError(f"{path} has invalid {name} {field.replace('_', ' ')}")
+        if benchmark.get("benchdata") != f"warp/{name}.csv.zst":
+            raise ValueError(f"{path} has invalid {name} benchmark data")
 
 
 def write_json(path, value):

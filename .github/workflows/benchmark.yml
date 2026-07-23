@@ -196,10 +196,25 @@ jobs:
     runs-on: warp-ubuntu-latest-arm64-8x
     timeout-minutes: 60
     environment: benchmark
+    env:
+      WARP_VERSION: v1.5.0
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.25.9
+          cache: false
+      - name: Install Warp
+        shell: bash
+        run: |
+          set -euo pipefail
+          warp_bin_dir="${RUNNER_TEMP:-/tmp}/warp-bin"
+          mkdir -p "$warp_bin_dir"
+          GOBIN="$warp_bin_dir" go install "github.com/minio/warp@${WARP_VERSION}"
+          echo "$warp_bin_dir" >> "$GITHUB_PATH"
+          "$warp_bin_dir/warp" --version
       - name: Install AWS CLI for act
         if: ${{ env.ACT == 'true' }}
         shell: bash
@@ -294,7 +309,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: transfer-capacity
-          path: .runs/transfer-capacity/result.json
+          path: .runs/transfer-capacity
           if-no-files-found: error
           overwrite: true
 

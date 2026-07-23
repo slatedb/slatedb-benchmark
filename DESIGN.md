@@ -285,19 +285,20 @@ after changing the SlateDB commit or preparation configuration.
 | --- | --- |
 | `validate-golden` | Verify and upload both preparation results |
 | `build` | Resolve the requested SlateDB ref and build the runner against it |
-| `transfer-capacity` | Record diagnostic Tigris upload and download bandwidth |
+| `transfer-capacity` | Record diagnostic Tigris throughput and request latency |
 | `workloads` | Run the workload matrix |
 | `bundle` | Assemble and checksum all run results |
 | `publish` | Commit results when the `publish` input is `true` |
 | `cleanup` | Delete workload database clones after outputs are collected |
 
 The transfer probe runs on the published WarpBuild machine type alongside the
-build. Four AWS CLI processes transfer 8 GiB of warmup data and then 32 GiB of
-measured data in each direction. Upload and download run separately. Scaled
-local runs reduce both sizes. Workloads wait for the probe, so its traffic
-never overlaps their measurements. The probe is diagnostic data and does not
-appear on the website. Its log includes host, CPU, memory, disk, public egress,
-DNS, routing, and a TCP traceroute to Tigris.
+build. MinIO Warp measures 4 MiB PUT and GET throughput at concurrency 64, then
+4 KiB PUT, GET, and LIST latency at concurrency 1. Workloads wait for the
+probe, so its traffic never overlaps their measurements. Scaled local runs
+shorten each measurement. The raw Warp request data remains in the workflow
+artifact. The probe is diagnostic data and does not appear on the website. Its
+log also includes host, CPU, memory, disk, public egress, DNS, routing, and a
+TCP traceroute to Tigris.
 
 The workload matrix uses one WarpBuild machine per task and runs up to four
 tasks at once. Act runs one task at a time because its jobs share the local

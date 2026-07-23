@@ -14,210 +14,207 @@ root_prefix=${SLATEDB_BENCH_PREFIX:-benchmark}
 region=${SLATEDB_BENCH_REGION:-fra}
 runner_type=${SLATEDB_BENCH_RUNNER_TYPE:-unknown}
 object_store=${CLOUD_PROVIDER:-aws}
+warp_bin=${WARP_BIN:-warp}
+warp_version=${WARP_VERSION:-v1.5.0}
 if [[ $endpoint == "https://t3.storage.dev" || $endpoint == *tigris.dev* || \
   $endpoint == *tigrisdata.com* ]]; then
   object_store=Tigris
 fi
-parallel_objects=2
-requests_per_process=4
-max_concurrent_requests=$((parallel_objects * requests_per_process))
-probe_id="${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}"
+
+large_object_size=4194304
+large_object_size_arg=4MiB
+large_concurrency=64
+small_object_size=4096
+small_object_size_arg=4KiB
+small_concurrency=1
+small_list_objects=100
+attempts=3
+
+if ! jq -en --argjson scale "$scale" \
+  '$scale > 0 and $scale <= 1' >/dev/null; then
+  echo "BENCHMARK_SCALE must be greater than zero and at most 1.0" >&2
+  exit 2
+fi
+if [[ $scale == 1 || $scale == 1.0 ]]; then
+  large_duration=60
+  small_duration=30
+else
+  large_duration=10
+  small_duration=10
+fi
+
+case "$endpoint" in
+  https://*)
+    export WARP_TLS=true
+    warp_host=${endpoint#https://}
+    ;;
+  http://*)
+    export WARP_TLS=false
+    warp_host=${endpoint#http://}
+    ;;
+  *)
+    echo "AWS_ENDPOINT_URL_S3 must begin with http:// or https://" >&2
+    exit 2
+    ;;
+esac
+warp_host=${warp_host%/}
+if [[ $warp_host == */* ]]; then
+  echo "AWS_ENDPOINT_URL_S3 must not contain a path" >&2
+  exit 2
+fi
+
+export WARP_HOST=$warp_host
+export WARP_ACCESS_KEY=${AWS_ACCESS_KEY_ID:?AWS_ACCESS_KEY_ID is required}
+export WARP_SECRET_KEY=${AWS_SECRET_ACCESS_KEY:?AWS_SECRET_ACCESS_KEY is required}
+export WARP_REGION=${AWS_REGION:-auto}
+if [[ -n ${AWS_SESSION_TOKEN:-} ]]; then
+  export WARP_SESSION_TOKEN=$AWS_SESSION_TOKEN
+fi
+
+if ! command -v "$warp_bin" >/dev/null 2>&1; then
+  echo "Warp executable not found: $warp_bin" >&2
+  exit 2
+fi
+
+probe_id="${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}-${GITHUB_JOB:-transfer-capacity}-$$"
 probe_prefix="$root_prefix/probes/$probe_id"
-work=$(mktemp -d)
+artifact_dir="$(dirname "$output")/warp"
+mkdir -p "$artifact_dir"
 
 cleanup() {
   local status=$?
   trap - EXIT
   aws s3 rm --endpoint-url "$endpoint" --only-show-errors --recursive \
-    "s3://$bucket/$probe_prefix/" >/dev/null 2>&1 || true
-  rm -rf "$work"
+    "s3://$bucket/$probe_prefix/" >/dev/null 2>&1 || \
+    echo "warning: failed to clean up s3://$bucket/$probe_prefix/" >&2
   exit "$status"
 }
 trap cleanup EXIT
 
-read -r warmup_mib_per_object measured_mib_per_object < <(
-  python3 - "$scale" <<'PY'
-import math
-import sys
-
-scale = float(sys.argv[1])
-if not math.isfinite(scale) or not 0 < scale <= 1:
-    raise SystemExit("BENCHMARK_SCALE must be greater than zero and at most 1.0")
-print(max(1, math.ceil(2048 * scale)), max(1, math.ceil(8192 * scale)))
-PY
-)
-
-warmup_bytes=$((parallel_objects * warmup_mib_per_object * 1024 * 1024))
-measured_bytes=$((parallel_objects * measured_mib_per_object * 1024 * 1024))
-
-export AWS_CONFIG_FILE="$work/aws-config"
-export AWS_EC2_METADATA_DISABLED=true
-cat > "$AWS_CONFIG_FILE" <<EOF
-[default]
-region = ${AWS_REGION:-auto}
-s3 =
-    max_concurrent_requests = $requests_per_process
-    multipart_threshold = 64MB
-    multipart_chunksize = 64MB
-EOF
-
-create_files() {
-  local directory=$1
-  local mib_per_object=$2
-  mkdir -p "$directory"
-  for index in $(seq 1 "$parallel_objects"); do
-    dd if=/dev/urandom of="$directory/part-$index.bin" \
-      bs=1M count="$mib_per_object" iflag=fullblock status=none
-  done
-}
-
-wait_for_transfers() {
-  local failed=0
-  local pid
-  for pid in "$@"; do
-    if ! wait "$pid"; then
-      failed=1
-    fi
-  done
-  return "$failed"
-}
-
-upload_files() {
-  local directory=$1
-  local remote=$2
-  local pids=()
-  local file
-  for file in "$directory"/*.bin; do
-    aws s3 cp --endpoint-url "$endpoint" --only-show-errors \
-      "$file" "s3://$bucket/$remote/$(basename "$file")" &
-    pids+=("$!")
-  done
-  wait_for_transfers "${pids[@]}"
-}
-
-download_files() {
-  local remote=$1
-  local directory=$2
-  local pids=()
-  local index
-  mkdir -p "$directory"
-  for index in $(seq 1 "$parallel_objects"); do
-    aws s3 cp --endpoint-url "$endpoint" --only-show-errors \
-      "s3://$bucket/$remote/part-$index.bin" "$directory/part-$index.bin" &
-    pids+=("$!")
-  done
-  wait_for_transfers "${pids[@]}"
-}
-
-monotonic_ns() {
-  python3 -c 'import time; print(time.monotonic_ns())'
-}
-
-retry_upload_files() {
-  local description=$1
-  local directory=$2
-  local remote=$3
-  local attempts=3
+run_warp_benchmark() {
+  local name=$1
+  local concurrency=$2
+  local duration=$3
+  local command=$4
+  shift 4
+  local base="$artifact_dir/$name"
+  local raw="$base.csv.zst"
   local attempt
-  local started
 
   for ((attempt = 1; attempt <= attempts; attempt++)); do
-    started=$(monotonic_ns)
-    if upload_files "$directory" "$remote"; then
-      last_upload_elapsed_ns=$(($(monotonic_ns) - started))
+    rm -f "$raw"
+    echo "Running Warp $name benchmark (attempt $attempt/$attempts)"
+    if "$warp_bin" "$command" \
+      --bucket="$bucket" \
+      --concurrent="$concurrency" \
+      --duration="${duration}s" \
+      --benchdata="$base" \
+      --analyze.v \
+      --no-color \
+      --noclear \
+      "$@" && [[ -s $raw ]]; then
       return 0
     fi
     if ((attempt == attempts)); then
-      echo "$description failed after $attempts attempts" >&2
+      echo "Warp $name benchmark failed after $attempts attempts" >&2
       return 1
     fi
-    echo "$description failed on attempt $attempt; retrying in 5s" >&2
+    echo "Warp $name benchmark failed; retrying in 5s" >&2
     sleep 5
   done
 }
 
-echo "Generating transfer-capacity probe data"
-create_files "$work/source/warmup" "$warmup_mib_per_object"
-create_files "$work/source/measured" "$measured_mib_per_object"
+large_prefix="$probe_prefix/warp-large"
+small_prefix="$probe_prefix/warp-small"
+list_prefix="$probe_prefix/warp-small-list"
 
-echo "Warming up $object_store uploads"
-retry_upload_files \
-  "$object_store upload warmup" \
-  "$work/source/warmup" \
-  "$probe_prefix/warmup"
-echo "Measuring parallel $object_store uploads"
-retry_upload_files \
-  "Parallel $object_store upload measurement" \
-  "$work/source/measured" \
-  "$probe_prefix/measured"
-upload_elapsed_ns=$last_upload_elapsed_ns
-
-rm -rf "$work/source"
-echo "Warming up $object_store downloads"
-download_files "$probe_prefix/warmup" "$work/download/warmup"
-rm -rf "$work/download/warmup"
-echo "Measuring parallel $object_store downloads"
-download_started=$(monotonic_ns)
-download_files "$probe_prefix/measured" "$work/download/measured"
-download_elapsed_ns=$(($(monotonic_ns) - download_started))
+run_warp_benchmark \
+  large-put "$large_concurrency" "$large_duration" put \
+  --prefix="$large_prefix" \
+  --obj.size="$large_object_size_arg" \
+  --disable-multipart
+run_warp_benchmark \
+  large-get "$large_concurrency" "$large_duration" get \
+  --prefix="$large_prefix" \
+  --list-existing \
+  --objects=0
+run_warp_benchmark \
+  small-put "$small_concurrency" "$small_duration" put \
+  --prefix="$small_prefix" \
+  --obj.size="$small_object_size_arg" \
+  --disable-multipart
+run_warp_benchmark \
+  small-get "$small_concurrency" "$small_duration" get \
+  --prefix="$small_prefix" \
+  --list-existing \
+  --objects=0
+run_warp_benchmark \
+  small-list "$small_concurrency" "$small_duration" list \
+  --prefix="$list_prefix" \
+  --obj.size="$small_object_size_arg" \
+  --objects="$small_list_objects" \
+  --max-keys="$small_list_objects"
 
 mkdir -p "$(dirname "$output")"
-python3 - \
-  "$output" "$scale" "$runner_type" "$object_store" "$endpoint" "$region" \
-  "$parallel_objects" "$requests_per_process" "$max_concurrent_requests" \
-  "$warmup_bytes" "$measured_bytes" "$upload_elapsed_ns" \
-  "$download_elapsed_ns" <<'PY'
-import json
-import sys
-from datetime import datetime, timezone
-from pathlib import Path
-
-(
-    output,
-    scale,
-    runner_type,
-    object_store,
-    endpoint,
-    region,
-    parallel_objects,
-    requests_per_process,
-    max_concurrent_requests,
-    warmup_bytes,
-    measured_bytes,
-    upload_elapsed_ns,
-    download_elapsed_ns,
-) = sys.argv[1:]
-
-measured_bytes = int(measured_bytes)
-
-
-def measurement(elapsed_ns):
-    elapsed_seconds = int(elapsed_ns) / 1_000_000_000
-    return {
-        "elapsed_seconds": elapsed_seconds,
-        "mib_per_second": measured_bytes / 1024 / 1024 / elapsed_seconds,
-    }
-
-
-result = {
-    "status": "ok",
-    "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-    "scale": float(scale),
-    "runner_type": runner_type,
-    "object_store": object_store,
-    "endpoint": endpoint,
-    "region": region,
-    "parallel_objects": int(parallel_objects),
-    "requests_per_process": int(requests_per_process),
-    "max_concurrent_requests": int(max_concurrent_requests),
-    "warmup_bytes": int(warmup_bytes),
-    "measured_bytes": measured_bytes,
-    "upload": measurement(upload_elapsed_ns),
-    "download": measurement(download_elapsed_ns),
-}
-Path(output).write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
-print(
-    f"Upload: {result['upload']['mib_per_second']:.2f} MiB/s; "
-    f"download: {result['download']['mib_per_second']:.2f} MiB/s"
-)
-PY
+jq -n \
+  --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --argjson scale "$scale" \
+  --arg runner_type "$runner_type" \
+  --arg object_store "$object_store" \
+  --arg endpoint "$endpoint" \
+  --arg region "$region" \
+  --arg warp_version "$warp_version" \
+  --argjson large_object_size "$large_object_size" \
+  --argjson large_concurrency "$large_concurrency" \
+  --argjson large_duration "$large_duration" \
+  --argjson small_object_size "$small_object_size" \
+  --argjson small_concurrency "$small_concurrency" \
+  --argjson small_duration "$small_duration" \
+  '{
+    version: 2,
+    status: "ok",
+    timestamp: $timestamp,
+    scale: $scale,
+    runner_type: $runner_type,
+    object_store: $object_store,
+    endpoint: $endpoint,
+    region: $region,
+    tool: {name: "warp", version: $warp_version},
+    benchmarks: [
+      {
+        name: "large-put", operation: "PUT",
+        object_size_bytes: $large_object_size,
+        concurrency: $large_concurrency,
+        duration_seconds: $large_duration,
+        benchdata: "warp/large-put.csv.zst"
+      },
+      {
+        name: "large-get", operation: "GET",
+        object_size_bytes: $large_object_size,
+        concurrency: $large_concurrency,
+        duration_seconds: $large_duration,
+        benchdata: "warp/large-get.csv.zst"
+      },
+      {
+        name: "small-put", operation: "PUT",
+        object_size_bytes: $small_object_size,
+        concurrency: $small_concurrency,
+        duration_seconds: $small_duration,
+        benchdata: "warp/small-put.csv.zst"
+      },
+      {
+        name: "small-get", operation: "GET",
+        object_size_bytes: $small_object_size,
+        concurrency: $small_concurrency,
+        duration_seconds: $small_duration,
+        benchdata: "warp/small-get.csv.zst"
+      },
+      {
+        name: "small-list", operation: "LIST",
+        object_size_bytes: $small_object_size,
+        concurrency: $small_concurrency,
+        duration_seconds: $small_duration,
+        benchdata: "warp/small-list.csv.zst"
+      }
+    ]
+  }' >"$output"

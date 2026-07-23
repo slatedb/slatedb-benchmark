@@ -72,6 +72,26 @@
     },
     "max_parallel": { "type": "integer", "minimum": 1 },
     "transfer_capacity": {
+      "oneOf": [
+        { "$ref": "#/$defs/legacyTransferCapacity" },
+        { "$ref": "#/$defs/warpTransferCapacity" }
+      ]
+    },
+    "results": {
+      "type": "object",
+      "minProperties": 22,
+      "maxProperties": 22,
+      "propertyNames": {
+        "pattern": "^(preparation/(bulk-load|compaction)/result|workload/(idle|point-read-uniform|point-read-skewed|point-read-missing|read-heavy|balanced|update-heavy|range-scan|sustained-ingest|transaction-contention)/(result|series))\\.json$"
+      },
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$"
+      }
+    }
+  },
+  "$defs": {
+    "legacyTransferCapacity": {
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -107,20 +127,72 @@
         "download": { "$ref": "#/$defs/transferMeasurement" }
       }
     },
-    "results": {
+    "warpTransferCapacity": {
       "type": "object",
-      "minProperties": 22,
-      "maxProperties": 22,
-      "propertyNames": {
-        "pattern": "^(preparation/(bulk-load|compaction)/result|workload/(idle|point-read-uniform|point-read-skewed|point-read-missing|read-heavy|balanced|update-heavy|range-scan|sustained-ingest|transaction-contention)/(result|series))\\.json$"
-      },
-      "additionalProperties": {
-        "type": "string",
-        "pattern": "^[0-9a-f]{64}$"
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "status",
+        "timestamp",
+        "scale",
+        "runner_type",
+        "object_store",
+        "endpoint",
+        "region",
+        "tool",
+        "benchmarks"
+      ],
+      "properties": {
+        "version": { "const": 2 },
+        "status": { "const": "ok" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "scale": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+        "runner_type": { "type": "string", "minLength": 1 },
+        "object_store": { "type": "string", "minLength": 1 },
+        "endpoint": { "type": "string", "minLength": 1 },
+        "region": { "type": "string", "minLength": 1 },
+        "tool": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "version"],
+          "properties": {
+            "name": { "const": "warp" },
+            "version": { "type": "string", "minLength": 1 }
+          }
+        },
+        "benchmarks": {
+          "type": "array",
+          "minItems": 5,
+          "maxItems": 5,
+          "items": { "$ref": "#/$defs/warpBenchmark" }
+        }
       }
-    }
-  },
-  "$defs": {
+    },
+    "warpBenchmark": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "operation",
+        "object_size_bytes",
+        "concurrency",
+        "duration_seconds",
+        "benchdata"
+      ],
+      "properties": {
+        "name": {
+          "enum": ["large-put", "large-get", "small-put", "small-get", "small-list"]
+        },
+        "operation": { "enum": ["PUT", "GET", "LIST"] },
+        "object_size_bytes": { "type": "integer", "minimum": 1 },
+        "concurrency": { "type": "integer", "minimum": 1 },
+        "duration_seconds": { "type": "integer", "minimum": 1 },
+        "benchdata": {
+          "type": "string",
+          "pattern": "^warp/(large-(put|get)|small-(put|get|list))\\.csv\\.zst$"
+        }
+      }
+    },
     "transferMeasurement": {
       "type": "object",
       "additionalProperties": false,
