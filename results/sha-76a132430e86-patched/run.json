@@ -1,5 +1,5 @@
 {
-  "finished_at": "2026-07-23T21:18:06.068198Z",
+  "finished_at": "2026-07-23T21:57:41.934636Z",
   "golden_id": "golden",
   "max_parallel": 1,
   "preparation_runner_commits": {
@@ -382,7 +382,7 @@
         "warmup_ms": 0
       }
     },
-    "idle": {
+    "sustained-ingest": {
       "build_profile": "release",
       "caches": {
         "block_bytes": 4294967296,
@@ -566,16 +566,18 @@
           "scan_interval": "3600s"
         },
         "object_store_max_retries": null,
-        "wal_enabled": true
+        "wal_enabled": false
       },
       "task": {
-        "clients": 0,
-        "initial_state": "golden",
-        "key_selection": "none",
-        "measurement_ms": 300000,
-        "operation_mix": {},
+        "clients": 64,
+        "initial_state": "empty",
+        "key_selection": "unique-sequential",
+        "measurement_ms": 1200000,
+        "operation_mix": {
+          "put": 1.0
+        },
         "scan_limit": null,
-        "task": "idle",
+        "task": "sustained-ingest",
         "transaction_hot_keys": null,
         "transaction_reads": null,
         "transaction_updates": null,
@@ -586,16 +588,16 @@
   "results": {
     "preparation/bulk-load/result.json": "4db5713f4435f924a776bce21f9c5585a8f0ac1529aa54a6a33c7c3098ac641d",
     "preparation/compaction/result.json": "e1cd05f9f7bea24b1bfb33e7f19b4718f13c37be7853bc1b30e9b1d78c911eda",
-    "workload/idle/result.json": "bdd80811de0cb1816af7564ed3a05c4d509221d2ed16adcc045b70db7bb9fd12",
-    "workload/idle/series.json": "b486704a505c0f51822a0bc0103282d12c00d667a892dc06c363a3dc3972110c"
+    "workload/sustained-ingest/result.json": "e295fae5995ce26dbb535649c3025a5b0dcf24c243c7bdefb87e5255f3952019",
+    "workload/sustained-ingest/series.json": "b62eacc2cc2c8176a4292294cd15789a58e8d8164df32d4f0305aa850025e025"
   },
   "source": {
     "lockfile_sha256": "23353a50b884e4433eb14b840b2b74aedd0eb983280948e188e8dc7143d64953",
-    "runner_commit": "f25c1ef45ea0c2684f7288b78553818790ba955e",
+    "runner_commit": "ef8d1e1f4087755f6c78e36f8a16e26f89de4ff5",
     "runner_version": "0.1.0",
     "slate_commit": "76a132430e86d02126c53fb1ac7dfa28e4f52814",
     "slate_version": "sha-76a132430e86-patched"
   },
-  "started_at": "2026-07-23T21:07:55Z",
+  "started_at": "2026-07-23T21:32:26Z",
   "status": "ok"
 }
