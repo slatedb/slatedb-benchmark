@@ -50,7 +50,8 @@
     },
     "resolved_configuration": {
       "type": "object",
-      "minProperties": 12,
+      "required": ["bulk-load", "compaction"],
+      "minProperties": 3,
       "maxProperties": 12,
       "propertyNames": {
         "enum": [
@@ -79,7 +80,11 @@
     },
     "results": {
       "type": "object",
-      "minProperties": 22,
+      "required": [
+        "preparation/bulk-load/result.json",
+        "preparation/compaction/result.json"
+      ],
+      "minProperties": 4,
       "maxProperties": 22,
       "propertyNames": {
         "pattern": "^(preparation/(bulk-load|compaction)/result|workload/(idle|point-read-uniform|point-read-skewed|point-read-missing|read-heavy|balanced|update-heavy|range-scan|sustained-ingest|transaction-contention)/(result|series))\\.json$"

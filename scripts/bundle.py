@@ -166,8 +166,27 @@ def write_json(path, value):
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def discover_workloads(directory):
+    if not directory.is_dir():
+        raise ValueError(f"{directory} does not contain workload results")
+    discovered = {
+        child.name
+        for child in directory.iterdir()
+        if child.is_dir() and (child / "result.json").is_file()
+    }
+    unknown = discovered.difference(WORKLOADS)
+    if unknown:
+        raise ValueError(f"{directory} contains unknown workloads: {', '.join(sorted(unknown))}")
+    tasks = [task for task in WORKLOADS if task in discovered]
+    if not tasks:
+        raise ValueError(f"{directory} does not contain any workload results")
+    return tasks
+
+
 def validate_source_identities(preparation, workloads):
-    source = workloads[WORKLOADS[0]]["source"]
+    if not workloads:
+        raise ValueError("no workload results were provided")
+    source = next(iter(workloads.values()))["source"]
     slate_commit = source["slate_commit"]
     runner_commit = source["runner_commit"]
     for task, result in workloads.items():
@@ -190,13 +209,14 @@ def main():
         task: read_result(args.input / "preparation" / task / "result.json", task, args.golden)
         for task in PREPARATION
     }
+    workload_tasks = discover_workloads(args.input / "workload")
     workloads = {
         task: read_result(args.input / "workload" / task / "result.json", task, args.golden)
-        for task in WORKLOADS
+        for task in workload_tasks
     }
     workload_series = {
         task: read_series(args.input / "workload" / task / "series.json", workloads[task])
-        for task in WORKLOADS
+        for task in workload_tasks
     }
 
     compaction = preparation["compaction"]
@@ -206,7 +226,8 @@ def main():
 
     source = validate_source_identities(preparation, workloads)
     version = source["slate_version"]
-    scale = workloads[WORKLOADS[0]]["configuration"]["scale"]
+    first_workload = next(iter(workloads.values()))
+    scale = first_workload["configuration"]["scale"]
     if not re.fullmatch(r"[A-Za-z0-9._-]{1,128}", version) or version in {".", ".."}:
         raise ValueError(f"invalid SlateDB version {version!r}")
     sessions = {result["session"] for result in workloads.values()}
@@ -234,7 +255,7 @@ def main():
     transfer_capacity = read_transfer_capacity(
         args.input / "transfer-capacity" / "result.json",
         scale,
-        workloads[WORKLOADS[0]]["environment"],
+        first_workload["environment"],
     )
 
     destination = args.output / version

@@ -66,14 +66,19 @@ fi
 mkdir -p .runs/release/results
 unzip -q "$artifact" -d .runs/release/results
 
-result_count=$(find .runs/release/results -name result.json -type f | wc -l | tr -d ' ')
-if [[ $result_count -ne 12 ]]; then
-  echo "expected 12 task results, found $result_count" >&2
+preparation_count=$(find .runs/release/results -path '*/preparation/*/result.json' -type f | wc -l | tr -d ' ')
+if [[ $preparation_count -ne 2 ]]; then
+  echo "expected 2 preparation results, found $preparation_count" >&2
+  exit 1
+fi
+workload_count=$(find .runs/release/results -path '*/workload/*/result.json' -type f | wc -l | tr -d ' ')
+if [[ $workload_count -lt 1 ]]; then
+  echo "expected at least 1 workload result, found $workload_count" >&2
   exit 1
 fi
 series_count=$(find .runs/release/results -name series.json -type f | wc -l | tr -d ' ')
-if [[ $series_count -ne 10 ]]; then
-  echo "expected 10 workload series, found $series_count" >&2
+if [[ $series_count -ne $workload_count ]]; then
+  echo "expected $workload_count workload series, found $series_count" >&2
   exit 1
 fi
 while IFS= read -r result; do

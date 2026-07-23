@@ -305,8 +305,13 @@ tasks at once. Act runs one task at a time because its jobs share the local
 checkout. `run.json` records the applied limit. Each workload writes to
 `sessions/<github.run_id>/<workload>/{series,result}.json`.
 
+The bundle discovers workload artifacts and accepts any nonempty subset of the
+known workload names. This lets focused runs use the same workflow without a
+second task list in the bundler. Unknown workload names and incomplete
+result/series pairs still fail validation.
+
 ```text
-new dispatch -> new github.run_id -> run every workload
+new dispatch -> new github.run_id -> run selected workloads
 rerun         -> same github.run_id -> skip completed workloads
 ```
 

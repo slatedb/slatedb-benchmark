@@ -313,71 +313,8 @@ jobs:
           if-no-files-found: error
           overwrite: true
 
-  sustained-ingest:
-    needs: [validate-golden, build, transfer-capacity]
-    runs-on: warp-ubuntu-latest-arm64-8x
-    timeout-minutes: 1440
-    environment: benchmark
-    strategy:
-      fail-fast: false
-      matrix:
-        task:
-          - sustained-ingest
-    concurrency:
-      group: session-${{ github.run_id }}-${{ matrix.task }}
-      cancel-in-progress: false
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: actions/download-artifact@v4
-        with:
-          name: benchmark-runner
-          path: bin
-      - run: chmod +x bin/slatedb-benchmark
-      - name: Run ${{ matrix.task }}
-        shell: bash
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
-          BENCHMARK_ACTIONS_JOB_ID: ${{ job.check_run_id }}
-          BENCHMARK_SCALE: ${{ inputs.scale }}
-          BENCHMARK_SESSION: github-${{ github.run_id }}
-          BENCHMARK_TASK: ${{ matrix.task }}
-          GOLDEN_ID: ${{ inputs.golden_id }}
-          SLATEDB_BENCH_BUCKET: ${{ vars.SLATEDB_BENCH_BUCKET }}
-          SLATEDB_BENCH_PUBLISHED: ${{ inputs.publish }}
-        run: |
-          set -euo pipefail
-          if [[ ${ACT:-false} != true ]]; then
-            export BENCHMARK_ACTIONS_LOG_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/job/$BENCHMARK_ACTIONS_JOB_ID"
-          fi
-          unset BENCHMARK_ACTIONS_JOB_ID
-          export CLOUD_PROVIDER=aws
-          export AWS_REGION=${AWS_REGION:-auto}
-          export AWS_ENDPOINT_URL_S3=${AWS_ENDPOINT_URL_S3:-https://t3.storage.dev}
-          export AWS_ENDPOINT_URL_IAM=${AWS_ENDPOINT_URL_IAM:-https://iam.storage.dev}
-          : "${SLATEDB_BENCH_BUCKET:?SLATEDB_BENCH_BUCKET is required}"
-          export SLATEDB_BENCH_PREFIX=${SLATEDB_BENCH_PREFIX:-benchmark}
-          export SLATEDB_BENCH_REGION=${SLATEDB_BENCH_REGION:-fra}
-          export SLATEDB_BENCH_RUNNER_TYPE=${SLATEDB_BENCH_RUNNER_TYPE:-warp-ubuntu-latest-arm64-8x}
-          bin/slatedb-benchmark run \
-            --task "$BENCHMARK_TASK" \
-            --golden "$GOLDEN_ID" \
-            --session "$BENCHMARK_SESSION" \
-            --scale "$BENCHMARK_SCALE" \
-            --output ".runs/workload/$BENCHMARK_TASK"
-      - name: Preserve workload result
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: workload-${{ matrix.task }}
-          path: .runs/workload
-          if-no-files-found: ignore
-          overwrite: true
-
   workloads:
-    needs: sustained-ingest
+    needs: [validate-golden, build, transfer-capacity]
     runs-on: warp-ubuntu-latest-arm64-8x
     timeout-minutes: 1440
     environment: benchmark
@@ -386,15 +323,16 @@ jobs:
       max-parallel: 4
       matrix:
         task:
-          - idle
-          - point-read-uniform
-          - point-read-skewed
-          - point-read-missing
-          - read-heavy
-          - balanced
-          - update-heavy
-          - range-scan
-          - transaction-contention
+          - sustained-ingest
+          # - idle
+          # - point-read-uniform
+          # - point-read-skewed
+          # - point-read-missing
+          # - read-heavy
+          # - balanced
+          # - update-heavy
+          # - range-scan
+          # - transaction-contention
     concurrency:
       group: session-${{ github.run_id }}-${{ matrix.task }}
       cancel-in-progress: false

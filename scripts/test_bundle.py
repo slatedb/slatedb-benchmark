@@ -31,6 +31,17 @@ class SourceIdentityTests(unittest.TestCase):
 
         self.assertEqual(source["slate_commit"], "measured-commit")
 
+    def test_accepts_a_single_workload(self):
+        workloads = {"sustained-ingest": self.workloads["sustained-ingest"]}
+
+        source = bundle.validate_source_identities(self.preparation, workloads)
+
+        self.assertEqual(source["slate_commit"], "measured-commit")
+
+    def test_rejects_no_workloads(self):
+        with self.assertRaisesRegex(ValueError, "no workload results"):
+            bundle.validate_source_identities(self.preparation, {})
+
     def test_rejects_mixed_workload_commits(self):
         self.workloads["balanced"] = result("other-commit", "benchmark-runner")
 
@@ -43,6 +54,34 @@ class SourceIdentityTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "golden-data SlateDB commit"):
             bundle.validate_source_identities(self.preparation, self.workloads)
 
+
+class WorkloadDiscoveryTests(unittest.TestCase):
+    def test_discovers_an_allowlisted_subset_in_canonical_order(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for task in ("sustained-ingest", "balanced"):
+                task_directory = root / task
+                task_directory.mkdir()
+                (task_directory / "result.json").write_text("{}", encoding="utf-8")
+
+            tasks = bundle.discover_workloads(root)
+
+        self.assertEqual(tasks, ["balanced", "sustained-ingest"])
+
+    def test_rejects_unknown_workloads(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            task_directory = root / "typo"
+            task_directory.mkdir()
+            (task_directory / "result.json").write_text("{}", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "unknown workloads: typo"):
+                bundle.discover_workloads(root)
+
+    def test_rejects_an_empty_workload_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(ValueError, "any workload results"):
+                bundle.discover_workloads(Path(directory))
 
 class TransferCapacityTests(unittest.TestCase):
     def setUp(self):
