@@ -195,8 +195,6 @@ jobs:
           fi
 
   transfer-capacity:
-    # Temporarily disabled.
-    if: ${{ false }}
     needs: validate-golden
     runs-on: codebuild-slatedb-benchmark-${{ github.run_id }}-${{ github.run_attempt }}
     timeout-minutes: 60
@@ -323,7 +321,7 @@ jobs:
           overwrite: true
 
   workloads:
-    needs: [validate-golden, build]
+    needs: [validate-golden, build, transfer-capacity]
     runs-on: codebuild-slatedb-benchmark-${{ github.run_id }}-${{ github.run_attempt }}
     timeout-minutes: 1440
     environment: benchmark
@@ -333,15 +331,15 @@ jobs:
       matrix:
         task:
           - sustained-ingest
-          # - idle
-          # - point-read-uniform
-          # - point-read-skewed
-          # - point-read-missing
-          # - read-heavy
-          # - balanced
-          # - update-heavy
-          # - range-scan
-          # - transaction-contention
+          - idle
+          - point-read-uniform
+          - point-read-skewed
+          - point-read-missing
+          - read-heavy
+          - balanced
+          - update-heavy
+          - range-scan
+          - transaction-contention
     concurrency:
       group: session-${{ github.run_id }}-${{ matrix.task }}
       cancel-in-progress: false
@@ -398,7 +396,7 @@ jobs:
           overwrite: true
 
   bundle:
-    needs: [validate-golden, workloads]
+    needs: [validate-golden, transfer-capacity, workloads]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -413,6 +411,10 @@ jobs:
           pattern: workload-*
           path: .runs/bundle/workload
           merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: transfer-capacity
+          path: .runs/bundle/transfer-capacity
       - name: Assemble release bundle
         env:
           BENCHMARK_STARTED_AT: ${{ needs.validate-golden.outputs.started_at }}
