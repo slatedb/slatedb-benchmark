@@ -27,6 +27,7 @@ on:
 permissions:
   actions: read
   contents: read
+  id-token: write
 
 concurrency:
   group: slatedb-benchmark-environment
@@ -52,22 +53,24 @@ jobs:
             --output /tmp/awscliv2.zip
           unzip -q /tmp/awscliv2.zip -d /tmp
           sudo /tmp/aws/install
+      - name: Configure AWS credentials
+        if: ${{ env.ACT != 'true' }}
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
       - name: Fetch preparation results
         shell: bash
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
-          AWS_REGION: auto
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
           GOLDEN_ID: ${{ inputs.golden_id }}
           SLATEDB_BENCH_BUCKET: ${{ vars.SLATEDB_BENCH_BUCKET }}
         run: |
           set -euo pipefail
-          endpoint=${AWS_ENDPOINT_URL_S3:-https://t3.storage.dev}
           bucket=${SLATEDB_BENCH_BUCKET:?SLATEDB_BENCH_BUCKET is required}
           prefix=${SLATEDB_BENCH_PREFIX:-benchmark}
           for task in bulk-load compaction; do
             mkdir -p ".runs/bundle/preparation/$task"
-            aws s3 cp --endpoint-url "$endpoint" --only-show-errors \
+            aws s3 cp --only-show-errors \
               "s3://$bucket/$prefix/goldens/$GOLDEN_ID/$task/result.json" \
               ".runs/bundle/preparation/$task/result.json"
           done
@@ -129,7 +132,7 @@ jobs:
 
   build:
     needs: validate-golden
-    runs-on: warp-ubuntu-latest-x64-8x
+    runs-on: codebuild-slatedb-benchmark-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -193,10 +196,11 @@ jobs:
 
   transfer-capacity:
     needs: validate-golden
-    runs-on: warp-ubuntu-latest-x64-8x
+    runs-on: codebuild-slatedb-benchmark-${{ github.run_id }}-${{ github.run_attempt }}
     timeout-minutes: 60
     environment: benchmark
     env:
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
       WARP_VERSION: v1.5.0
     steps:
       - uses: actions/checkout@v4
@@ -225,6 +229,12 @@ jobs:
             --output /tmp/awscliv2.zip
           unzip -q /tmp/awscliv2.zip -d /tmp
           sudo /tmp/aws/install
+      - name: Configure AWS credentials
+        if: ${{ env.ACT != 'true' }}
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
       - name: Install runner diagnostics
         shell: bash
         run: |
@@ -278,33 +288,30 @@ jobs:
           curl --fail --location --silent --show-error --max-time 10 \
             https://ipinfo.io/json || true
           echo
-          echo "Tigris DNS:"
-          getent ahosts t3.storage.dev || true
-          echo "Tigris connection:"
+          s3_host="s3.${AWS_REGION}.amazonaws.com"
+          echo "Amazon S3 DNS:"
+          getent ahosts "$s3_host" || true
+          echo "Amazon S3 connection:"
           curl --location --silent --show-error --max-time 20 \
             --output /dev/null \
             --write-out 'remote_ip=%{remote_ip} http_code=%{http_code} connect_seconds=%{time_connect} tls_seconds=%{time_appconnect} total_seconds=%{time_total}\n' \
-            https://t3.storage.dev || true
+            "https://$s3_host" || true
           echo "::endgroup::"
 
-          echo "::group::TCP traceroute to Tigris"
-          sudo traceroute -T -p 443 -m 20 -w 2 -q 1 t3.storage.dev || true
+          echo "::group::TCP traceroute to Amazon S3"
+          sudo traceroute -T -p 443 -m 20 -w 2 -q 1 "$s3_host" || true
           echo "::endgroup::"
-      - name: Measure Tigris transfer capacity
+      - name: Measure Amazon S3 transfer capacity
         shell: bash
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
-          AWS_REGION: auto
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
           BENCHMARK_SCALE: ${{ inputs.scale }}
           SLATEDB_BENCH_BUCKET: ${{ vars.SLATEDB_BENCH_BUCKET }}
         run: |
           set -euo pipefail
-          export AWS_ENDPOINT_URL_S3=${AWS_ENDPOINT_URL_S3:-https://t3.storage.dev}
           : "${SLATEDB_BENCH_BUCKET:?SLATEDB_BENCH_BUCKET is required}"
           export SLATEDB_BENCH_PREFIX=${SLATEDB_BENCH_PREFIX:-benchmark}
-          export SLATEDB_BENCH_REGION=${SLATEDB_BENCH_REGION:-fra}
-          export SLATEDB_BENCH_RUNNER_TYPE=${SLATEDB_BENCH_RUNNER_TYPE:-warp-ubuntu-latest-x64-8x}
+          export SLATEDB_BENCH_REGION=${SLATEDB_BENCH_REGION:-$AWS_REGION}
+          export SLATEDB_BENCH_RUNNER_TYPE=${SLATEDB_BENCH_RUNNER_TYPE:-codebuild-linux-xlarge}
           ./scripts/transfer-capacity.sh .runs/transfer-capacity/result.json
       - uses: actions/upload-artifact@v4
         with:
@@ -315,7 +322,7 @@ jobs:
 
   workloads:
     needs: [validate-golden, build, transfer-capacity]
-    runs-on: warp-ubuntu-latest-x64-8x
+    runs-on: codebuild-slatedb-benchmark-${{ github.run_id }}-${{ github.run_attempt }}
     timeout-minutes: 1440
     environment: benchmark
     strategy:
@@ -345,11 +352,15 @@ jobs:
           name: benchmark-runner
           path: bin
       - run: chmod +x bin/slatedb-benchmark
+      - name: Configure AWS credentials
+        if: ${{ env.ACT != 'true' }}
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
       - name: Run ${{ matrix.task }}
         shell: bash
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
           BENCHMARK_ACTIONS_JOB_ID: ${{ job.check_run_id }}
           BENCHMARK_SCALE: ${{ inputs.scale }}
           BENCHMARK_SESSION: github-${{ github.run_id }}
@@ -364,13 +375,11 @@ jobs:
           fi
           unset BENCHMARK_ACTIONS_JOB_ID
           export CLOUD_PROVIDER=aws
-          export AWS_REGION=${AWS_REGION:-auto}
-          export AWS_ENDPOINT_URL_S3=${AWS_ENDPOINT_URL_S3:-https://t3.storage.dev}
-          export AWS_ENDPOINT_URL_IAM=${AWS_ENDPOINT_URL_IAM:-https://iam.storage.dev}
+          export AWS_REGION=${AWS_REGION:-us-east-1}
           : "${SLATEDB_BENCH_BUCKET:?SLATEDB_BENCH_BUCKET is required}"
           export SLATEDB_BENCH_PREFIX=${SLATEDB_BENCH_PREFIX:-benchmark}
-          export SLATEDB_BENCH_REGION=${SLATEDB_BENCH_REGION:-fra}
-          export SLATEDB_BENCH_RUNNER_TYPE=${SLATEDB_BENCH_RUNNER_TYPE:-warp-ubuntu-latest-x64-8x}
+          export SLATEDB_BENCH_REGION=${SLATEDB_BENCH_REGION:-$AWS_REGION}
+          export SLATEDB_BENCH_RUNNER_TYPE=${SLATEDB_BENCH_RUNNER_TYPE:-codebuild-linux-xlarge}
           bin/slatedb-benchmark run \
             --task "$BENCHMARK_TASK" \
             --golden "$GOLDEN_ID" \
@@ -480,22 +489,24 @@ jobs:
             --output /tmp/awscliv2.zip
           unzip -q /tmp/awscliv2.zip -d /tmp
           sudo /tmp/aws/install
+      - name: Configure AWS credentials
+        if: ${{ env.ACT != 'true' }}
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
       - name: Delete benchmark session data
         shell: bash
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
-          AWS_REGION: auto
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
           SLATEDB_BENCH_BUCKET: ${{ vars.SLATEDB_BENCH_BUCKET }}
         run: |
           set -euo pipefail
-          endpoint=${AWS_ENDPOINT_URL_S3:-https://t3.storage.dev}
           bucket=${SLATEDB_BENCH_BUCKET:?SLATEDB_BENCH_BUCKET is required}
           prefix=${SLATEDB_BENCH_PREFIX:-benchmark}
           for task in \
             idle point-read-uniform point-read-skewed point-read-missing \
             read-heavy balanced update-heavy range-scan sustained-ingest \
             transaction-contention; do
-            aws s3 rm --endpoint-url "$endpoint" --only-show-errors --recursive \
+            aws s3 rm --only-show-errors --recursive \
               "s3://$bucket/$prefix/sessions/github-${{ github.run_id }}/$task/database/"
           done

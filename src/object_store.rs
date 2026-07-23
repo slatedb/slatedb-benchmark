@@ -69,7 +69,7 @@ impl ObjectStoreContext {
         let prefix = env::var("SLATEDB_BENCH_PREFIX").unwrap_or_else(|_| "manual".to_string());
         let region = env::var("SLATEDB_BENCH_REGION")
             .or_else(|_| env::var("AWS_REGION"))
-            .unwrap_or_else(|_| "fra".to_string());
+            .unwrap_or_else(|_| "us-east-1".to_string());
         let instrumented = Arc::new(InstrumentedStore::with_metrics(Arc::clone(&raw), metrics));
         Ok(Self {
             instrumented,

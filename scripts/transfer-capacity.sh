@@ -9,17 +9,21 @@ fi
 output=$1
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 scale=${BENCHMARK_SCALE:-1.0}
-endpoint=${AWS_ENDPOINT_URL_S3:-https://t3.storage.dev}
+aws_region=${AWS_REGION:-us-east-1}
+configured_endpoint=${AWS_ENDPOINT_URL_S3:-}
 bucket=${SLATEDB_BENCH_BUCKET:?SLATEDB_BENCH_BUCKET is required}
 root_prefix=${SLATEDB_BENCH_PREFIX:-benchmark}
-region=${SLATEDB_BENCH_REGION:-fra}
+region=${SLATEDB_BENCH_REGION:-$aws_region}
 runner_type=${SLATEDB_BENCH_RUNNER_TYPE:-unknown}
 object_store=${CLOUD_PROVIDER:-aws}
 warp_bin=${WARP_BIN:-warp}
 warp_version=${WARP_VERSION:-v1.5.0}
-if [[ $endpoint == "https://t3.storage.dev" || $endpoint == *tigris.dev* || \
-  $endpoint == *tigrisdata.com* ]]; then
-  object_store=Tigris
+if [[ -n $configured_endpoint ]]; then
+  endpoint=$configured_endpoint
+  warp_endpoint=$configured_endpoint
+else
+  endpoint="AWS default"
+  warp_endpoint="https://s3.${aws_region}.amazonaws.com"
 fi
 
 large_object_size=4194304
@@ -44,14 +48,14 @@ else
   small_duration=10
 fi
 
-case "$endpoint" in
+case "$warp_endpoint" in
   https://*)
     export WARP_TLS=true
-    warp_host=${endpoint#https://}
+    warp_host=${warp_endpoint#https://}
     ;;
   http://*)
     export WARP_TLS=false
-    warp_host=${endpoint#http://}
+    warp_host=${warp_endpoint#http://}
     ;;
   *)
     echo "AWS_ENDPOINT_URL_S3 must begin with http:// or https://" >&2
@@ -67,7 +71,7 @@ fi
 export WARP_HOST=$warp_host
 export WARP_ACCESS_KEY=${AWS_ACCESS_KEY_ID:?AWS_ACCESS_KEY_ID is required}
 export WARP_SECRET_KEY=${AWS_SECRET_ACCESS_KEY:?AWS_SECRET_ACCESS_KEY is required}
-export WARP_REGION=${AWS_REGION:-auto}
+export WARP_REGION=$aws_region
 if [[ -n ${AWS_SESSION_TOKEN:-} ]]; then
   export WARP_SESSION_TOKEN=$AWS_SESSION_TOKEN
 fi
@@ -85,7 +89,7 @@ mkdir -p "$artifact_dir"
 cleanup() {
   local status=$?
   trap - EXIT
-  aws s3 rm --endpoint-url "$endpoint" --only-show-errors --recursive \
+  aws s3 rm --only-show-errors --recursive \
     "s3://$bucket/$probe_prefix/" >/dev/null 2>&1 || \
     echo "warning: failed to clean up s3://$bucket/$probe_prefix/" >&2
   exit "$status"

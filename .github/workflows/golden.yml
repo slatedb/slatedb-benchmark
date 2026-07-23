@@ -21,6 +21,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 concurrency:
   group: slatedb-benchmark-environment
@@ -28,7 +29,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: warp-ubuntu-latest-x64-8x
+    runs-on: codebuild-slatedb-benchmark-${{ github.run_id }}-${{ github.run_attempt }}
     outputs:
       slate_version: ${{ steps.source.outputs.version }}
       slate_commit: ${{ steps.source.outputs.commit }}
@@ -88,7 +89,7 @@ jobs:
 
   bulk-load:
     needs: build
-    runs-on: warp-ubuntu-latest-x64-8x
+    runs-on: codebuild-slatedb-benchmark-${{ github.run_id }}-${{ github.run_attempt }}
     timeout-minutes: 1440
     environment: benchmark
     concurrency:
@@ -103,24 +104,26 @@ jobs:
           name: benchmark-runner
           path: bin
       - run: chmod +x bin/slatedb-benchmark
+      - name: Configure AWS credentials
+        if: ${{ env.ACT != 'true' }}
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
       - name: Run bulk load
         shell: bash
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
           BENCHMARK_SCALE: ${{ inputs.scale }}
           GOLDEN_ID: ${{ inputs.golden_id }}
           SLATEDB_BENCH_BUCKET: ${{ vars.SLATEDB_BENCH_BUCKET }}
         run: |
           set -euo pipefail
           export CLOUD_PROVIDER=aws
-          export AWS_REGION=${AWS_REGION:-auto}
-          export AWS_ENDPOINT_URL_S3=${AWS_ENDPOINT_URL_S3:-https://t3.storage.dev}
-          export AWS_ENDPOINT_URL_IAM=${AWS_ENDPOINT_URL_IAM:-https://iam.storage.dev}
+          export AWS_REGION=${AWS_REGION:-us-east-1}
           : "${SLATEDB_BENCH_BUCKET:?SLATEDB_BENCH_BUCKET is required}"
           export SLATEDB_BENCH_PREFIX=${SLATEDB_BENCH_PREFIX:-benchmark}
-          export SLATEDB_BENCH_REGION=${SLATEDB_BENCH_REGION:-fra}
-          export SLATEDB_BENCH_RUNNER_TYPE=${SLATEDB_BENCH_RUNNER_TYPE:-warp-ubuntu-latest-x64-8x}
+          export SLATEDB_BENCH_REGION=${SLATEDB_BENCH_REGION:-$AWS_REGION}
+          export SLATEDB_BENCH_RUNNER_TYPE=${SLATEDB_BENCH_RUNNER_TYPE:-codebuild-linux-xlarge}
           bin/slatedb-benchmark run \
             --task bulk-load \
             --golden "$GOLDEN_ID" \
@@ -137,7 +140,7 @@ jobs:
 
   compaction:
     needs: [build, bulk-load]
-    runs-on: warp-ubuntu-latest-x64-8x
+    runs-on: codebuild-slatedb-benchmark-${{ github.run_id }}-${{ github.run_attempt }}
     timeout-minutes: 1440
     environment: benchmark
     concurrency:
@@ -152,24 +155,26 @@ jobs:
           name: benchmark-runner
           path: bin
       - run: chmod +x bin/slatedb-benchmark
+      - name: Configure AWS credentials
+        if: ${{ env.ACT != 'true' }}
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
       - name: Run compaction
         shell: bash
         env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
           BENCHMARK_SCALE: ${{ inputs.scale }}
           GOLDEN_ID: ${{ inputs.golden_id }}
           SLATEDB_BENCH_BUCKET: ${{ vars.SLATEDB_BENCH_BUCKET }}
         run: |
           set -euo pipefail
           export CLOUD_PROVIDER=aws
-          export AWS_REGION=${AWS_REGION:-auto}
-          export AWS_ENDPOINT_URL_S3=${AWS_ENDPOINT_URL_S3:-https://t3.storage.dev}
-          export AWS_ENDPOINT_URL_IAM=${AWS_ENDPOINT_URL_IAM:-https://iam.storage.dev}
+          export AWS_REGION=${AWS_REGION:-us-east-1}
           : "${SLATEDB_BENCH_BUCKET:?SLATEDB_BENCH_BUCKET is required}"
           export SLATEDB_BENCH_PREFIX=${SLATEDB_BENCH_PREFIX:-benchmark}
-          export SLATEDB_BENCH_REGION=${SLATEDB_BENCH_REGION:-fra}
-          export SLATEDB_BENCH_RUNNER_TYPE=${SLATEDB_BENCH_RUNNER_TYPE:-warp-ubuntu-latest-x64-8x}
+          export SLATEDB_BENCH_REGION=${SLATEDB_BENCH_REGION:-$AWS_REGION}
+          export SLATEDB_BENCH_RUNNER_TYPE=${SLATEDB_BENCH_RUNNER_TYPE:-codebuild-linux-xlarge}
           bin/slatedb-benchmark run \
             --task compaction \
             --golden "$GOLDEN_ID" \

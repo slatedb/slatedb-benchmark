@@ -276,8 +276,8 @@ database prefix. Retrying compaction preserves the bulk-load checkpoint and
 replaces only the incomplete clone.
 
 The compaction job has a 24-hour GitHub timeout and no shorter runner
-deadline. The workflow leaves both checkpoints in Tigris. Use a new golden ID
-after changing the SlateDB commit or preparation configuration.
+deadline. The workflow leaves both checkpoints in Amazon S3. Use a new golden
+ID after changing the SlateDB commit or preparation configuration.
 
 ### `benchmark.yml`
 
@@ -285,13 +285,13 @@ after changing the SlateDB commit or preparation configuration.
 | --- | --- |
 | `validate-golden` | Verify and upload both preparation results |
 | `build` | Resolve the requested SlateDB ref and build the runner against it |
-| `transfer-capacity` | Record diagnostic Tigris throughput and request latency |
+| `transfer-capacity` | Record diagnostic Amazon S3 throughput and request latency |
 | `workloads` | Run the workload matrix |
 | `bundle` | Assemble and checksum all run results |
 | `publish` | Commit results when the `publish` input is `true` |
 | `cleanup` | Delete workload database clones after outputs are collected |
 
-The transfer probe runs on the published WarpBuild machine type alongside the
+The transfer probe runs on the published CodeBuild machine type alongside the
 build. MinIO Warp measures 4 MiB PUT and GET throughput at concurrency 64, then
 4 KiB PUT, GET, and LIST latency at concurrency 1. Workloads wait for the
 probe, so its traffic never overlaps their measurements. Scaled local runs
@@ -299,9 +299,9 @@ shorten each measurement. Warp's per-request data remains in the workflow
 artifact, and `run.json` includes accurate request and TTFB average, p50, p90,
 p99, minimum, and maximum latency for each probe. The probe is diagnostic data
 and is not rendered on workload pages. Its log also includes host, CPU, memory,
-disk, public egress, DNS, routing, and a TCP traceroute to Tigris.
+disk, public egress, DNS, routing, and a TCP traceroute to Amazon S3.
 
-The workload matrix uses one WarpBuild machine per task and runs up to four
+The workload matrix uses one CodeBuild machine per task and runs up to four
 tasks at once. Act runs one task at a time because its jobs share the local
 checkout. `run.json` records the applied limit. Each workload writes to
 `sessions/<github.run_id>/<workload>/{series,result}.json`.
@@ -328,7 +328,7 @@ completion markers and never deletes golden data.
 
 ### Credentials
 
-| Jobs | Repository | Tigris |
+| Jobs | Repository | Amazon S3 |
 | --- | --- | --- |
 | `build` | Read | None |
 | Preparation jobs | Read | Read and write |
@@ -340,9 +340,14 @@ completion markers and never deletes golden data.
 | `cleanup` | None | Read and write |
 | Pages | Read | None |
 
-Tigris credentials exist only on steps that need them. The publisher uses a
-fresh checkout. Website installation runs `npm ci --ignore-scripts` without
-benchmark credentials.
+Jobs that access S3 assume a scoped AWS role through GitHub OIDC. The
+publisher uses a fresh checkout. Website installation runs
+`npm ci --ignore-scripts` without benchmark credentials.
+
+The `benchmark` GitHub environment defines `AWS_ROLE_ARN`,
+`AWS_REGION=us-east-1`, and `SLATEDB_BENCH_BUCKET`. AWS CodeBuild has a
+GitHub Actions runner project named `slatedb-benchmark` with Linux XLarge as
+its default compute type.
 
 ## Results and validation
 
@@ -360,7 +365,7 @@ results/<version>/
 
 `run.json` records the golden ID, measured SlateDB source, preparation and
 benchmark runner commits, resolved configuration, matrix concurrency,
-diagnostic Tigris bandwidth, and result checksums. Preparation results record
+diagnostic Amazon S3 bandwidth, and result checksums. Preparation results record
 the SlateDB source that created the golden data. Workload results record the
 independently selected SlateDB source being measured. Both result types contain
 the environment and metric summaries defined in
@@ -382,10 +387,10 @@ paths, or session tokens.
 ## Smoke tests and fixtures
 
 `act` runs the GitHub workflows locally. The repository `.actrc` supplies the
-WarpBuild label mapping and artifact server:
+CodeBuild label mapping and artifact server:
 
 ```text
--P warp-ubuntu-latest-x64-8x=catthehacker/ubuntu:act-latest
+-P codebuild-slatedb-benchmark-1-1=catthehacker/ubuntu:act-latest
 -P ubuntu-latest=catthehacker/ubuntu:act-latest
 --container-architecture=linux/amd64
 --container-options=--add-host=host.docker.internal:host-gateway

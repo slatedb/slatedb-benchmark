@@ -81,6 +81,9 @@ class WarpLatencyTests(unittest.TestCase):
         self.assertIn('--analyze.op="$operation" "$raw"', script)
         self.assertIn('local raw="$base.csv.zst"', script)
         self.assertIn("    --full\n", script)
+        self.assertIn('configured_endpoint=${AWS_ENDPOINT_URL_S3:-}', script)
+        self.assertIn('endpoint="AWS default"', script)
+        self.assertNotIn("t3.storage.dev", script)
 
 
 if __name__ == "__main__":

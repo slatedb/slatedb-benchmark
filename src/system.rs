@@ -1111,12 +1111,6 @@ fn summarize_values(mut values: Vec<f64>) -> DistributionSummary {
     }
 }
 
-fn is_tigris_endpoint(endpoint: &str) -> bool {
-    endpoint.contains("tigrisdata.com")
-        || endpoint.contains("tigris.dev")
-        || endpoint == "https://t3.storage.dev"
-}
-
 pub fn inspect_environment(provider: &str, endpoint: &str, region: &str) -> Environment {
     let mut system = System::new_all();
     system.refresh_all();
@@ -1153,11 +1147,7 @@ pub fn inspect_environment(provider: &str, endpoint: &str, region: &str) -> Envi
             System::os_version().unwrap_or_else(|| "unknown".to_string())
         ),
         kernel: System::kernel_version().unwrap_or_else(|| "unknown".to_string()),
-        object_store: if provider.eq_ignore_ascii_case("aws") && is_tigris_endpoint(endpoint) {
-            "Tigris".to_string()
-        } else {
-            provider.to_string()
-        },
+        object_store: provider.to_string(),
         endpoint: endpoint.to_string(),
         region: region.to_string(),
     }
@@ -1165,25 +1155,28 @@ pub fn inspect_environment(provider: &str, endpoint: &str, region: &str) -> Envi
 
 pub fn verify_environment(environment: &Environment) -> Result<()> {
     anyhow::ensure!(
-        environment.runner_type == "warp-ubuntu-latest-x64-8x",
-        "published runs require warp-ubuntu-latest-x64-8x"
-    );
-    anyhow::ensure!(environment.cpu_cores == 8, "published runs require 8 CPUs");
-    anyhow::ensure!(
-        environment.ram_bytes >= 30 * 1024 * 1024 * 1024,
-        "published runs require at least 30 GiB RAM"
+        environment.runner_type == "codebuild-linux-xlarge",
+        "published runs require codebuild-linux-xlarge"
     );
     anyhow::ensure!(
-        environment.object_store == "Tigris",
-        "published runs require Tigris"
+        environment.cpu_cores == 36,
+        "published runs require 36 CPUs"
     );
     anyhow::ensure!(
-        environment.endpoint == "https://t3.storage.dev",
-        "published runs require https://t3.storage.dev"
+        environment.ram_bytes >= 68 * 1024 * 1024 * 1024,
+        "published runs require at least 68 GiB RAM"
     );
     anyhow::ensure!(
-        environment.region == "fra",
-        "published runs require region fra"
+        environment.object_store == "aws",
+        "published runs require Amazon S3"
+    );
+    anyhow::ensure!(
+        environment.endpoint == "AWS default",
+        "published runs require the default AWS endpoint"
+    );
+    anyhow::ensure!(
+        environment.region == "us-east-1",
+        "published runs require region us-east-1"
     );
     Ok(())
 }
@@ -1345,14 +1338,33 @@ pub fn counter_value(metrics: &Metrics, name: &str) -> u64 {
 mod tests {
     use super::{
         format_slate_metrics, sample_until_stopped, sample_until_stopped_with_rate_control,
-        summarize_values, ApplicationRegistry, BenchmarkMetricsRecorder, RateWindowControl,
-        SlateMetricsReporter,
+        summarize_values, verify_environment, ApplicationRegistry, BenchmarkMetricsRecorder,
+        RateWindowControl, SlateMetricsReporter,
     };
     use crate::instrumented_store::{HttpMethod, StoreMetrics};
+    use crate::model::Environment;
     use slatedb_common::metrics::MetricsRecorder;
     use std::sync::Arc;
     use std::time::Duration;
     use tokio::sync::{oneshot, watch};
+
+    #[test]
+    fn published_environment_requires_codebuild_and_s3() {
+        let environment = Environment {
+            runner_type: "codebuild-linux-xlarge".to_string(),
+            cpu_cores: 36,
+            ram_bytes: 72 * 1024 * 1024 * 1024,
+            object_store: "aws".to_string(),
+            endpoint: "AWS default".to_string(),
+            region: "us-east-1".to_string(),
+            ..Environment::default()
+        };
+        verify_environment(&environment).expect("valid published environment");
+
+        let mut wrong_endpoint = environment;
+        wrong_endpoint.endpoint = "https://example.com".to_string();
+        assert!(verify_environment(&wrong_endpoint).is_err());
+    }
 
     #[test]
     fn distribution_contains_the_published_columns() {

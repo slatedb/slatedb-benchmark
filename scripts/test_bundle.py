@@ -87,9 +87,9 @@ class TransferCapacityTests(unittest.TestCase):
     def setUp(self):
         self.environment = {
             "runner_type": "test-runner",
-            "object_store": "Tigris",
-            "endpoint": "https://t3.storage.dev",
-            "region": "fra",
+            "object_store": "aws",
+            "endpoint": "AWS default",
+            "region": "us-east-1",
         }
         self.result = self.warp_result()
 
