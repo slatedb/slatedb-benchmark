@@ -52,6 +52,13 @@ const flatten = (
     value: formatted,
     nonDefault: compareWithDefault && !equal(value, defaultValue),
   });
+  if (
+    value == null
+    && current.join('.') === 'object_store_cache_options.root_folder'
+    && runnerConfiguration.caches.object_store_bytes > 0
+  ) {
+    return [{ path: current, value: '<tmp dir>', nonDefault: true }];
+  }
   if (value === null || value === undefined) return [row('—')];
   if (Array.isArray(value)) return [row(value.join(', ') || '—')];
   if (isRecord(value)) {
