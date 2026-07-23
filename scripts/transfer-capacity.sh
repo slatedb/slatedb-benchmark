@@ -41,7 +41,7 @@ if ! jq -en --argjson scale "$scale" \
   exit 2
 fi
 if [[ $scale == 1 || $scale == 1.0 ]]; then
-  large_duration=60
+  large_duration=30
   small_duration=30
 else
   large_duration=10
