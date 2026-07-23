@@ -94,6 +94,25 @@ class TransferCapacityTests(unittest.TestCase):
         self.result = self.warp_result()
 
     def warp_result(self):
+        latency = {
+            "request": {
+                "average": 2.1,
+                "p50": 2.0,
+                "p90": 3.0,
+                "p99": 4.0,
+                "min": 1.0,
+                "max": 5.0,
+            },
+            "ttfb": {
+                "average": 1.1,
+                "p50": 1.0,
+                "p90": 2.0,
+                "p99": 3.0,
+                "min": 0.5,
+                "max": 4.0,
+            },
+        }
+
         def benchmark(name, operation, size, concurrency, duration):
             return {
                 "name": name,
@@ -101,11 +120,12 @@ class TransferCapacityTests(unittest.TestCase):
                 "object_size_bytes": size,
                 "concurrency": concurrency,
                 "duration_seconds": duration,
-                "benchdata": f"warp/{name}.csv.zst",
+                "latency_ms": latency,
+                "benchdata": f"warp/{name}.json.zst",
             }
 
         return {
-            "version": 2,
+            "version": 3,
             "status": "ok",
             "scale": 1.0,
             **self.environment,
@@ -148,6 +168,14 @@ class TransferCapacityTests(unittest.TestCase):
     def test_accepts_self_describing_probe_configuration(self):
         self.assertEqual(self.read(), self.result)
 
+    def test_accepts_warp_v2_without_latency(self):
+        self.result["version"] = 2
+        for benchmark in self.result["benchmarks"]:
+            del benchmark["latency_ms"]
+            benchmark["benchdata"] = f"warp/{benchmark['name']}.csv.zst"
+
+        self.assertEqual(self.read(), self.result)
+
     def test_accepts_legacy_transfer_capacity(self):
         self.result = self.legacy_result()
 
@@ -163,6 +191,18 @@ class TransferCapacityTests(unittest.TestCase):
         self.result["benchmarks"][4]["benchdata"] = "other.csv.zst"
 
         with self.assertRaisesRegex(ValueError, "invalid small-list benchmark data"):
+            self.read()
+
+    def test_rejects_missing_warp_v3_latency(self):
+        del self.result["benchmarks"][0]["latency_ms"]
+
+        with self.assertRaisesRegex(ValueError, "no large-put latency"):
+            self.read()
+
+    def test_rejects_unordered_warp_latency(self):
+        self.result["benchmarks"][0]["latency_ms"]["request"]["p99"] = 6.0
+
+        with self.assertRaisesRegex(ValueError, "unordered large-put request latency"):
             self.read()
 
 

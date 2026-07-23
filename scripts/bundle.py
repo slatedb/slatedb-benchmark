@@ -88,7 +88,7 @@ def read_transfer_capacity(path, scale, environment):
     for field in ("runner_type", "object_store", "endpoint", "region"):
         if result.get(field) != environment[field]:
             raise ValueError(f"{path} used a different {field.replace('_', ' ')}")
-    if result.get("version") == 2:
+    if result.get("version") in (2, 3):
         validate_warp_transfer_capacity(path, result)
         return result
     validate_legacy_transfer_capacity(path, result)
@@ -157,8 +157,42 @@ def validate_warp_transfer_capacity(path, result):
             value = benchmark.get(field)
             if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
                 raise ValueError(f"{path} has invalid {name} {field.replace('_', ' ')}")
-        if benchmark.get("benchdata") != f"warp/{name}.csv.zst":
+        latency = benchmark.get("latency_ms")
+        if result["version"] == 3 and latency is None:
+            raise ValueError(f"{path} has no {name} latency")
+        if latency is not None:
+            validate_warp_latency(path, name, latency)
+        extension = "json.zst" if result["version"] == 3 else "csv.zst"
+        if benchmark.get("benchdata") != f"warp/{name}.{extension}":
             raise ValueError(f"{path} has invalid {name} benchmark data")
+
+
+def validate_warp_latency(path, name, latency):
+    if not isinstance(latency, dict) or set(latency) not in (
+        {"request"},
+        {"request", "ttfb"},
+    ):
+        raise ValueError(f"{path} has invalid {name} latency")
+    fields = {"average", "p50", "p90", "p99", "min", "max"}
+    for kind, summary in latency.items():
+        if not isinstance(summary, dict) or set(summary) != fields:
+            raise ValueError(f"{path} has invalid {name} {kind} latency")
+        for field, value in summary.items():
+            if (
+                not isinstance(value, (int, float))
+                or isinstance(value, bool)
+                or not math.isfinite(value)
+                or value < 0
+            ):
+                raise ValueError(f"{path} has invalid {name} {kind} {field} latency")
+        if not (
+            summary["min"]
+            <= summary["p50"]
+            <= summary["p90"]
+            <= summary["p99"]
+            <= summary["max"]
+        ):
+            raise ValueError(f"{path} has unordered {name} {kind} latency")
 
 
 def write_json(path, value):

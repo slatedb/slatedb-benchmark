@@ -135,6 +135,16 @@
     "warpTransferCapacity": {
       "type": "object",
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": { "properties": { "version": { "const": 3 } } },
+          "then": {
+            "properties": {
+              "benchmarks": { "items": { "required": ["latency_ms"] } }
+            }
+          }
+        }
+      ],
       "required": [
         "version",
         "status",
@@ -148,7 +158,7 @@
         "benchmarks"
       ],
       "properties": {
-        "version": { "const": 2 },
+        "version": { "enum": [2, 3] },
         "status": { "const": "ok" },
         "timestamp": { "type": "string", "format": "date-time" },
         "scale": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
@@ -192,10 +202,33 @@
         "object_size_bytes": { "type": "integer", "minimum": 1 },
         "concurrency": { "type": "integer", "minimum": 1 },
         "duration_seconds": { "type": "integer", "minimum": 1 },
+        "latency_ms": { "$ref": "#/$defs/warpLatency" },
         "benchdata": {
           "type": "string",
-          "pattern": "^warp/(large-(put|get)|small-(put|get|list))\\.csv\\.zst$"
+          "pattern": "^warp/(large-(put|get)|small-(put|get|list))\\.(csv|json)\\.zst$"
         }
+      }
+    },
+    "warpLatency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["request"],
+      "properties": {
+        "request": { "$ref": "#/$defs/warpLatencySummary" },
+        "ttfb": { "$ref": "#/$defs/warpLatencySummary" }
+      }
+    },
+    "warpLatencySummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["average", "p50", "p90", "p99", "min", "max"],
+      "properties": {
+        "average": { "type": "number", "minimum": 0 },
+        "p50": { "type": "number", "minimum": 0 },
+        "p90": { "type": "number", "minimum": 0 },
+        "p99": { "type": "number", "minimum": 0 },
+        "min": { "type": "number", "minimum": 0 },
+        "max": { "type": "number", "minimum": 0 }
       }
     },
     "transferMeasurement": {

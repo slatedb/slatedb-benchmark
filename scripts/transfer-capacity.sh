@@ -7,6 +7,7 @@ if [[ $# -ne 1 ]]; then
 fi
 
 output=$1
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 scale=${BENCHMARK_SCALE:-1.0}
 endpoint=${AWS_ENDPOINT_URL_S3:-https://t3.storage.dev}
 bucket=${SLATEDB_BENCH_BUCKET:?SLATEDB_BENCH_BUCKET is required}
@@ -91,6 +92,14 @@ cleanup() {
 }
 trap cleanup EXIT
 
+analyze_warp_benchmark() {
+  local raw=$1
+  local analysis=$2
+
+  "$warp_bin" analyze --json --no-color "$raw" |
+    jq -e -f "$script_dir/warp-latency.jq" >"$analysis"
+}
+
 run_warp_benchmark() {
   local name=$1
   local concurrency=$2
@@ -98,7 +107,8 @@ run_warp_benchmark() {
   local command=$4
   shift 4
   local base="$artifact_dir/$name"
-  local raw="$base.csv.zst"
+  local raw="$base.json.zst"
+  local analysis="$base.analysis.json"
   local attempt
   local -a warp_command=(
     "$warp_bin" "$command"
@@ -113,13 +123,17 @@ run_warp_benchmark() {
   )
 
   for ((attempt = 1; attempt <= attempts; attempt++)); do
-    rm -f "$raw"
+    rm -f "$raw" "$analysis"
     echo "Running Warp $name benchmark (attempt $attempt/$attempts)"
     printf 'Command:'
     printf ' %q' "${warp_command[@]}"
     printf '\n'
     if "${warp_command[@]}" && [[ -s $raw ]]; then
-      return 0
+      if analyze_warp_benchmark "$raw" "$analysis"; then
+        return 0
+      fi
+      echo "Warp $name analysis failed" >&2
+      return 1
     fi
     if ((attempt == attempts)); then
       echo "Warp $name benchmark failed after $attempts attempts" >&2
@@ -176,8 +190,13 @@ jq -n \
   --argjson small_object_size "$small_object_size" \
   --argjson small_concurrency "$small_concurrency" \
   --argjson small_duration "$small_duration" \
+  --slurpfile large_put_latency "$artifact_dir/large-put.analysis.json" \
+  --slurpfile large_get_latency "$artifact_dir/large-get.analysis.json" \
+  --slurpfile small_put_latency "$artifact_dir/small-put.analysis.json" \
+  --slurpfile small_get_latency "$artifact_dir/small-get.analysis.json" \
+  --slurpfile small_list_latency "$artifact_dir/small-list.analysis.json" \
   '{
-    version: 2,
+    version: 3,
     status: "ok",
     timestamp: $timestamp,
     scale: $scale,
@@ -192,35 +211,40 @@ jq -n \
         object_size_bytes: $large_object_size,
         concurrency: $large_concurrency,
         duration_seconds: $large_duration,
-        benchdata: "warp/large-put.csv.zst"
+        latency_ms: $large_put_latency[0],
+        benchdata: "warp/large-put.json.zst"
       },
       {
         name: "large-get", operation: "GET",
         object_size_bytes: $large_object_size,
         concurrency: $large_concurrency,
         duration_seconds: $large_duration,
-        benchdata: "warp/large-get.csv.zst"
+        latency_ms: $large_get_latency[0],
+        benchdata: "warp/large-get.json.zst"
       },
       {
         name: "small-put", operation: "PUT",
         object_size_bytes: $small_object_size,
         concurrency: $small_concurrency,
         duration_seconds: $small_duration,
-        benchdata: "warp/small-put.csv.zst"
+        latency_ms: $small_put_latency[0],
+        benchdata: "warp/small-put.json.zst"
       },
       {
         name: "small-get", operation: "GET",
         object_size_bytes: $small_object_size,
         concurrency: $small_concurrency,
         duration_seconds: $small_duration,
-        benchdata: "warp/small-get.csv.zst"
+        latency_ms: $small_get_latency[0],
+        benchdata: "warp/small-get.json.zst"
       },
       {
         name: "small-list", operation: "LIST",
         object_size_bytes: $small_object_size,
         concurrency: $small_concurrency,
         duration_seconds: $small_duration,
-        benchdata: "warp/small-list.csv.zst"
+        latency_ms: $small_list_latency[0],
+        benchdata: "warp/small-list.json.zst"
       }
     ]
   }' >"$output"
