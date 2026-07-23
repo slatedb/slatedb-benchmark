@@ -285,10 +285,15 @@ def main():
         if result["configuration"]["scale"] != scale:
             raise ValueError(f"{task} used a different scale")
 
-    transfer_capacity = read_transfer_capacity(
-        args.input / "transfer-capacity" / "result.json",
-        scale,
-        first_workload["environment"],
+    transfer_capacity_path = args.input / "transfer-capacity" / "result.json"
+    transfer_capacity = (
+        read_transfer_capacity(
+            transfer_capacity_path,
+            scale,
+            first_workload["environment"],
+        )
+        if transfer_capacity_path.is_file()
+        else None
     )
 
     destination = args.output / version
@@ -321,9 +326,10 @@ def main():
         },
         "resolved_configuration": configurations,
         "max_parallel": len(workloads),
-        "transfer_capacity": transfer_capacity,
         "results": checksums,
     }
+    if transfer_capacity is not None:
+        manifest["transfer_capacity"] = transfer_capacity
     write_json(destination / "run.json", manifest)
     print(destination)
 
