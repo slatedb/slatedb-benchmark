@@ -100,19 +100,25 @@ run_warp_benchmark() {
   local base="$artifact_dir/$name"
   local raw="$base.csv.zst"
   local attempt
+  local -a warp_command=(
+    "$warp_bin" "$command"
+    --bucket="$bucket"
+    --concurrent="$concurrency"
+    --duration="${duration}s"
+    --benchdata="$base"
+    --analyze.v
+    --no-color
+    --noclear
+    "$@"
+  )
 
   for ((attempt = 1; attempt <= attempts; attempt++)); do
     rm -f "$raw"
     echo "Running Warp $name benchmark (attempt $attempt/$attempts)"
-    if "$warp_bin" "$command" \
-      --bucket="$bucket" \
-      --concurrent="$concurrency" \
-      --duration="${duration}s" \
-      --benchdata="$base" \
-      --analyze.v \
-      --no-color \
-      --noclear \
-      "$@" && [[ -s $raw ]]; then
+    printf 'Command:'
+    printf ' %q' "${warp_command[@]}"
+    printf '\n'
+    if "${warp_command[@]}" && [[ -s $raw ]]; then
       return 0
     fi
     if ((attempt == attempts)); then
