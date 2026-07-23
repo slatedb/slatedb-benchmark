@@ -95,8 +95,10 @@ trap cleanup EXIT
 analyze_warp_benchmark() {
   local raw=$1
   local analysis=$2
+  local operation=$3
 
-  "$warp_bin" analyze --json --no-color "$raw" |
+  "$warp_bin" analyze --json --full --no-color \
+    --analyze.op="$operation" "$raw" |
     jq -e -f "$script_dir/warp-latency.jq" >"$analysis"
 }
 
@@ -107,7 +109,7 @@ run_warp_benchmark() {
   local command=$4
   shift 4
   local base="$artifact_dir/$name"
-  local raw="$base.json.zst"
+  local raw="$base.csv.zst"
   local analysis="$base.analysis.json"
   local attempt
   local -a warp_command=(
@@ -117,6 +119,7 @@ run_warp_benchmark() {
     --duration="${duration}s"
     --benchdata="$base"
     --analyze.v
+    --full
     --no-color
     --noclear
     "$@"
@@ -129,7 +132,7 @@ run_warp_benchmark() {
     printf ' %q' "${warp_command[@]}"
     printf '\n'
     if "${warp_command[@]}" && [[ -s $raw ]]; then
-      if analyze_warp_benchmark "$raw" "$analysis"; then
+      if analyze_warp_benchmark "$raw" "$analysis" "$command"; then
         return 0
       fi
       echo "Warp $name analysis failed" >&2
@@ -212,7 +215,7 @@ jq -n \
         concurrency: $large_concurrency,
         duration_seconds: $large_duration,
         latency_ms: $large_put_latency[0],
-        benchdata: "warp/large-put.json.zst"
+        benchdata: "warp/large-put.csv.zst"
       },
       {
         name: "large-get", operation: "GET",
@@ -220,7 +223,7 @@ jq -n \
         concurrency: $large_concurrency,
         duration_seconds: $large_duration,
         latency_ms: $large_get_latency[0],
-        benchdata: "warp/large-get.json.zst"
+        benchdata: "warp/large-get.csv.zst"
       },
       {
         name: "small-put", operation: "PUT",
@@ -228,7 +231,7 @@ jq -n \
         concurrency: $small_concurrency,
         duration_seconds: $small_duration,
         latency_ms: $small_put_latency[0],
-        benchdata: "warp/small-put.json.zst"
+        benchdata: "warp/small-put.csv.zst"
       },
       {
         name: "small-get", operation: "GET",
@@ -236,7 +239,7 @@ jq -n \
         concurrency: $small_concurrency,
         duration_seconds: $small_duration,
         latency_ms: $small_get_latency[0],
-        benchdata: "warp/small-get.json.zst"
+        benchdata: "warp/small-get.csv.zst"
       },
       {
         name: "small-list", operation: "LIST",
@@ -244,7 +247,7 @@ jq -n \
         concurrency: $small_concurrency,
         duration_seconds: $small_duration,
         latency_ms: $small_list_latency[0],
-        benchdata: "warp/small-list.json.zst"
+        benchdata: "warp/small-list.csv.zst"
       }
     ]
   }' >"$output"

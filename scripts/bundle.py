@@ -162,8 +162,7 @@ def validate_warp_transfer_capacity(path, result):
             raise ValueError(f"{path} has no {name} latency")
         if latency is not None:
             validate_warp_latency(path, name, latency)
-        extension = "json.zst" if result["version"] == 3 else "csv.zst"
-        if benchmark.get("benchdata") != f"warp/{name}.{extension}":
+        if benchmark.get("benchdata") != f"warp/{name}.csv.zst":
             raise ValueError(f"{path} has invalid {name} benchmark data")
 
 

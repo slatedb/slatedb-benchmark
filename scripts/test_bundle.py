@@ -121,7 +121,7 @@ class TransferCapacityTests(unittest.TestCase):
                 "concurrency": concurrency,
                 "duration_seconds": duration,
                 "latency_ms": latency,
-                "benchdata": f"warp/{name}.json.zst",
+                "benchdata": f"warp/{name}.csv.zst",
             }
 
         return {

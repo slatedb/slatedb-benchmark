@@ -1,40 +1,32 @@
-.by_op_type
-| to_entries
-| if length != 1 then error("expected one Warp operation") else .[0].value end
-| [
-    .requests_by_client[]
-    | .[]
-    | .single_sized_requests
-    | select(. != null and ((.skipped // false) | not))
-  ]
-| if length == 0 then error("expected single-sized request statistics") else . end
-| . as $segments
-| ($segments | map(.merged_entries // 1) | add) as $merged
-| if $merged <= 0 then error("invalid merged entry count") else . end
-| ($segments | map(select(.first_byte != null))) as $ttfb_segments
+.operations
+| if length != 1 then error("expected one Warp operation") else .[0] end
+| if (.skipped // false) then error("Warp skipped request statistics") else . end
+| .single_sized_requests
+| if . == null or (.skipped // false) then
+    error("expected single-sized request statistics")
+  else .
+  end
+| . as $requests
 | {
     request: {
-      average: (($segments | map(.dur_avg_millis) | add) / $merged),
-      p50: (($segments | map(.dur_median_millis) | add) / $merged),
-      p90: (($segments | map(.dur_90_millis) | add) / $merged),
-      p99: (($segments | map(.dur_99_millis) | add) / $merged),
-      min: ($segments | map(.fastest_millis) | min),
-      max: ($segments | map(.slowest_millis) | max)
+      average: $requests.dur_avg_millis,
+      p50: $requests.dur_median_millis,
+      p90: $requests.dur_90_millis,
+      p99: $requests.dur_99_millis,
+      min: $requests.fastest_millis,
+      max: $requests.slowest_millis
     }
   }
-| if ($ttfb_segments | length) == 0 then .
+| if $requests.first_byte == null then .
   else {
     request: .request,
-    ttfb: (
-      ($ttfb_segments | map(.merged_entries // 1) | add) as $ttfb_merged
-      | {
-        average: (($ttfb_segments | map(.first_byte.average_millis) | add) / $ttfb_merged),
-        p50: (($ttfb_segments | map(.first_byte.median_millis) | add) / $ttfb_merged),
-        p90: (($ttfb_segments | map(.first_byte.p90_millis) | add) / $ttfb_merged),
-        p99: (($ttfb_segments | map(.first_byte.p99_millis) | add) / $ttfb_merged),
-        min: ($ttfb_segments | map(.first_byte.fastest_millis) | min),
-        max: ($ttfb_segments | map(.first_byte.slowest_millis) | max)
-      }
-    )
+    ttfb: {
+      average: $requests.first_byte.average_millis,
+      p50: $requests.first_byte.median_millis,
+      p90: $requests.first_byte.p90_millis,
+      p99: $requests.first_byte.p99_millis,
+      min: $requests.first_byte.fastest_millis,
+      max: $requests.first_byte.slowest_millis
+    }
   }
   end
