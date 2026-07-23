@@ -385,7 +385,7 @@ paths, or session tokens.
 WarpBuild label mapping and artifact server:
 
 ```text
--P warp-ubuntu-latest-arm64-8x=catthehacker/ubuntu:act-latest
+-P warp-ubuntu-latest-x64-8x=catthehacker/ubuntu:act-latest
 -P ubuntu-latest=catthehacker/ubuntu:act-latest
 --container-architecture=linux/amd64
 --container-options=--add-host=host.docker.internal:host-gateway

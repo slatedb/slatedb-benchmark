@@ -1165,8 +1165,8 @@ pub fn inspect_environment(provider: &str, endpoint: &str, region: &str) -> Envi
 
 pub fn verify_environment(environment: &Environment) -> Result<()> {
     anyhow::ensure!(
-        environment.runner_type == "warp-ubuntu-latest-arm64-8x",
-        "published runs require warp-ubuntu-latest-arm64-8x"
+        environment.runner_type == "warp-ubuntu-latest-x64-8x",
+        "published runs require warp-ubuntu-latest-x64-8x"
     );
     anyhow::ensure!(environment.cpu_cores == 8, "published runs require 8 CPUs");
     anyhow::ensure!(
