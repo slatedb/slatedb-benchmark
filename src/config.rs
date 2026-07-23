@@ -3,7 +3,7 @@ use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 use slatedb::config::Settings;
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 const RECORD_COUNT: u64 = 300_000_000;
@@ -306,8 +306,12 @@ pub struct ResolvedConfig {
 }
 
 pub fn load(task: Task, scale: BenchmarkScale, settings_path: &Path) -> Result<ResolvedConfig> {
-    let mut settings = Settings::from_file(settings_path)
-        .with_context(|| format!("loading SlateDB settings from {}", settings_path.display()))?;
+    let mut settings = match settings_path_for_task(task, settings_path)? {
+        Some(settings_path) => Settings::from_file(&settings_path).with_context(|| {
+            format!("loading SlateDB settings from {}", settings_path.display())
+        })?,
+        None => Settings::default(),
+    };
     let dataset = DatasetConfig {
         record_count: scaled_u64(RECORD_COUNT, 1, scale),
         key_bytes: KEY_BYTES,
@@ -356,6 +360,26 @@ pub fn load(task: Task, scale: BenchmarkScale, settings_path: &Path) -> Result<R
             .collect(),
         settings,
     })
+}
+
+fn settings_path_for_task(task: Task, shared_path: &Path) -> Result<Option<PathBuf>> {
+    if !task.is_preparation() {
+        let workload_path = shared_path.with_file_name(format!("settings.{}.toml", task.as_str()));
+        if workload_path
+            .try_exists()
+            .with_context(|| format!("checking {}", workload_path.display()))?
+        {
+            return Ok(Some(workload_path));
+        }
+    }
+    if shared_path
+        .try_exists()
+        .with_context(|| format!("checking {}", shared_path.display()))?
+    {
+        Ok(Some(shared_path.to_path_buf()))
+    } else {
+        Ok(None)
+    }
 }
 
 fn task_config(task: Task, scale: BenchmarkScale, record_count: u64) -> TaskConfig {
@@ -446,8 +470,19 @@ fn scaled_u64(value: u64, minimum: u64, scale: BenchmarkScale) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{load, scaled_u64, BenchmarkScale, Task};
+    use slatedb::config::Settings;
     use std::collections::BTreeSet;
-    use std::path::Path;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use tempfile::TempDir;
+
+    fn write_settings(root: &Path, relative_path: &str, contents: &str) -> PathBuf {
+        let path = root.join(relative_path);
+        fs::create_dir_all(path.parent().expect("settings parent"))
+            .expect("create settings parent");
+        fs::write(&path, contents).expect("write settings");
+        path
+    }
 
     #[test]
     fn published_configurations_load_and_validate() {
@@ -484,5 +519,72 @@ mod tests {
             assert!(!task.is_preparation());
             assert!(seen.insert(task), "duplicate workload {task}");
         }
+    }
+
+    #[test]
+    fn workload_settings_replace_shared_settings() {
+        let directory = TempDir::new().expect("temporary directory");
+        let shared_path = write_settings(
+            directory.path(),
+            "settings.toml",
+            "l0_max_ssts = 31\nl0_max_ssts_per_key = 29\n",
+        );
+        write_settings(
+            directory.path(),
+            "settings.balanced.toml",
+            "l0_max_ssts = 63\n",
+        );
+
+        let config =
+            load(Task::Balanced, BenchmarkScale::FULL, &shared_path).expect("workload settings");
+
+        assert_eq!(config.settings.l0_max_ssts, 63);
+        assert_eq!(
+            config.settings.l0_max_ssts_per_key,
+            Settings::default().l0_max_ssts_per_key
+        );
+    }
+
+    #[test]
+    fn workloads_without_settings_use_shared_settings() {
+        let directory = TempDir::new().expect("temporary directory");
+        let shared_path = write_settings(directory.path(), "settings.toml", "l0_max_ssts = 31\n");
+        write_settings(
+            directory.path(),
+            "settings.balanced.toml",
+            "l0_max_ssts = 63\n",
+        );
+
+        let config =
+            load(Task::ReadHeavy, BenchmarkScale::FULL, &shared_path).expect("shared settings");
+
+        assert_eq!(config.settings.l0_max_ssts, 31);
+    }
+
+    #[test]
+    fn missing_settings_use_slatedb_defaults() {
+        let directory = TempDir::new().expect("temporary directory");
+        let shared_path = directory.path().join("settings.toml");
+
+        let config =
+            load(Task::Balanced, BenchmarkScale::FULL, &shared_path).expect("default settings");
+
+        assert_eq!(config.settings.l0_max_ssts, Settings::default().l0_max_ssts);
+    }
+
+    #[test]
+    fn workload_settings_do_not_require_shared_settings() {
+        let directory = TempDir::new().expect("temporary directory");
+        let shared_path = directory.path().join("settings.toml");
+        write_settings(
+            directory.path(),
+            "settings.balanced.toml",
+            "l0_max_ssts = 63\n",
+        );
+
+        let config =
+            load(Task::Balanced, BenchmarkScale::FULL, &shared_path).expect("workload settings");
+
+        assert_eq!(config.settings.l0_max_ssts, 63);
     }
 }

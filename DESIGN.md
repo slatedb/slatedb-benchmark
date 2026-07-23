@@ -8,13 +8,14 @@ defines the code and GitHub workflows that implement that contract.
 ## Files and configuration
 
 ```text
-config/settings.toml    SlateDB settings
-.actrc                  Local runner and artifact configuration
-src/                    Fixed config, runner, workloads, metrics, validation
-schema/                 Published JSON schemas
-results/<version>/      Published results
-website/                Static Astro website
-scripts/                Smoke, fixture, and publication commands
+config/settings.toml             Optional default SlateDB settings
+config/settings.<workload>.toml  Optional workload replacement
+.actrc                           Local runner and artifact configuration
+src/                             Fixed config, runner, workloads, metrics, validation
+schema/                          Published JSON schemas
+results/<version>/               Published results
+website/                         Static Astro website
+scripts/                         Smoke, fixture, and publication commands
 ```
 
 ## Runner
