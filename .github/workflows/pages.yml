@@ -2,6 +2,11 @@ name: Deploy benchmark website
 
 on:
   workflow_dispatch:
+    inputs:
+      publication_sha:
+        description: Repository commit containing the results to deploy
+        required: false
+        type: string
   push:
     branches: [main]
     paths:
@@ -27,6 +32,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.publication_sha || 'main' }}
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:

@@ -455,9 +455,15 @@ jobs:
           fetch-depth: 0
           path: publish
       - name: Publish benchmark results
-        run: ./scripts/publish.sh .runs/release/results publish
+        id: publication
+        shell: bash
+        run: |
+          ./scripts/publish.sh .runs/release/results publish
+          echo "sha=$(git -C publish rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - name: Deploy benchmark website
         uses: actions/github-script@v9
+        env:
+          PUBLICATION_SHA: ${{ steps.publication.outputs.sha }}
         with:
           github-token: ${{ github.token }}
           script: |
@@ -466,6 +472,9 @@ jobs:
               repo: context.repo.repo,
               workflow_id: "pages.yml",
               ref: "main",
+              inputs: {
+                publication_sha: process.env.PUBLICATION_SHA,
+              },
             });
 
   cleanup:
