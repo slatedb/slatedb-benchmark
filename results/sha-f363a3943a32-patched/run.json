@@ -1,10 +1,10 @@
 {
-  "finished_at": "2026-07-23T04:43:11.031355Z",
+  "finished_at": "2026-07-23T17:59:52.762546Z",
   "golden_id": "golden",
   "max_parallel": 1,
   "preparation_runner_commits": {
-    "bulk-load": "bc9195d40460d1f915881d9732f6173f7e236b09",
-    "compaction": "bc9195d40460d1f915881d9732f6173f7e236b09"
+    "bulk-load": "a55c131d83c168bf1ad4d043abecb14e1c469f5c",
+    "compaction": "a55c131d83c168bf1ad4d043abecb14e1c469f5c"
   },
   "resolved_configuration": {
     "bulk-load": {
@@ -12,7 +12,7 @@
       "caches": {
         "block_bytes": 4294967296,
         "metadata_bytes": 536870912,
-        "object_store_bytes": 17179869184
+        "object_store_bytes": 42949672960
       },
       "dataset": {
         "key_bytes": 20,
@@ -27,113 +27,18 @@
         "zstd"
       ],
       "scale": 1.0,
-      "slate_settings": {
-        "compactor_options": null,
-        "compression_codec": null,
-        "default_ttl": null,
-        "flush_interval": "100ms",
-        "garbage_collector_options": {
-          "boundary_files_enabled": true,
-          "compacted_options": {
-            "dry_run": false,
-            "interval": "60s",
-            "min_age": "300s"
-          },
-          "compactions_options": {
-            "dry_run": false,
-            "interval": "60s",
-            "min_age": "300s"
-          },
-          "detach_options": {
-            "interval": "60s"
-          },
-          "manifest_options": {
-            "dry_run": false,
-            "interval": "60s",
-            "min_age": "300s"
-          },
-          "metric_level": null,
-          "object_store_max_retries": null,
-          "wal_fence_options": {
-            "dry_run": true,
-            "interval": "60s",
-            "min_age": "300s"
-          },
-          "wal_options": {
-            "dry_run": false,
-            "interval": "60s",
-            "min_age": "300s"
-          }
-        },
-        "l0_flush_parallelism": 8,
-        "l0_max_ssts": 4294967295,
-        "l0_max_ssts_per_key": 4294967295,
-        "l0_sst_size_bytes": 67108864,
-        "manifest_poll_interval": "1s",
-        "manifest_update_timeout": "300s",
-        "max_unflushed_bytes": 1073741824,
-        "max_wal_flushes_before_l0_flush": 4096,
-        "metric_level": "Info",
-        "min_filter_keys": 1000,
-        "object_store_cache_options": {
-          "cache_on_compaction": true,
-          "cache_on_flush": true,
-          "max_cache_size_bytes": 17179869184,
-          "max_open_file_handles": 1000,
-          "part_size_bytes": 4194304,
-          "preload_disk_cache_on_startup": null,
-          "root_folder": null,
-          "scan_interval": "3600s"
-        },
-        "object_store_max_retries": null,
-        "wal_enabled": true
-      },
-      "task": {
-        "clients": 0,
-        "initial_state": "preparation",
-        "key_selection": "none",
-        "measurement_ms": 0,
-        "operation_mix": {},
-        "scan_limit": null,
-        "task": "bulk-load",
-        "transaction_hot_keys": null,
-        "transaction_reads": null,
-        "transaction_updates": null,
-        "warmup_ms": 0
-      }
-    },
-    "compaction": {
-      "build_profile": "release",
-      "caches": {
-        "block_bytes": 4294967296,
-        "metadata_bytes": 536870912,
-        "object_store_bytes": 17179869184
-      },
-      "dataset": {
-        "key_bytes": 20,
-        "record_count": 300000000,
-        "value_bytes": 400,
-        "value_compression_ratio": 1.0
-      },
-      "enabled_features": [
-        "aws",
-        "foyer",
-        "wal_disable",
-        "zstd"
-      ],
-      "scale": 1.0,
-      "slate_settings": {
+      "slate_default_settings": {
         "compactor_options": {
           "commit_compacted_interval": "1s",
           "manifest_update_timeout": "300s",
           "max_concurrent_compactions": 4,
           "metric_level": null,
           "object_store_max_retries": null,
-          "poll_interval": "1s",
+          "poll_interval": "5s",
           "scheduler_options": {},
           "worker": {
             "bytes_to_fetch": 2097152,
-            "compactions_poll_interval": "1s",
+            "compactions_poll_interval": "5s",
             "compression_codec": null,
             "heartbeat_interval": "10s",
             "max_concurrent_compactions": 4,
@@ -181,9 +86,9 @@
             "min_age": "300s"
           }
         },
-        "l0_flush_parallelism": 8,
-        "l0_max_ssts": 32,
-        "l0_max_ssts_per_key": 16,
+        "l0_flush_parallelism": 4,
+        "l0_max_ssts": 8,
+        "l0_max_ssts_per_key": 8,
         "l0_sst_size_bytes": 67108864,
         "manifest_poll_interval": "1s",
         "manifest_update_timeout": "300s",
@@ -192,8 +97,8 @@
         "metric_level": "Info",
         "min_filter_keys": 1000,
         "object_store_cache_options": {
-          "cache_on_compaction": true,
-          "cache_on_flush": true,
+          "cache_on_compaction": false,
+          "cache_on_flush": false,
           "max_cache_size_bytes": 17179869184,
           "max_open_file_handles": 1000,
           "part_size_bytes": 4194304,
@@ -203,6 +108,265 @@
         },
         "object_store_max_retries": null,
         "wal_enabled": true
+      },
+      "slate_settings": {
+        "compactor_options": null,
+        "compression_codec": null,
+        "default_ttl": null,
+        "flush_interval": "100ms",
+        "garbage_collector_options": {
+          "boundary_files_enabled": true,
+          "compacted_options": {
+            "dry_run": false,
+            "interval": "60s",
+            "min_age": "300s"
+          },
+          "compactions_options": {
+            "dry_run": false,
+            "interval": "60s",
+            "min_age": "300s"
+          },
+          "detach_options": {
+            "interval": "60s"
+          },
+          "manifest_options": {
+            "dry_run": false,
+            "interval": "60s",
+            "min_age": "300s"
+          },
+          "metric_level": null,
+          "object_store_max_retries": null,
+          "wal_fence_options": {
+            "dry_run": true,
+            "interval": "60s",
+            "min_age": "300s"
+          },
+          "wal_options": {
+            "dry_run": false,
+            "interval": "60s",
+            "min_age": "300s"
+          }
+        },
+        "l0_flush_parallelism": 4,
+        "l0_max_ssts": 4294967295,
+        "l0_max_ssts_per_key": 4294967295,
+        "l0_sst_size_bytes": 67108864,
+        "manifest_poll_interval": "1s",
+        "manifest_update_timeout": "300s",
+        "max_unflushed_bytes": 1073741824,
+        "max_wal_flushes_before_l0_flush": 4096,
+        "metric_level": "Info",
+        "min_filter_keys": 1000,
+        "object_store_cache_options": {
+          "cache_on_compaction": false,
+          "cache_on_flush": true,
+          "max_cache_size_bytes": 42949672960,
+          "max_open_file_handles": 1000,
+          "part_size_bytes": 4194304,
+          "preload_disk_cache_on_startup": null,
+          "root_folder": null,
+          "scan_interval": "3600s"
+        },
+        "object_store_max_retries": null,
+        "wal_enabled": false
+      },
+      "task": {
+        "clients": 0,
+        "initial_state": "preparation",
+        "key_selection": "none",
+        "measurement_ms": 0,
+        "operation_mix": {},
+        "scan_limit": null,
+        "task": "bulk-load",
+        "transaction_hot_keys": null,
+        "transaction_reads": null,
+        "transaction_updates": null,
+        "warmup_ms": 0
+      }
+    },
+    "compaction": {
+      "build_profile": "release",
+      "caches": {
+        "block_bytes": 4294967296,
+        "metadata_bytes": 536870912,
+        "object_store_bytes": 42949672960
+      },
+      "dataset": {
+        "key_bytes": 20,
+        "record_count": 300000000,
+        "value_bytes": 400,
+        "value_compression_ratio": 1.0
+      },
+      "enabled_features": [
+        "aws",
+        "foyer",
+        "wal_disable",
+        "zstd"
+      ],
+      "scale": 1.0,
+      "slate_default_settings": {
+        "compactor_options": {
+          "commit_compacted_interval": "1s",
+          "manifest_update_timeout": "300s",
+          "max_concurrent_compactions": 4,
+          "metric_level": null,
+          "object_store_max_retries": null,
+          "poll_interval": "5s",
+          "scheduler_options": {},
+          "worker": {
+            "bytes_to_fetch": 2097152,
+            "compactions_poll_interval": "5s",
+            "compression_codec": null,
+            "heartbeat_interval": "10s",
+            "max_concurrent_compactions": 4,
+            "max_fetch_tasks": 4,
+            "max_sst_size": 268435456,
+            "max_subcompactions": 4,
+            "metric_level": null,
+            "min_filter_keys": 1000
+          },
+          "worker_heartbeat_timeout": "30s"
+        },
+        "compression_codec": null,
+        "default_ttl": null,
+        "flush_interval": "100ms",
+        "garbage_collector_options": {
+          "boundary_files_enabled": true,
+          "compacted_options": {
+            "dry_run": false,
+            "interval": "60s",
+            "min_age": "300s"
+          },
+          "compactions_options": {
+            "dry_run": false,
+            "interval": "60s",
+            "min_age": "300s"
+          },
+          "detach_options": {
+            "interval": "60s"
+          },
+          "manifest_options": {
+            "dry_run": false,
+            "interval": "60s",
+            "min_age": "300s"
+          },
+          "metric_level": null,
+          "object_store_max_retries": null,
+          "wal_fence_options": {
+            "dry_run": true,
+            "interval": "60s",
+            "min_age": "300s"
+          },
+          "wal_options": {
+            "dry_run": false,
+            "interval": "60s",
+            "min_age": "300s"
+          }
+        },
+        "l0_flush_parallelism": 4,
+        "l0_max_ssts": 8,
+        "l0_max_ssts_per_key": 8,
+        "l0_sst_size_bytes": 67108864,
+        "manifest_poll_interval": "1s",
+        "manifest_update_timeout": "300s",
+        "max_unflushed_bytes": 1073741824,
+        "max_wal_flushes_before_l0_flush": 4096,
+        "metric_level": "Info",
+        "min_filter_keys": 1000,
+        "object_store_cache_options": {
+          "cache_on_compaction": false,
+          "cache_on_flush": false,
+          "max_cache_size_bytes": 17179869184,
+          "max_open_file_handles": 1000,
+          "part_size_bytes": 4194304,
+          "preload_disk_cache_on_startup": null,
+          "root_folder": null,
+          "scan_interval": "3600s"
+        },
+        "object_store_max_retries": null,
+        "wal_enabled": true
+      },
+      "slate_settings": {
+        "compactor_options": {
+          "commit_compacted_interval": "1s",
+          "manifest_update_timeout": "300s",
+          "max_concurrent_compactions": 4,
+          "metric_level": null,
+          "object_store_max_retries": null,
+          "poll_interval": "5s",
+          "scheduler_options": {},
+          "worker": {
+            "bytes_to_fetch": 2097152,
+            "compactions_poll_interval": "5s",
+            "compression_codec": null,
+            "heartbeat_interval": "10s",
+            "max_concurrent_compactions": 4,
+            "max_fetch_tasks": 4,
+            "max_sst_size": 268435456,
+            "max_subcompactions": 4,
+            "metric_level": null,
+            "min_filter_keys": 1000
+          },
+          "worker_heartbeat_timeout": "30s"
+        },
+        "compression_codec": null,
+        "default_ttl": null,
+        "flush_interval": "100ms",
+        "garbage_collector_options": {
+          "boundary_files_enabled": true,
+          "compacted_options": {
+            "dry_run": false,
+            "interval": "60s",
+            "min_age": "300s"
+          },
+          "compactions_options": {
+            "dry_run": false,
+            "interval": "60s",
+            "min_age": "300s"
+          },
+          "detach_options": {
+            "interval": "60s"
+          },
+          "manifest_options": {
+            "dry_run": false,
+            "interval": "60s",
+            "min_age": "300s"
+          },
+          "metric_level": null,
+          "object_store_max_retries": null,
+          "wal_fence_options": {
+            "dry_run": true,
+            "interval": "60s",
+            "min_age": "300s"
+          },
+          "wal_options": {
+            "dry_run": false,
+            "interval": "60s",
+            "min_age": "300s"
+          }
+        },
+        "l0_flush_parallelism": 4,
+        "l0_max_ssts": 8,
+        "l0_max_ssts_per_key": 8,
+        "l0_sst_size_bytes": 67108864,
+        "manifest_poll_interval": "1s",
+        "manifest_update_timeout": "300s",
+        "max_unflushed_bytes": 1073741824,
+        "max_wal_flushes_before_l0_flush": 4096,
+        "metric_level": "Info",
+        "min_filter_keys": 1000,
+        "object_store_cache_options": {
+          "cache_on_compaction": false,
+          "cache_on_flush": true,
+          "max_cache_size_bytes": 42949672960,
+          "max_open_file_handles": 1000,
+          "part_size_bytes": 4194304,
+          "preload_disk_cache_on_startup": null,
+          "root_folder": null,
+          "scan_interval": "3600s"
+        },
+        "object_store_max_retries": null,
+        "wal_enabled": false
       },
       "task": {
         "clients": 0,
@@ -420,19 +584,19 @@
     }
   },
   "results": {
-    "preparation/bulk-load/result.json": "e5293d302aab18cd9bc6e09a3b99c1ea0719378ba127a8d46142f99e6198a8d5",
-    "preparation/compaction/result.json": "796a91020f80df667137461aeeb9f2232d5bf456f8d1fadb283c425cc01ca3e1",
-    "workload/sustained-ingest/result.json": "a94972c4421464efc54af1c9f6e08b7e34f97858700a15756fc6da57edd127c2",
-    "workload/sustained-ingest/series.json": "9dc39454b9ea7efd15feefd64c3f15f30ba2f3b1b909328eabb95c48ac492cf4"
+    "preparation/bulk-load/result.json": "4db5713f4435f924a776bce21f9c5585a8f0ac1529aa54a6a33c7c3098ac641d",
+    "preparation/compaction/result.json": "e1cd05f9f7bea24b1bfb33e7f19b4718f13c37be7853bc1b30e9b1d78c911eda",
+    "workload/sustained-ingest/result.json": "2fe91fc3fa96cb687f5a13ca4c9aa22f6131be7a90c617067946cd6ec9ab3f0d",
+    "workload/sustained-ingest/series.json": "b7d0912456ffc98cf2ac32f5691aecb6a5fc64181849a05661f21e32c1e2924c"
   },
   "source": {
     "lockfile_sha256": "23353a50b884e4433eb14b840b2b74aedd0eb983280948e188e8dc7143d64953",
-    "runner_commit": "9337a16947d09947bf101d8546320fb2c99b3e29",
+    "runner_commit": "a55c131d83c168bf1ad4d043abecb14e1c469f5c",
     "runner_version": "0.1.0",
     "slate_commit": "f363a3943a324b96db85962b07d04db477918a53",
     "slate_version": "sha-f363a3943a32-patched"
   },
-  "started_at": "2026-07-23T04:11:26Z",
+  "started_at": "2026-07-23T17:28:25Z",
   "status": "ok",
   "transfer_capacity": {
     "benchmarks": [
@@ -442,20 +606,20 @@
         "duration_seconds": 60,
         "latency_ms": {
           "request": {
-            "average": 253.471323,
-            "max": 3093.714567,
-            "min": 73.438896,
-            "p50": 231.90285,
-            "p90": 356.154343,
-            "p99": 545.67544
+            "average": 187.545075,
+            "max": 901.863801,
+            "min": 68.667228,
+            "p50": 173.778703,
+            "p90": 276.254032,
+            "p99": 414.896264
           },
           "ttfb": {
-            "average": 207.797926,
-            "max": 2997.416837,
-            "min": 55.367886,
-            "p50": 191.965314,
-            "p90": 297.576669,
-            "p99": 462.555523
+            "average": 142.764454,
+            "max": 529.194653,
+            "min": 57.322852,
+            "p50": 134.273099,
+            "p90": 205.513524,
+            "p99": 307.364701
           }
         },
         "name": "large-put",
@@ -468,20 +632,20 @@
         "duration_seconds": 60,
         "latency_ms": {
           "request": {
-            "average": 247.31799,
-            "max": 2003.819814,
-            "min": 55.597656,
-            "p50": 221.523874,
-            "p90": 363.24222,
-            "p99": 608.979356
+            "average": 187.224835,
+            "max": 920.974958,
+            "min": 43.840483,
+            "p50": 176.846205,
+            "p90": 284.549128,
+            "p99": 402.744138
           },
           "ttfb": {
-            "average": 88.391023,
-            "max": 726.724185,
-            "min": 16.390429,
-            "p50": 66.054624,
-            "p90": 162.73448,
-            "p99": 360.668711
+            "average": 86.014984,
+            "max": 310.463136,
+            "min": 14.376709,
+            "p50": 88.021193,
+            "p90": 123.983291,
+            "p99": 162.401293
           }
         },
         "name": "large-get",
@@ -494,20 +658,20 @@
         "duration_seconds": 30,
         "latency_ms": {
           "request": {
-            "average": 50.889679,
-            "max": 288.007534,
-            "min": 29.832047,
-            "p50": 43.123145,
-            "p90": 76.093775,
-            "p99": 140.177156
+            "average": 31.289014,
+            "max": 110.05043,
+            "min": 20.171693,
+            "p50": 28.810705,
+            "p90": 38.145007,
+            "p99": 78.491622
           },
           "ttfb": {
-            "average": 50.759376,
-            "max": 287.829434,
-            "min": 29.721247,
-            "p50": 42.967148,
-            "p90": 75.935563,
-            "p99": 140.097203
+            "average": 30.946015,
+            "max": 108.523596,
+            "min": 19.832044,
+            "p50": 28.557977,
+            "p90": 37.914912,
+            "p99": 75.458373
           }
         },
         "name": "small-put",
@@ -520,20 +684,20 @@
         "duration_seconds": 30,
         "latency_ms": {
           "request": {
-            "average": 637.512577,
-            "max": 908.301818,
-            "min": 550.364291,
-            "p50": 632.335934,
-            "p90": 689.67736,
-            "p99": 908.301818
+            "average": 31.72041,
+            "max": 242.514309,
+            "min": 18.675281,
+            "p50": 25.816295,
+            "p90": 48.920296,
+            "p99": 112.128935
           },
           "ttfb": {
-            "average": 637.487504,
-            "max": 908.285187,
-            "min": 550.347559,
-            "p50": 632.313601,
-            "p90": 689.642184,
-            "p99": 908.285187
+            "average": 31.691912,
+            "max": 242.468311,
+            "min": 18.628514,
+            "p50": 25.781615,
+            "p90": 48.894592,
+            "p99": 112.103078
           }
         },
         "name": "small-get",
@@ -546,20 +710,20 @@
         "duration_seconds": 30,
         "latency_ms": {
           "request": {
-            "average": 18.64643,
-            "max": 88.855777,
-            "min": 13.109182,
-            "p50": 18.447288,
-            "p90": 21.348302,
-            "p99": 29.173729
+            "average": 28.97259,
+            "max": 286.033026,
+            "min": 17.667989,
+            "p50": 26.775668,
+            "p90": 35.033489,
+            "p99": 64.580175
           },
           "ttfb": {
-            "average": 18.618556,
-            "max": 88.824437,
-            "min": 13.078714,
-            "p50": 18.408055,
-            "p90": 21.323358,
-            "p99": 29.146677
+            "average": 28.930449,
+            "max": 285.949345,
+            "min": 17.637668,
+            "p50": 26.719737,
+            "p90": 34.984051,
+            "p99": 64.472063
           }
         },
         "name": "small-list",
@@ -567,13 +731,13 @@
         "operation": "LIST"
       }
     ],
-    "endpoint": "https://t3.storage.dev",
-    "object_store": "Tigris",
-    "region": "fra",
-    "runner_type": "warp-ubuntu-latest-x64-8x",
+    "endpoint": "AWS default",
+    "object_store": "aws",
+    "region": "us-east-1",
+    "runner_type": "codebuild-linux-xlarge",
     "scale": 1.0,
     "status": "ok",
-    "timestamp": "2026-07-23T04:18:14Z",
+    "timestamp": "2026-07-23T17:37:31Z",
     "tool": {
       "name": "warp",
       "version": "v1.5.0"
