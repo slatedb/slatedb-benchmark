@@ -13,6 +13,14 @@ on:
         required: true
         default: golden
         type: string
+      object_store:
+        description: Object store
+        required: true
+        default: s3
+        type: choice
+        options:
+          - s3
+          - tigris
       publish:
         description: Publish results to website
         required: true
@@ -30,13 +38,13 @@ permissions:
   id-token: write
 
 concurrency:
-  group: slatedb-benchmark-environment
+  group: slatedb-benchmark-${{ inputs.object_store }}-environment
   cancel-in-progress: false
 
 jobs:
   validate-golden:
     runs-on: ubuntu-latest
-    environment: benchmark
+    environment: benchmark-${{ inputs.object_store }}
     outputs:
       started_at: ${{ steps.validate.outputs.started_at }}
     steps:
@@ -53,15 +61,32 @@ jobs:
             --output /tmp/awscliv2.zip
           unzip -q /tmp/awscliv2.zip -d /tmp
           sudo /tmp/aws/install
-      - name: Configure AWS credentials
-        if: ${{ env.ACT != 'true' }}
+      - name: Configure S3 credentials
+        if: ${{ inputs.object_store == 's3' && env.ACT != 'true' }}
         uses: aws-actions/configure-aws-credentials@v5
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Configure Tigris credentials
+        if: ${{ inputs.object_store == 'tigris' }}
+        shell: bash
+        env:
+          AWS_ENDPOINT_URL_S3: ${{ vars.AWS_ENDPOINT_URL_S3 }}
+          TIGRIS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
+          TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ ${ACT:-false} != true ]]; then
+            : "${TIGRIS_ACCESS_KEY_ID:?Tigris access key ID is required}"
+            : "${TIGRIS_SECRET_ACCESS_KEY:?Tigris secret access key is required}"
+            echo "AWS_ACCESS_KEY_ID=$TIGRIS_ACCESS_KEY_ID" >> "$GITHUB_ENV"
+            echo "AWS_SECRET_ACCESS_KEY=$TIGRIS_SECRET_ACCESS_KEY" >> "$GITHUB_ENV"
+          fi
+          echo "AWS_ENDPOINT_URL_S3=${AWS_ENDPOINT_URL_S3:-https://t3.storage.dev}" >> "$GITHUB_ENV"
       - name: Fetch preparation results
         shell: bash
         env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
           GOLDEN_ID: ${{ inputs.golden_id }}
           SLATEDB_BENCH_BUCKET: ${{ vars.SLATEDB_BENCH_BUCKET }}
         run: |
@@ -81,6 +106,7 @@ jobs:
           BENCHMARK_SCALE: ${{ inputs.scale }}
           GH_TOKEN: ${{ github.token }}
           GOLDEN_ID: ${{ inputs.golden_id }}
+          OBJECT_STORE: ${{ inputs.object_store }}
           PUBLISH_BENCHMARK: ${{ inputs.publish }}
         run: |
           set -euo pipefail
@@ -106,6 +132,10 @@ jobs:
               echo "preparation result has no recorded metrics; rerun golden.yml" >&2
               exit 1
             fi
+            jq -e --arg object_store "$OBJECT_STORE" '
+              (.environment.object_store | if . == "aws" then "s3" else . end) ==
+                $object_store
+            ' "$result" >/dev/null
           done
           test "$(jq -r .source.slate_commit "$compaction")" = \
             "$(jq -r .source.slate_commit "$bulk")"
@@ -193,9 +223,8 @@ jobs:
     needs: validate-golden
     runs-on: warp-ubuntu-latest-arm64-8x
     timeout-minutes: 60
-    environment: benchmark
+    environment: benchmark-${{ inputs.object_store }}
     env:
-      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
       WARP_VERSION: v1.5.0
     steps:
       - uses: actions/checkout@v4
@@ -224,12 +253,28 @@ jobs:
             --output /tmp/awscliv2.zip
           unzip -q /tmp/awscliv2.zip -d /tmp
           sudo /tmp/aws/install
-      - name: Configure AWS credentials
-        if: ${{ env.ACT != 'true' }}
+      - name: Configure S3 credentials
+        if: ${{ inputs.object_store == 's3' && env.ACT != 'true' }}
         uses: aws-actions/configure-aws-credentials@v5
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Configure Tigris credentials
+        if: ${{ inputs.object_store == 'tigris' }}
+        shell: bash
+        env:
+          AWS_ENDPOINT_URL_S3: ${{ vars.AWS_ENDPOINT_URL_S3 }}
+          TIGRIS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
+          TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ ${ACT:-false} != true ]]; then
+            : "${TIGRIS_ACCESS_KEY_ID:?Tigris access key ID is required}"
+            : "${TIGRIS_SECRET_ACCESS_KEY:?Tigris secret access key is required}"
+            echo "AWS_ACCESS_KEY_ID=$TIGRIS_ACCESS_KEY_ID" >> "$GITHUB_ENV"
+            echo "AWS_SECRET_ACCESS_KEY=$TIGRIS_SECRET_ACCESS_KEY" >> "$GITHUB_ENV"
+          fi
+          echo "AWS_ENDPOINT_URL_S3=${AWS_ENDPOINT_URL_S3:-https://t3.storage.dev}" >> "$GITHUB_ENV"
       - name: Install runner diagnostics
         shell: bash
         run: |
@@ -242,6 +287,9 @@ jobs:
           fi
       - name: Record runner diagnostics
         shell: bash
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          CLOUD_PROVIDER: ${{ inputs.object_store }}
         run: |
           set -uo pipefail
 
@@ -283,29 +331,38 @@ jobs:
           curl --fail --location --silent --show-error --max-time 10 \
             https://ipinfo.io/json || true
           echo
-          s3_host="s3.${AWS_REGION}.amazonaws.com"
-          echo "Amazon S3 DNS:"
-          getent ahosts "$s3_host" || true
-          echo "Amazon S3 connection:"
+          if [[ "$CLOUD_PROVIDER" == tigris ]]; then
+            object_store_name=Tigris
+            object_store_host=${AWS_ENDPOINT_URL_S3#*://}
+            object_store_host=${object_store_host%%/*}
+          else
+            object_store_name="Amazon S3"
+            object_store_host="s3.${AWS_REGION}.amazonaws.com"
+          fi
+          echo "$object_store_name DNS:"
+          getent ahosts "$object_store_host" || true
+          echo "$object_store_name connection:"
           curl --location --silent --show-error --max-time 20 \
             --output /dev/null \
             --write-out 'remote_ip=%{remote_ip} http_code=%{http_code} connect_seconds=%{time_connect} tls_seconds=%{time_appconnect} total_seconds=%{time_total}\n' \
-            "https://$s3_host" || true
+            "https://$object_store_host" || true
           echo "::endgroup::"
 
-          echo "::group::TCP traceroute to Amazon S3"
-          sudo traceroute -T -p 443 -m 20 -w 2 -q 1 "$s3_host" || true
+          echo "::group::TCP traceroute to $object_store_name"
+          sudo traceroute -T -p 443 -m 20 -w 2 -q 1 "$object_store_host" || true
           echo "::endgroup::"
-      - name: Measure Amazon S3 transfer capacity
+      - name: Measure object store transfer capacity
         shell: bash
         env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
           BENCHMARK_SCALE: ${{ inputs.scale }}
+          CLOUD_PROVIDER: ${{ inputs.object_store }}
           SLATEDB_BENCH_BUCKET: ${{ vars.SLATEDB_BENCH_BUCKET }}
+          SLATEDB_BENCH_REGION: ${{ vars.AWS_REGION }}
         run: |
           set -euo pipefail
           : "${SLATEDB_BENCH_BUCKET:?SLATEDB_BENCH_BUCKET is required}"
           export SLATEDB_BENCH_PREFIX=${SLATEDB_BENCH_PREFIX:-benchmark}
-          export SLATEDB_BENCH_REGION=${SLATEDB_BENCH_REGION:-$AWS_REGION}
           export SLATEDB_BENCH_RUNNER_TYPE=${SLATEDB_BENCH_RUNNER_TYPE:-warp-ubuntu-latest-arm64-8x}
           ./scripts/transfer-capacity.sh .runs/transfer-capacity/result.json
       - uses: actions/upload-artifact@v4
@@ -319,7 +376,7 @@ jobs:
     needs: [validate-golden, build]
     runs-on: warp-ubuntu-latest-arm64-8x
     timeout-minutes: 1440
-    environment: benchmark
+    environment: benchmark-${{ inputs.object_store }}
     strategy:
       fail-fast: false
       matrix:
@@ -346,21 +403,40 @@ jobs:
           name: benchmark-runner
           path: bin
       - run: chmod +x bin/slatedb-benchmark
-      - name: Configure AWS credentials
-        if: ${{ env.ACT != 'true' }}
+      - name: Configure S3 credentials
+        if: ${{ inputs.object_store == 's3' && env.ACT != 'true' }}
         uses: aws-actions/configure-aws-credentials@v5
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Configure Tigris credentials
+        if: ${{ inputs.object_store == 'tigris' }}
+        shell: bash
+        env:
+          AWS_ENDPOINT_URL_S3: ${{ vars.AWS_ENDPOINT_URL_S3 }}
+          TIGRIS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
+          TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ ${ACT:-false} != true ]]; then
+            : "${TIGRIS_ACCESS_KEY_ID:?Tigris access key ID is required}"
+            : "${TIGRIS_SECRET_ACCESS_KEY:?Tigris secret access key is required}"
+            echo "AWS_ACCESS_KEY_ID=$TIGRIS_ACCESS_KEY_ID" >> "$GITHUB_ENV"
+            echo "AWS_SECRET_ACCESS_KEY=$TIGRIS_SECRET_ACCESS_KEY" >> "$GITHUB_ENV"
+          fi
+          echo "AWS_ENDPOINT_URL_S3=${AWS_ENDPOINT_URL_S3:-https://t3.storage.dev}" >> "$GITHUB_ENV"
       - name: Run ${{ matrix.task }}
         shell: bash
         env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
           BENCHMARK_ACTIONS_JOB_ID: ${{ job.check_run_id }}
           BENCHMARK_SCALE: ${{ inputs.scale }}
           BENCHMARK_SESSION: github-${{ github.run_id }}
           BENCHMARK_TASK: ${{ matrix.task }}
+          CLOUD_PROVIDER: ${{ inputs.object_store }}
           GOLDEN_ID: ${{ inputs.golden_id }}
           SLATEDB_BENCH_BUCKET: ${{ vars.SLATEDB_BENCH_BUCKET }}
+          SLATEDB_BENCH_REGION: ${{ vars.AWS_REGION }}
           SLATEDB_BENCH_PUBLISHED: ${{ inputs.publish }}
         run: |
           set -euo pipefail
@@ -368,11 +444,8 @@ jobs:
             export BENCHMARK_ACTIONS_LOG_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/job/$BENCHMARK_ACTIONS_JOB_ID"
           fi
           unset BENCHMARK_ACTIONS_JOB_ID
-          export CLOUD_PROVIDER=aws
-          export AWS_REGION=${AWS_REGION:-us-east-1}
           : "${SLATEDB_BENCH_BUCKET:?SLATEDB_BENCH_BUCKET is required}"
           export SLATEDB_BENCH_PREFIX=${SLATEDB_BENCH_PREFIX:-benchmark}
-          export SLATEDB_BENCH_REGION=${SLATEDB_BENCH_REGION:-$AWS_REGION}
           export SLATEDB_BENCH_RUNNER_TYPE=${SLATEDB_BENCH_RUNNER_TYPE:-warp-ubuntu-latest-arm64-8x}
           bin/slatedb-benchmark run \
             --task "$BENCHMARK_TASK" \
@@ -480,8 +553,11 @@ jobs:
       needs.bundle.result == 'success' &&
       (needs.publish.result == 'success' || needs.publish.result == 'skipped')
     runs-on: ubuntu-latest
-    environment: benchmark
+    environment: benchmark-${{ inputs.object_store }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Install AWS CLI for act
         if: ${{ env.ACT == 'true' }}
         shell: bash
@@ -492,15 +568,32 @@ jobs:
             --output /tmp/awscliv2.zip
           unzip -q /tmp/awscliv2.zip -d /tmp
           sudo /tmp/aws/install
-      - name: Configure AWS credentials
-        if: ${{ env.ACT != 'true' }}
+      - name: Configure S3 credentials
+        if: ${{ inputs.object_store == 's3' && env.ACT != 'true' }}
         uses: aws-actions/configure-aws-credentials@v5
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Configure Tigris credentials
+        if: ${{ inputs.object_store == 'tigris' }}
+        shell: bash
+        env:
+          AWS_ENDPOINT_URL_S3: ${{ vars.AWS_ENDPOINT_URL_S3 }}
+          TIGRIS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
+          TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ ${ACT:-false} != true ]]; then
+            : "${TIGRIS_ACCESS_KEY_ID:?Tigris access key ID is required}"
+            : "${TIGRIS_SECRET_ACCESS_KEY:?Tigris secret access key is required}"
+            echo "AWS_ACCESS_KEY_ID=$TIGRIS_ACCESS_KEY_ID" >> "$GITHUB_ENV"
+            echo "AWS_SECRET_ACCESS_KEY=$TIGRIS_SECRET_ACCESS_KEY" >> "$GITHUB_ENV"
+          fi
+          echo "AWS_ENDPOINT_URL_S3=${AWS_ENDPOINT_URL_S3:-https://t3.storage.dev}" >> "$GITHUB_ENV"
       - name: Delete benchmark session data
         shell: bash
         env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
           SLATEDB_BENCH_BUCKET: ${{ vars.SLATEDB_BENCH_BUCKET }}
         run: |
           set -euo pipefail

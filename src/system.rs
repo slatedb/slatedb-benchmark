@@ -1163,18 +1163,29 @@ pub fn verify_environment(environment: &Environment) -> Result<()> {
         environment.ram_bytes >= 30 * 1024 * 1024 * 1024,
         "published runs require at least 30 GiB RAM"
     );
-    anyhow::ensure!(
-        environment.object_store == "aws",
-        "published runs require Amazon S3"
-    );
-    anyhow::ensure!(
-        environment.endpoint == "AWS default",
-        "published runs require the default AWS endpoint"
-    );
-    anyhow::ensure!(
-        environment.region == "us-east-1",
-        "published runs require region us-east-1"
-    );
+    match environment.object_store.as_str() {
+        "s3" | "aws" => {
+            anyhow::ensure!(
+                environment.endpoint == "AWS default",
+                "published S3 runs require the default AWS endpoint"
+            );
+            anyhow::ensure!(
+                environment.region == "us-east-1",
+                "published S3 runs require region us-east-1"
+            );
+        }
+        "tigris" => {
+            anyhow::ensure!(
+                environment.endpoint.trim_end_matches('/') == "https://t3.storage.dev",
+                "published Tigris runs require endpoint https://t3.storage.dev"
+            );
+            anyhow::ensure!(
+                environment.region == "auto",
+                "published Tigris runs require region auto"
+            );
+        }
+        provider => anyhow::bail!("published runs do not support object store {provider}"),
+    }
     Ok(())
 }
 
@@ -1346,19 +1357,27 @@ mod tests {
     use tokio::sync::{oneshot, watch};
 
     #[test]
-    fn published_environment_requires_warpbuild_arm_and_s3() {
-        let environment = Environment {
+    fn published_environment_accepts_s3_and_tigris() {
+        let s3 = Environment {
             runner_type: "warp-ubuntu-latest-arm64-8x".to_string(),
             cpu_cores: 8,
             ram_bytes: 32 * 1024 * 1024 * 1024,
-            object_store: "aws".to_string(),
+            object_store: "s3".to_string(),
             endpoint: "AWS default".to_string(),
             region: "us-east-1".to_string(),
             ..Environment::default()
         };
-        verify_environment(&environment).expect("valid published environment");
+        verify_environment(&s3).expect("valid published S3 environment");
 
-        let mut wrong_endpoint = environment;
+        let tigris = Environment {
+            object_store: "tigris".to_string(),
+            endpoint: "https://t3.storage.dev".to_string(),
+            region: "auto".to_string(),
+            ..s3.clone()
+        };
+        verify_environment(&tigris).expect("valid published Tigris environment");
+
+        let mut wrong_endpoint = tigris;
         wrong_endpoint.endpoint = "https://example.com".to_string();
         assert!(verify_environment(&wrong_endpoint).is_err());
     }

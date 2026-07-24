@@ -13,6 +13,14 @@ on:
         required: true
         default: golden
         type: string
+      object_store:
+        description: Object store
+        required: true
+        default: s3
+        type: choice
+        options:
+          - s3
+          - tigris
       scale:
         description: Decimal scale factor
         required: true
@@ -24,7 +32,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: slatedb-benchmark-environment
+  group: slatedb-benchmark-${{ inputs.object_store }}-environment
   cancel-in-progress: false
 
 jobs:
@@ -91,9 +99,9 @@ jobs:
     needs: build
     runs-on: warp-ubuntu-latest-arm64-8x
     timeout-minutes: 1440
-    environment: benchmark
+    environment: benchmark-${{ inputs.object_store }}
     concurrency:
-      group: golden-${{ inputs.golden_id }}-bulk-load
+      group: golden-${{ inputs.object_store }}-${{ inputs.golden_id }}-bulk-load
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
@@ -104,25 +112,41 @@ jobs:
           name: benchmark-runner
           path: bin
       - run: chmod +x bin/slatedb-benchmark
-      - name: Configure AWS credentials
-        if: ${{ env.ACT != 'true' }}
+      - name: Configure S3 credentials
+        if: ${{ inputs.object_store == 's3' && env.ACT != 'true' }}
         uses: aws-actions/configure-aws-credentials@v5
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Configure Tigris credentials
+        if: ${{ inputs.object_store == 'tigris' }}
+        shell: bash
+        env:
+          AWS_ENDPOINT_URL_S3: ${{ vars.AWS_ENDPOINT_URL_S3 }}
+          TIGRIS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
+          TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ ${ACT:-false} != true ]]; then
+            : "${TIGRIS_ACCESS_KEY_ID:?Tigris access key ID is required}"
+            : "${TIGRIS_SECRET_ACCESS_KEY:?Tigris secret access key is required}"
+            echo "AWS_ACCESS_KEY_ID=$TIGRIS_ACCESS_KEY_ID" >> "$GITHUB_ENV"
+            echo "AWS_SECRET_ACCESS_KEY=$TIGRIS_SECRET_ACCESS_KEY" >> "$GITHUB_ENV"
+          fi
+          echo "AWS_ENDPOINT_URL_S3=${AWS_ENDPOINT_URL_S3:-https://t3.storage.dev}" >> "$GITHUB_ENV"
       - name: Run bulk load
         shell: bash
         env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
           BENCHMARK_SCALE: ${{ inputs.scale }}
+          CLOUD_PROVIDER: ${{ inputs.object_store }}
           GOLDEN_ID: ${{ inputs.golden_id }}
           SLATEDB_BENCH_BUCKET: ${{ vars.SLATEDB_BENCH_BUCKET }}
+          SLATEDB_BENCH_REGION: ${{ vars.AWS_REGION }}
         run: |
           set -euo pipefail
-          export CLOUD_PROVIDER=aws
-          export AWS_REGION=${AWS_REGION:-us-east-1}
           : "${SLATEDB_BENCH_BUCKET:?SLATEDB_BENCH_BUCKET is required}"
           export SLATEDB_BENCH_PREFIX=${SLATEDB_BENCH_PREFIX:-benchmark}
-          export SLATEDB_BENCH_REGION=${SLATEDB_BENCH_REGION:-$AWS_REGION}
           export SLATEDB_BENCH_RUNNER_TYPE=${SLATEDB_BENCH_RUNNER_TYPE:-warp-ubuntu-latest-arm64-8x}
           bin/slatedb-benchmark run \
             --task bulk-load \
@@ -142,9 +166,9 @@ jobs:
     needs: [build, bulk-load]
     runs-on: warp-ubuntu-latest-arm64-8x
     timeout-minutes: 1440
-    environment: benchmark
+    environment: benchmark-${{ inputs.object_store }}
     concurrency:
-      group: golden-${{ inputs.golden_id }}-compaction
+      group: golden-${{ inputs.object_store }}-${{ inputs.golden_id }}-compaction
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
@@ -155,25 +179,41 @@ jobs:
           name: benchmark-runner
           path: bin
       - run: chmod +x bin/slatedb-benchmark
-      - name: Configure AWS credentials
-        if: ${{ env.ACT != 'true' }}
+      - name: Configure S3 credentials
+        if: ${{ inputs.object_store == 's3' && env.ACT != 'true' }}
         uses: aws-actions/configure-aws-credentials@v5
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Configure Tigris credentials
+        if: ${{ inputs.object_store == 'tigris' }}
+        shell: bash
+        env:
+          AWS_ENDPOINT_URL_S3: ${{ vars.AWS_ENDPOINT_URL_S3 }}
+          TIGRIS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
+          TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ ${ACT:-false} != true ]]; then
+            : "${TIGRIS_ACCESS_KEY_ID:?Tigris access key ID is required}"
+            : "${TIGRIS_SECRET_ACCESS_KEY:?Tigris secret access key is required}"
+            echo "AWS_ACCESS_KEY_ID=$TIGRIS_ACCESS_KEY_ID" >> "$GITHUB_ENV"
+            echo "AWS_SECRET_ACCESS_KEY=$TIGRIS_SECRET_ACCESS_KEY" >> "$GITHUB_ENV"
+          fi
+          echo "AWS_ENDPOINT_URL_S3=${AWS_ENDPOINT_URL_S3:-https://t3.storage.dev}" >> "$GITHUB_ENV"
       - name: Run compaction
         shell: bash
         env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
           BENCHMARK_SCALE: ${{ inputs.scale }}
+          CLOUD_PROVIDER: ${{ inputs.object_store }}
           GOLDEN_ID: ${{ inputs.golden_id }}
           SLATEDB_BENCH_BUCKET: ${{ vars.SLATEDB_BENCH_BUCKET }}
+          SLATEDB_BENCH_REGION: ${{ vars.AWS_REGION }}
         run: |
           set -euo pipefail
-          export CLOUD_PROVIDER=aws
-          export AWS_REGION=${AWS_REGION:-us-east-1}
           : "${SLATEDB_BENCH_BUCKET:?SLATEDB_BENCH_BUCKET is required}"
           export SLATEDB_BENCH_PREFIX=${SLATEDB_BENCH_PREFIX:-benchmark}
-          export SLATEDB_BENCH_REGION=${SLATEDB_BENCH_REGION:-$AWS_REGION}
           export SLATEDB_BENCH_RUNNER_TYPE=${SLATEDB_BENCH_RUNNER_TYPE:-warp-ubuntu-latest-arm64-8x}
           bin/slatedb-benchmark run \
             --task compaction \

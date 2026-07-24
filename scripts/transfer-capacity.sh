@@ -15,7 +15,7 @@ bucket=${SLATEDB_BENCH_BUCKET:?SLATEDB_BENCH_BUCKET is required}
 root_prefix=${SLATEDB_BENCH_PREFIX:-benchmark}
 region=${SLATEDB_BENCH_REGION:-$aws_region}
 runner_type=${SLATEDB_BENCH_RUNNER_TYPE:-unknown}
-object_store=${CLOUD_PROVIDER:-aws}
+object_store=${CLOUD_PROVIDER:-s3}
 warp_bin=${WARP_BIN:-warp}
 warp_version=${WARP_VERSION:-v1.5.0}
 if [[ -n $configured_endpoint ]]; then

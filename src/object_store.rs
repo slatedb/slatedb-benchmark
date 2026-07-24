@@ -21,16 +21,20 @@ pub struct ObjectStoreContext {
 
 impl ObjectStoreContext {
     pub fn load() -> Result<Self> {
-        let provider = env::var("CLOUD_PROVIDER").unwrap_or_else(|_| "aws".to_string());
+        let provider =
+            normalize_provider(&env::var("CLOUD_PROVIDER").unwrap_or_else(|_| "s3".to_string()));
         let metrics = Arc::new(StoreMetrics::default());
         let (raw, control, endpoint): (Arc<dyn ObjectStore>, Arc<dyn ObjectStore>, String) =
-            match provider.to_ascii_lowercase().as_str() {
-                "aws" => {
+            match provider.as_str() {
+                "s3" | "tigris" => {
                     let bucket = env::var("SLATEDB_BENCH_BUCKET")
                         .or_else(|_| env::var("AWS_BUCKET_NAME"))
                         .context("SLATEDB_BENCH_BUCKET is required")?;
                     let builder = AmazonS3Builder::from_env().with_bucket_name(bucket);
                     let configured_endpoint = configured_s3_endpoint(&builder);
+                    if provider == "tigris" && configured_endpoint.is_none() {
+                        bail!("AWS_ENDPOINT_URL_S3 is required for Tigris");
+                    }
                     let raw: Arc<dyn ObjectStore> = Arc::new(
                         builder
                             .clone()
@@ -63,7 +67,9 @@ impl ObjectStoreContext {
                     (Arc::clone(&store), store, path)
                 }
                 other => {
-                    bail!("unsupported CLOUD_PROVIDER {other}; expected aws, memory, or local")
+                    bail!(
+                        "unsupported CLOUD_PROVIDER {other}; expected s3, tigris, memory, or local"
+                    )
                 }
             };
         let prefix = env::var("SLATEDB_BENCH_PREFIX").unwrap_or_else(|_| "manual".to_string());
@@ -79,6 +85,13 @@ impl ObjectStoreContext {
             endpoint,
             region,
         })
+    }
+}
+
+fn normalize_provider(provider: &str) -> String {
+    match provider.to_ascii_lowercase().as_str() {
+        "aws" => "s3".to_string(),
+        provider => provider.to_string(),
     }
 }
 
@@ -103,7 +116,7 @@ pub async fn delete_prefix(store: Arc<dyn ObjectStore>, prefix: &Path) -> Result
 
 #[cfg(test)]
 mod tests {
-    use super::configured_s3_endpoint;
+    use super::{configured_s3_endpoint, normalize_provider};
     use object_store::aws::{AmazonS3Builder, AmazonS3ConfigKey};
 
     #[test]
@@ -117,5 +130,12 @@ mod tests {
             configured_s3_endpoint(&builder).as_deref(),
             Some("https://s3-specific.example")
         );
+    }
+
+    #[test]
+    fn provider_uses_s3_name_for_legacy_aws_value() {
+        assert_eq!(normalize_provider("aws"), "s3");
+        assert_eq!(normalize_provider("S3"), "s3");
+        assert_eq!(normalize_provider("TIGRIS"), "tigris");
     }
 }
