@@ -4,6 +4,7 @@ interface Props {
 }
 
 const { scaled = false } = Astro.props;
+const local = import.meta.env.DEV;
 ---
 
 <header class="site-header">
@@ -12,4 +13,5 @@ const { scaled = false } = Astro.props;
   </a>
   <a class="site-name" href="/">Benchmarks</a>
   {scaled && <span class="data-badge">Scaled data</span>}
+  {local && <span class="data-badge">Local</span>}
 </header>
