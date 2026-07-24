@@ -86,4 +86,4 @@ while IFS= read -r result; do
     exit 1
   fi
 done < <(find .runs/release/results -path '*/workload/*/result.json' -type f)
-find .runs/release/results -mindepth 2 -maxdepth 2 -name run.json -type f | grep -q .
+find .runs/release/results -mindepth 3 -maxdepth 3 -name run.json -type f | grep -q .

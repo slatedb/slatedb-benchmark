@@ -4,6 +4,7 @@ import {
   datasetHref,
   routeHref,
   versionLabel,
+  type BenchmarkRun,
   type ResultRoute,
   type SourceIdentity,
 } from '../lib/results';
@@ -14,7 +15,7 @@ interface Props {
   name: string;
   goldenId: string;
   source: SourceIdentity;
-  timestamp: string;
+  run: BenchmarkRun;
   rawResult: string;
   rawSeries?: string;
   actionsLogUrl?: string;
@@ -27,7 +28,7 @@ const {
   name,
   goldenId,
   source,
-  timestamp,
+  run,
   rawResult,
   rawSeries,
   actionsLogUrl,
@@ -40,28 +41,40 @@ const versions = [...new Set(
 )]
   .sort((left, right) => compareVersions(right, left));
 const versionRoutes = routes.filter((route) => route.version === version);
-const workloads = versionRoutes
+const currentRunRoutes = versionRoutes.filter((route) => route.run.id === run.id);
+const workloads = currentRunRoutes
   .filter((route) => route.kind === 'workload')
   .sort((left, right) => left.name.localeCompare(right.name));
 const versionOptions = versions.map((candidate) => {
   const candidateRoutes = routes.filter((route) => route.version === candidate);
-  const dataset = candidateRoutes.find(
-    (route) => route.kind === 'preparation' && route.name === 'compaction',
-  );
-  const workload = candidateRoutes.find(
-    (route) => route.kind === 'workload' && route.name === name,
-  ) ?? candidateRoutes.find((route) => route.kind === 'workload');
+  const target = kind === 'dataset'
+    ? candidateRoutes.find(
+      (route) => route.kind === 'preparation' && route.name === 'compaction',
+    )
+    : candidateRoutes.find(
+      (route) => route.kind === 'workload' && route.name === name,
+    ) ?? candidateRoutes.find((route) => route.kind === 'workload');
   return {
     version: candidate,
     label: versionLabel(candidate),
-    href: kind === 'dataset' && dataset
-      ? datasetHref(candidate)
-      : workload ? routeHref(workload) : datasetHref(candidate),
+    href: target ? routeHref(target) : datasetHref(candidate),
   };
 });
-const hasDataset = versionRoutes.some(
+const recordedRoutes = versionRoutes.filter((route) =>
+  kind === 'dataset'
+    ? route.kind === 'preparation' && route.name === 'compaction'
+    : route.kind === 'workload' && route.name === name
+);
+const recordedOptions = [...new Map(
+  recordedRoutes.map((route) => [route.run.id, route]),
+).values()].sort((left, right) =>
+  Date.parse(right.run.startedAt) - Date.parse(left.run.startedAt)
+);
+const hasDataset = currentRunRoutes.some(
   (route) => route.kind === 'preparation' && route.name === 'compaction',
 );
+const patchHref = (patch: string) =>
+  `https://github.com/slatedb/slatedb-benchmark/blob/${source.runner_commit}/patches/slatedb/${encodeURIComponent(patch)}`;
 ---
 
 <aside class="result-context" aria-label="Benchmark context">
@@ -70,6 +83,24 @@ const hasDataset = versionRoutes.some(
     <select class="route-select" id="result-version" data-route-select>
       {versionOptions.map((option) => (
         <option value={option.href} selected={option.version === version}>{option.label}</option>
+      ))}
+    </select>
+  </div>
+
+  <div class="context-block">
+    <label class="context-label" for="result-recorded">Recorded</label>
+    <select class="route-select" id="result-recorded" data-route-select>
+      {recordedOptions.map((route) => (
+        <option
+          value={routeHref(route)}
+          selected={route.run.id === run.id}
+          data-local-timestamp={route.run.startedAt}
+        >
+          {new Date(route.run.startedAt).toLocaleString('en-US', {
+            timeZone: 'UTC',
+            timeZoneName: 'short',
+          })}
+        </option>
       ))}
     </select>
   </div>
@@ -96,14 +127,22 @@ const hasDataset = versionRoutes.some(
   <dl class="metadata-list">
     <div>
       <dt>Golden data</dt>
-      <dd>{hasDataset ? <a href={datasetHref(version)}>{goldenId}</a> : goldenId}</dd>
+      <dd>{hasDataset ? <a href={datasetHref(version, run.id)}>{goldenId}</a> : goldenId}</dd>
     </div>
     <div>
-      <dt>Recorded</dt>
+      <dt>Patches</dt>
       <dd>
-        <time datetime={timestamp} data-local-timestamp>
-          {new Date(timestamp).toLocaleString('en-US', { timeZone: 'UTC', timeZoneName: 'short' })}
-        </time>
+        {run.patches.length > 0 ? (
+          <ul class="patch-list">
+            {run.patches.map((patch) => (
+              <li>
+                <a href={patchHref(patch.name)} title={`SHA-256: ${patch.sha256}`}>
+                  {patch.name}
+                </a>
+              </li>
+            ))}
+          </ul>
+        ) : 'None'}
       </dd>
     </div>
   </dl>
@@ -118,10 +157,10 @@ const hasDataset = versionRoutes.some(
 </aside>
 
 <script>
-  document.querySelectorAll<HTMLTimeElement>('[data-local-timestamp]').forEach((time) => {
-    const date = new Date(time.dateTime);
+  document.querySelectorAll<HTMLOptionElement>('[data-local-timestamp]').forEach((option) => {
+    const date = new Date(option.dataset.localTimestamp ?? '');
     if (!Number.isNaN(date.getTime())) {
-      time.textContent = date.toLocaleString('en-US', { timeZoneName: 'short' });
+      option.textContent = date.toLocaleString('en-US', { timeZoneName: 'short' });
     }
   });
 

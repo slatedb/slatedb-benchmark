@@ -1,0 +1,62 @@
+---
+import Base from '../layouts/Base.astro';
+import ConfigurationTable from './ConfigurationTable.astro';
+import ResultContext from './ResultContext.astro';
+import SiteHeader from './SiteHeader.astro';
+import MetricTables from './MetricTables.astro';
+import { render, type CollectionEntry } from 'astro:content';
+import type { ResultRoute, WorkloadResult } from '../lib/results';
+
+interface Props {
+  route: ResultRoute<WorkloadResult>;
+  routes: ResultRoute<unknown>[];
+  description: CollectionEntry<'workloads'>;
+}
+
+const { route, routes, description } = Astro.props;
+const result = route.result;
+const { Content } = await render(description);
+const rawBase = `/raw/${route.rawBase}/workload/${route.name}`;
+---
+
+<Base title={`${route.name} · SlateDB ${route.version}`}>
+  <SiteHeader scaled={result.configuration.scale !== 1} />
+  <main class="result-shell">
+    <ResultContext
+      version={route.version}
+      kind="workload"
+      name={route.name}
+      goldenId={result.golden_id}
+      source={result.source}
+      run={route.run}
+      rawResult={`${rawBase}/result.json`}
+      rawSeries={`${rawBase}/${result.series.file}`}
+      actionsLogUrl={result.actions_log_url}
+      routes={routes}
+    />
+    <article class="result-content">
+      <header class="page-heading">
+        <p class="eyebrow">Workload</p>
+        <h1>{route.name}</h1>
+        <div class="workload-description">
+          <Content />
+        </div>
+        <dl class="heading-metadata">
+          <div><dt>Clients</dt><dd>{result.configuration.task.clients}</dd></div>
+          <div><dt>Warmup</dt><dd>{result.configuration.task.warmup_ms / 1000}s</dd></div>
+          <div><dt>Recorded interval</dt><dd>{(result.recorded_interval_ns / 1e9).toLocaleString('en-US', { maximumFractionDigits: 2 })}s</dd></div>
+          <div><dt>Durability drain</dt><dd>{(result.durability_drain_ns / 1e9).toLocaleString('en-US', { maximumFractionDigits: 2 })}s</dd></div>
+          <div><dt>Initial state</dt><dd>{result.initial_state.kind}</dd></div>
+        </dl>
+      </header>
+
+      <MetricTables
+        result={result}
+        chartSeriesUrl={`${rawBase}/${result.series.file}`}
+        clientMeasurementNs={result.client_measurement_ns}
+      />
+
+      <ConfigurationTable configuration={result.configuration} />
+    </article>
+  </main>
+</Base>

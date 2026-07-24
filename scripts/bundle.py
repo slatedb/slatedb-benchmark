@@ -22,6 +22,7 @@ WORKLOADS = [
     "sustained-ingest",
     "transaction-contention",
 ]
+PATCH_DIRECTORY = Path(__file__).resolve().parent.parent / "patches" / "slatedb"
 
 
 def arguments():
@@ -52,6 +53,14 @@ def read_result(path, task, golden):
 
 def sha256(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def read_patches(directory=PATCH_DIRECTORY):
+    return [
+        {"name": path.name, "sha256": sha256(path)}
+        for path in sorted(directory.glob("*.patch"))
+        if path.is_file()
+    ]
 
 
 def read_series(path, result):
@@ -266,6 +275,9 @@ def main():
     sessions = {result["session"] for result in workloads.values()}
     if len(sessions) != 1:
         raise ValueError("workload results belong to different sessions")
+    run_id = next(iter(sessions))
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,128}", run_id) or run_id in {".", ".."}:
+        raise ValueError(f"invalid benchmark run ID {run_id!r}")
     for task, result in workloads.items():
         if result["configuration"]["scale"] != scale:
             raise ValueError(f"{task} used a different scale")
@@ -296,7 +308,7 @@ def main():
         else None
     )
 
-    destination = args.output / version
+    destination = args.output / version / run_id
     if destination.exists():
         shutil.rmtree(destination)
     checksums = {}
@@ -317,9 +329,11 @@ def main():
 
     manifest = {
         "status": "ok",
+        "run_id": run_id,
         "golden_id": args.golden,
         "started_at": args.started_at,
         "finished_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "patches": read_patches(),
         "source": source,
         "preparation_runner_commits": {
             task: preparation[task]["source"]["runner_commit"] for task in PREPARATION

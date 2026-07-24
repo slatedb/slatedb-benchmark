@@ -311,11 +311,20 @@ pub struct WorkloadResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct AppliedPatch {
+    pub name: String,
+    pub sha256: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RunManifest {
     pub status: String,
+    pub run_id: String,
     pub golden_id: String,
     pub started_at: String,
     pub finished_at: String,
+    pub patches: Vec<AppliedPatch>,
     pub source: SourceIdentity,
     pub preparation_runner_commits: BTreeMap<String, String>,
     pub resolved_configuration: BTreeMap<String, ResultConfiguration>,

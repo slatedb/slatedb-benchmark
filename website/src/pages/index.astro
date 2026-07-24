@@ -1,5 +1,5 @@
 ---
-import { latestStable, loadWorkloadResults, routeHref } from '../lib/results';
+import { latestRouteHref, latestStable, loadWorkloadResults } from '../lib/results';
 
 const workloads = await loadWorkloadResults();
 const latest = latestStable(workloads);
@@ -9,7 +9,7 @@ const preferred = latest
 
 if (!preferred) throw new Error('website requires at least one workload result');
 
-const redirect = routeHref(preferred);
+const redirect = latestRouteHref(preferred);
 const canonical = new URL(redirect, Astro.site).href;
 ---
 

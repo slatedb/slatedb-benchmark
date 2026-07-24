@@ -1,0 +1,20 @@
+---
+import DatasetResultPage from '../../../../components/DatasetResultPage.astro';
+import {
+  loadDatasetResults,
+  loadWorkloadResults,
+} from '../../../../lib/results';
+
+export async function getStaticPaths() {
+  const datasets = await loadDatasetResults();
+  const routes = [...datasets, ...await loadWorkloadResults()];
+  return datasets.map((route) => ({
+    params: { version: route.version, run: route.run.id },
+    props: { route, routes },
+  }));
+}
+
+const { route, routes } = Astro.props;
+---
+
+<DatasetResultPage route={route} routes={routes} />

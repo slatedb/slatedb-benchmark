@@ -13,7 +13,7 @@ config/settings.<workload>.toml  Optional workload replacement
 .actrc                           Local runner and artifact configuration
 src/                             Fixed config, runner, workloads, metrics, validation
 schema/                          Published JSON schemas
-results/<version>/               Published results
+results/<version>/<run-id>/      Published results
 website/                         Static Astro website
 scripts/                         Smoke, fixture, and publication commands
 ```
@@ -242,10 +242,9 @@ store.
 The two workflows resolve `slatedb_ref` independently. A benchmark can use a
 golden checkpoint prepared by another SlateDB commit, provided the requested
 build can read it. Before building the benchmark runner, every `*.patch` file
-in `patches/slatedb` is applied in filename order. Patched results retain the
-base SlateDB commit and append `-patched` to `slate_version`, keeping them
-separate from unpatched results while the benchmark commit identifies the
-exact patch contents.
+in `patches/slatedb` is applied in filename order. Patches do not change the
+SlateDB version. Each run records their filenames and SHA-256 digests, while
+the benchmark commit provides their exact contents.
 
 A published run starts with these commands:
 
@@ -355,24 +354,33 @@ its default compute type.
 
 ```text
 results/<version>/
-  run.json
-  preparation/
-    bulk-load/result.json
-    compaction/result.json
-  workload/
-    <name>/
-      result.json
-      series.json
+  <run-id>/
+    run.json
+    preparation/
+      bulk-load/result.json
+      compaction/result.json
+    workload/
+      <name>/
+        result.json
+        series.json
 ```
 
-`run.json` records the golden ID, measured SlateDB source, preparation and
-benchmark runner commits, resolved configuration, matrix concurrency,
-diagnostic Amazon S3 bandwidth, and result checksums. Preparation results record
-the SlateDB source that created the golden data. Workload results record the
-independently selected SlateDB source being measured. Both result types contain
-the environment and metric summaries defined in
-[`BENCHMARKS.md`](BENCHMARKS.md). Workload results also contain their initial
-database identity.
+The run ID is the benchmark session, such as `github-123456`. Publishing a run
+replaces only that run ID and preserves every other run for the version.
+`run.json` records the run ID, timestamp, applied patches, golden ID, measured
+SlateDB source, preparation and benchmark runner commits, resolved
+configuration, matrix concurrency, diagnostic Amazon S3 bandwidth, and result
+checksums. Preparation results record the SlateDB source that created the
+golden data. Workload results record the independently selected SlateDB source
+being measured. Both result types contain the environment and metric summaries
+defined in [`BENCHMARKS.md`](BENCHMARKS.md). Workload results also contain
+their initial database identity.
+
+The website generates immutable
+`/<version>/run/<run-id>/workload/<name>/` routes. Shorter
+`/<version>/workload/<name>/` routes show the newest run. The Recorded selector
+lists run start times in the browser's local timezone, and the Patches section
+links each patch to the benchmark commit that applied it.
 
 The worker reads each result through strict Serde models and runs one semantic
 validation pass. That pass checks internal counts, samples, durability

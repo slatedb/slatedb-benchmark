@@ -8,16 +8,25 @@ fi
 
 bundle_root=$1
 publish_checkout=$2
-mapfile -t manifests < <(find "$bundle_root" -mindepth 2 -maxdepth 2 -name run.json -type f)
+mapfile -t manifests < <(find "$bundle_root" -mindepth 3 -maxdepth 3 -name run.json -type f)
 if [[ ${#manifests[@]} -ne 1 ]]; then
-  echo "expected one versioned run.json under $bundle_root" >&2
+  echo "expected one versioned benchmark run under $bundle_root" >&2
   exit 1
 fi
 run_manifest=${manifests[0]}
-version=$(basename "$(dirname "$run_manifest")")
+run_id=$(basename "$(dirname "$run_manifest")")
+version=$(basename "$(dirname "$(dirname "$run_manifest")")")
 if [[ -z "$version" || "$version" == "." || "$version" == ".." || "$version" =~ [^A-Za-z0-9._-] ]]; then
   echo "invalid result version $version" >&2
   exit 2
+fi
+if [[ -z "$run_id" || "$run_id" == "." || "$run_id" == ".." || "$run_id" =~ [^A-Za-z0-9._-] ]]; then
+  echo "invalid benchmark run ID $run_id" >&2
+  exit 2
+fi
+if [[ $(jq -r '.run_id' "$run_manifest") != "$run_id" ]]; then
+  echo "benchmark run directory does not match run.json" >&2
+  exit 1
 fi
 if [[ ! -d "$publish_checkout/.git" ]]; then
   echo "publication checkout not found at $publish_checkout" >&2
@@ -52,7 +61,7 @@ while IFS=$'\t' read -r relative expected; do
   fi
 done < <(jq -r '.results | to_entries[] | [.key, .value] | @tsv' "$run_manifest")
 
-destination_directory="$publish_checkout/results/$version"
+destination_directory="$publish_checkout/results/$version/$run_id"
 rm -rf "$destination_directory"
 mkdir -p "$destination_directory"
 cp -R "$source_directory/." "$destination_directory/"
@@ -65,7 +74,7 @@ fi
 
 git -C "$publish_checkout" config user.name "slatedb-benchmark[bot]"
 git -C "$publish_checkout" config user.email "slatedb-benchmark[bot]@users.noreply.github.com"
-git -C "$publish_checkout" commit -m "Publish SlateDB $version benchmarks"
+git -C "$publish_checkout" commit -m "Publish SlateDB $version benchmark run $run_id"
 
 for attempt in 1 2 3 4 5; do
   git -C "$publish_checkout" fetch origin main

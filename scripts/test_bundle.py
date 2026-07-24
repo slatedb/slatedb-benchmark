@@ -83,6 +83,28 @@ class WorkloadDiscoveryTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "any workload results"):
                 bundle.discover_workloads(Path(directory))
 
+
+class PatchManifestTests(unittest.TestCase):
+    def test_records_patch_names_and_digests_in_filename_order(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "0002-second.patch").write_text("second\n", encoding="utf-8")
+            (root / "0001-first.patch").write_text("first\n", encoding="utf-8")
+            (root / "README.md").write_text("ignored\n", encoding="utf-8")
+
+            patches = bundle.read_patches(root)
+
+        self.assertEqual(
+            [patch["name"] for patch in patches],
+            ["0001-first.patch", "0002-second.patch"],
+        )
+        self.assertTrue(all(len(patch["sha256"]) == 64 for patch in patches))
+
+    def test_empty_patch_directory_produces_an_empty_manifest(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertEqual(bundle.read_patches(Path(directory)), [])
+
+
 class TransferCapacityTests(unittest.TestCase):
     def setUp(self):
         self.environment = {

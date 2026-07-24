@@ -10,9 +10,6 @@ shopt -s nullglob
 patch_paths=("$patch_dir"/*.patch)
 
 if (( ${#patch_paths[@]} == 0 )); then
-  if [[ -n ${GITHUB_OUTPUT:-} ]]; then
-    echo "applied=false" >> "$GITHUB_OUTPUT"
-  fi
   exit 0
 fi
 
@@ -22,7 +19,3 @@ for patch_path in "${patch_paths[@]}"; do
   git -C "$source_dir" apply --check "$patch_path"
   git -C "$source_dir" apply "$patch_path"
 done
-
-if [[ -n ${GITHUB_OUTPUT:-} ]]; then
-  echo "applied=true" >> "$GITHUB_OUTPUT"
-fi

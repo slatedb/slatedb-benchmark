@@ -10,6 +10,22 @@ export type SourceIdentity = {
   lockfile_sha256: string;
 };
 
+export type AppliedPatch = {
+  name: string;
+  sha256: string;
+};
+
+export type RunManifest = {
+  status: 'ok';
+  run_id: string;
+  golden_id: string;
+  started_at: string;
+  finished_at: string;
+  patches: AppliedPatch[];
+  source: SourceIdentity;
+  results: Record<string, string>;
+};
+
 export type Environment = {
   runner_type: string;
   hostname: string;
@@ -222,9 +238,26 @@ export type WorkloadSeries = {
 
 export type ResultRoute<T> = {
   version: string;
+  run: BenchmarkRun;
+  rawBase: string;
   kind: 'preparation' | 'workload';
   name: string;
   result: T;
+};
+
+export type BenchmarkRun = {
+  id: string;
+  startedAt: string;
+  finishedAt: string;
+  patches: AppliedPatch[];
+};
+
+type StoredRun = {
+  version: string;
+  run: BenchmarkRun;
+  rawBase: string;
+  root: string;
+  manifest: RunManifest;
 };
 
 const repoRoot = path.resolve(process.cwd(), '..');
@@ -262,22 +295,86 @@ export async function loadWorkloadResults(): Promise<ResultRoute<WorkloadResult>
 }
 
 async function loadTaskResults<T>(kind: 'preparation' | 'workload'): Promise<ResultRoute<T>[]> {
-  const files = (await walk(resultsRoot)).filter((file) => {
-    const relative = path.relative(resultsRoot, file).split(path.sep);
-    return relative.length === 4 && relative[1] === kind && relative[3] === 'result.json';
-  });
-  const routes = await Promise.all(
-    files.map(async (file) => {
-      const [version, , name] = path.relative(resultsRoot, file).split(path.sep);
-      return {
-        version,
-        kind,
-        name,
-        result: JSON.parse(await fs.readFile(file, 'utf8')) as T,
-      };
-    }),
-  );
+  const runs = await loadRuns();
+  const routes = await Promise.all(runs.flatMap((stored) =>
+    Object.keys(stored.manifest.results)
+      .map((relative) => relative.split('/'))
+      .filter((parts) =>
+        parts.length === 3
+        && parts[0] === kind
+        && parts[2] === 'result.json'
+      )
+      .map(async ([, name]) => {
+        const file = path.join(stored.root, kind, name, 'result.json');
+        const { root: _root, manifest: _manifest, ...routeRun } = stored;
+        return {
+          ...routeRun,
+          kind,
+          name,
+          result: JSON.parse(await fs.readFile(file, 'utf8')) as T,
+        };
+      }),
+  ));
   return routes.sort(compareRoutes);
+}
+
+async function loadRuns(): Promise<StoredRun[]> {
+  const manifests = (await walk(resultsRoot)).filter((file) => {
+    if (path.basename(file) !== 'run.json') return false;
+    const relative = path.relative(resultsRoot, file).split(path.sep);
+    return relative.length === 3;
+  });
+  const runs = await Promise.all(manifests.map(async (file) => {
+    const relative = path.relative(resultsRoot, file).split(path.sep);
+    const version = relative[0];
+    const root = path.dirname(file);
+    const rawBase = path.relative(resultsRoot, root).split(path.sep).join('/');
+    const manifest = JSON.parse(await fs.readFile(file, 'utf8')) as RunManifest;
+    const nestedRunId = relative[1];
+    if (manifest.run_id !== nestedRunId) {
+      throw new Error(`${file} run_id does not match its directory`);
+    }
+    return {
+      version,
+      rawBase,
+      root,
+      manifest,
+      run: {
+        id: manifest.run_id,
+        startedAt: manifest.started_at,
+        finishedAt: manifest.finished_at,
+        patches: manifest.patches,
+      },
+    };
+  }));
+  const identities = new Set<string>();
+  for (const stored of runs) {
+    const identity = `${stored.version}\0${stored.run.id}`;
+    if (identities.has(identity)) {
+      throw new Error(`duplicate benchmark run ${stored.version}/${stored.run.id}`);
+    }
+    identities.add(identity);
+  }
+  return runs;
+}
+
+export function latestRoutes<T>(
+  routes: ResultRoute<T>[],
+  key: (route: ResultRoute<T>) => string,
+) {
+  const selected = new Map<string, ResultRoute<T>>();
+  for (const route of routes) {
+    const candidate = selected.get(key(route));
+    if (!candidate || compareRunDates(route, candidate) < 0) {
+      selected.set(key(route), route);
+    }
+  }
+  return [...selected.values()].sort(compareRoutes);
+}
+
+function compareRunDates(left: ResultRoute<unknown>, right: ResultRoute<unknown>) {
+  return Date.parse(right.run.startedAt) - Date.parse(left.run.startedAt)
+    || right.run.id.localeCompare(left.run.id);
 }
 
 export async function rawResultFiles() {
@@ -296,16 +393,32 @@ export function latestStable<T>(routes: ResultRoute<T>[]): ResultRoute<T> | unde
   return routes.find((route) => /^\d+\.\d+\.\d+$/.test(route.version)) ?? routes[0];
 }
 
-export function routeHref(route: Pick<ResultRoute<unknown>, 'version' | 'kind' | 'name'>) {
-  return `/${route.version}/${route.kind}/${route.name}/`;
+export function routeHref(
+  route: Pick<ResultRoute<unknown>, 'version' | 'run' | 'kind' | 'name'>,
+) {
+  if (route.kind === 'preparation') {
+    return datasetHref(route.version, route.run.id);
+  }
+  return `/${route.version}/run/${route.run.id}/workload/${route.name}/`;
 }
 
-export function datasetHref(version: string) {
-  return `/${version}/dataset/`;
+export function latestRouteHref(
+  route: Pick<ResultRoute<unknown>, 'version' | 'kind' | 'name'>,
+) {
+  if (route.kind === 'preparation') return datasetHref(route.version);
+  return `/${route.version}/workload/${route.name}/`;
+}
+
+export function datasetHref(version: string, runId?: string) {
+  return runId
+    ? `/${version}/run/${runId}/dataset/`
+    : `/${version}/dataset/`;
 }
 
 function compareRoutes(left: ResultRoute<unknown>, right: ResultRoute<unknown>) {
-  return compareVersions(right.version, left.version) || compareTask(left.name, right.name);
+  return compareVersions(right.version, left.version)
+    || compareRunDates(left, right)
+    || compareTask(left.name, right.name);
 }
 
 export const workloadNames = [

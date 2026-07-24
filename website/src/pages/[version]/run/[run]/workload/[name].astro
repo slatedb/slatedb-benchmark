@@ -1,0 +1,18 @@
+---
+import WorkloadResultPage from '../../../../../components/WorkloadResultPage.astro';
+import { loadDatasetResults } from '../../../../../lib/results';
+import { loadWorkloadPageData } from '../../../../../lib/workload-pages';
+
+export async function getStaticPaths() {
+  const { workloads, descriptions } = await loadWorkloadPageData();
+  const routes = [...await loadDatasetResults(), ...workloads];
+  return workloads.map((route) => ({
+    params: { version: route.version, run: route.run.id, name: route.name },
+    props: { route, routes, description: descriptions.get(route.name)! },
+  }));
+}
+
+const { route, routes, description } = Astro.props;
+---
+
+<WorkloadResultPage route={route} routes={routes} description={description} />

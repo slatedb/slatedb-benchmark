@@ -6,9 +6,11 @@
   "additionalProperties": false,
   "required": [
     "status",
+    "run_id",
     "golden_id",
     "started_at",
     "finished_at",
+    "patches",
     "source",
     "preparation_runner_commits",
     "resolved_configuration",
@@ -17,9 +19,17 @@
   ],
   "properties": {
     "status": { "const": "ok" },
+    "run_id": {
+      "type": "string",
+      "pattern": "^(?!\\.{1,2}$)[A-Za-z0-9._-]{1,128}$"
+    },
     "golden_id": { "type": "string", "minLength": 1 },
     "started_at": { "type": "string", "format": "date-time" },
     "finished_at": { "type": "string", "format": "date-time" },
+    "patches": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/patch" }
+    },
     "source": {
       "type": "object",
       "additionalProperties": false,
@@ -95,6 +105,21 @@
     }
   },
   "$defs": {
+    "patch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "sha256"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[^/]+\\.patch$"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
     "legacyTransferCapacity": {
       "type": "object",
       "additionalProperties": false,

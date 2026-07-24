@@ -1,92 +1,19 @@
 ---
-import Base from '../../../layouts/Base.astro';
-import ConfigurationTable from '../../../components/ConfigurationTable.astro';
-import ResultContext from '../../../components/ResultContext.astro';
-import SiteHeader from '../../../components/SiteHeader.astro';
-import MetricTables from '../../../components/MetricTables.astro';
-import { getCollection, render, type CollectionEntry } from 'astro:content';
-import {
-  loadDatasetResults,
-  loadWorkloadResults,
-  workloadNames,
-  type ResultRoute,
-  type WorkloadResult,
-} from '../../../lib/results';
+import WorkloadResultPage from '../../../components/WorkloadResultPage.astro';
+import { loadDatasetResults, latestRoutes } from '../../../lib/results';
+import { loadWorkloadPageData } from '../../../lib/workload-pages';
 
 export async function getStaticPaths() {
-  const workloads = await loadWorkloadResults();
-  const content = await getCollection('workloads');
-  const descriptions = new Map(content.map((entry) => [entry.id, entry]));
-  const expected = new Set<string>(workloadNames);
-  const missing = workloadNames.filter((name) => !descriptions.has(name));
-  const unexpected = content.filter((entry) => !expected.has(entry.id)).map((entry) => entry.id);
-  const undocumented = [...new Set(
-    workloads.filter((route) => !descriptions.has(route.name)).map((route) => route.name),
-  )];
-  if (missing.length > 0 || unexpected.length > 0 || undocumented.length > 0) {
-    throw new Error(
-      [
-        'workload descriptions do not match the catalog',
-        `missing=${missing.join(',') || 'none'}`,
-        `unexpected=${unexpected.join(',') || 'none'}`,
-        `undocumented results=${undocumented.join(',') || 'none'}`,
-      ].join('; '),
-    );
-  }
+  const { workloads, descriptions } = await loadWorkloadPageData();
   const routes = [...await loadDatasetResults(), ...workloads];
-  return workloads.map((route) => ({
+  const latest = latestRoutes(workloads, (route) => `${route.version}/${route.name}`);
+  return latest.map((route) => ({
     params: { version: route.version, name: route.name },
     props: { route, routes, description: descriptions.get(route.name)! },
   }));
 }
 
-const { route, routes, description } = Astro.props as {
-  route: ResultRoute<WorkloadResult>;
-  routes: ResultRoute<unknown>[];
-  description: CollectionEntry<'workloads'>;
-};
-const result = route.result;
-const { Content } = await render(description);
+const { route, routes, description } = Astro.props;
 ---
 
-<Base title={`${route.name} · SlateDB ${route.version}`}>
-  <SiteHeader scaled={result.configuration.scale !== 1} />
-  <main class="result-shell">
-    <ResultContext
-      version={route.version}
-      kind="workload"
-      name={route.name}
-      goldenId={result.golden_id}
-      source={result.source}
-      timestamp={result.timestamp}
-      rawResult={`/raw/${route.version}/workload/${route.name}/result.json`}
-      rawSeries={`/raw/${route.version}/workload/${route.name}/${result.series.file}`}
-      actionsLogUrl={result.actions_log_url}
-      routes={routes}
-    />
-    <article class="result-content">
-      <header class="page-heading">
-        <p class="eyebrow">Workload</p>
-        <h1>{route.name}</h1>
-        <div class="workload-description">
-          <Content />
-        </div>
-        <dl class="heading-metadata">
-          <div><dt>Clients</dt><dd>{result.configuration.task.clients}</dd></div>
-          <div><dt>Warmup</dt><dd>{result.configuration.task.warmup_ms / 1000}s</dd></div>
-          <div><dt>Recorded interval</dt><dd>{(result.recorded_interval_ns / 1e9).toLocaleString('en-US', { maximumFractionDigits: 2 })}s</dd></div>
-          <div><dt>Durability drain</dt><dd>{(result.durability_drain_ns / 1e9).toLocaleString('en-US', { maximumFractionDigits: 2 })}s</dd></div>
-          <div><dt>Initial state</dt><dd>{result.initial_state.kind}</dd></div>
-        </dl>
-      </header>
-
-      <MetricTables
-        result={result}
-        chartSeriesUrl={`/raw/${route.version}/workload/${route.name}/${result.series.file}`}
-        clientMeasurementNs={result.client_measurement_ns}
-      />
-
-      <ConfigurationTable configuration={result.configuration} />
-    </article>
-  </main>
-</Base>
+<WorkloadResultPage route={route} routes={routes} description={description} />
