@@ -245,10 +245,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if ! command -v traceroute >/dev/null 2>&1; then
+          if ! command -v traceroute >/dev/null 2>&1 || \
+            ! command -v mtr >/dev/null 2>&1; then
             if ! sudo apt-get update -qq || \
-              ! sudo apt-get install -y --no-install-recommends traceroute; then
-              echo "::warning::traceroute installation failed"
+              ! sudo apt-get install -y --no-install-recommends traceroute mtr-tiny; then
+              echo "::warning::network diagnostics installation failed"
             fi
           fi
       - name: Record runner diagnostics
@@ -316,6 +317,21 @@ jobs:
 
           echo "::group::TCP traceroute to $object_store_name"
           sudo traceroute -T -p 443 -m 20 -w 2 -q 1 "$object_store_host" || true
+          echo "::endgroup::"
+
+          echo "::group::MTR packet loss to $object_store_name"
+          if command -v mtr >/dev/null 2>&1; then
+            sudo mtr \
+              --report \
+              --report-wide \
+              --report-cycles 20 \
+              --tcp \
+              --port 443 \
+              --show-ips \
+              "$object_store_host" || true
+          else
+            echo "::warning::mtr command unavailable"
+          fi
           echo "::endgroup::"
       - name: Measure object store transfer capacity
         shell: bash
