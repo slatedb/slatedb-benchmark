@@ -72,35 +72,68 @@ impl FromStr for BenchmarkScale {
     }
 }
 
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Serialize,
-    Deserialize,
-    JsonSchema,
-    TS,
-    ValueEnum,
-)]
-#[serde(rename_all = "kebab-case")]
-#[clap(rename_all = "kebab-case")]
-pub enum Task {
-    BulkLoad,
-    Compaction,
-    Idle,
-    PointReadUniform,
-    PointReadSkewed,
-    PointReadMissing,
-    ReadHeavy,
-    Balanced,
-    UpdateHeavy,
-    RangeScan,
-    SustainedIngest,
-    TransactionContention,
+macro_rules! define_tasks {
+    (
+        $(
+            $variant:ident {
+                name: $name:expr,
+                preparation: $preparation:expr,
+                clients: $clients:expr,
+                warmup_ms: $warmup_ms:expr,
+                measurement_ms: $measurement_ms:expr,
+                initial_state: $initial_state:expr,
+                key_selection: $key_selection:expr,
+                operation_mix: $operation_mix:expr,
+                scan_limit: $scan_limit:expr,
+                transaction_hot_keys: $transaction_hot_keys:expr,
+                transaction_reads: $transaction_reads:expr,
+                transaction_updates: $transaction_updates:expr,
+                may_write: $may_write:expr,
+            }
+        ),+ $(,)?
+    ) => {
+        #[derive(
+            Debug,
+            Clone,
+            Copy,
+            PartialEq,
+            Eq,
+            PartialOrd,
+            Ord,
+            Serialize,
+            Deserialize,
+            JsonSchema,
+            TS,
+            ValueEnum,
+        )]
+        #[repr(usize)]
+        #[serde(rename_all = "kebab-case")]
+        #[clap(rename_all = "kebab-case")]
+        pub enum Task {
+            $($variant),+
+        }
+
+        const TASK_CATALOG: &[TaskDefinition] = &[
+            $(
+                TaskDefinition {
+                    task: Task::$variant,
+                    name: $name,
+                    preparation: $preparation,
+                    clients: $clients,
+                    warmup_ms: $warmup_ms,
+                    measurement_ms: $measurement_ms,
+                    initial_state: $initial_state,
+                    key_selection: $key_selection,
+                    operation_mix: $operation_mix,
+                    scan_limit: $scan_limit,
+                    transaction_hot_keys: $transaction_hot_keys,
+                    transaction_reads: $transaction_reads,
+                    transaction_updates: $transaction_updates,
+                    may_write: $may_write,
+                }
+            ),+
+        ];
+    };
 }
 
 impl Task {
@@ -128,10 +161,7 @@ impl Task {
     }
 
     fn definition(self) -> &'static TaskDefinition {
-        TASK_CATALOG
-            .iter()
-            .find(|definition| definition.task == self)
-            .expect("task catalog must contain every task")
+        &TASK_CATALOG[self as usize]
     }
 }
 
@@ -168,9 +198,8 @@ const SCAN_ONLY: &[(&str, f64)] = &[("scan", 1.0)];
 const PUT_ONLY: &[(&str, f64)] = &[("put", 1.0)];
 const TRANSACTION_ONLY: &[(&str, f64)] = &[("transaction", 1.0)];
 
-const TASK_CATALOG: &[TaskDefinition] = &[
-    TaskDefinition {
-        task: Task::BulkLoad,
+define_tasks! {
+    BulkLoad {
         name: "bulk-load",
         preparation: true,
         clients: 0,
@@ -185,8 +214,7 @@ const TASK_CATALOG: &[TaskDefinition] = &[
         transaction_updates: None,
         may_write: true,
     },
-    TaskDefinition {
-        task: Task::Compaction,
+    Compaction {
         name: "compaction",
         preparation: true,
         clients: 0,
@@ -201,8 +229,7 @@ const TASK_CATALOG: &[TaskDefinition] = &[
         transaction_updates: None,
         may_write: false,
     },
-    TaskDefinition {
-        task: Task::Idle,
+    Idle {
         name: "idle",
         preparation: false,
         clients: 0,
@@ -217,8 +244,7 @@ const TASK_CATALOG: &[TaskDefinition] = &[
         transaction_updates: None,
         may_write: false,
     },
-    TaskDefinition {
-        task: Task::PointReadUniform,
+    PointReadUniform {
         name: "point-read-uniform",
         preparation: false,
         clients: CLIENTS,
@@ -233,8 +259,7 @@ const TASK_CATALOG: &[TaskDefinition] = &[
         transaction_updates: None,
         may_write: false,
     },
-    TaskDefinition {
-        task: Task::PointReadSkewed,
+    PointReadSkewed {
         name: "point-read-skewed",
         preparation: false,
         clients: CLIENTS,
@@ -249,8 +274,7 @@ const TASK_CATALOG: &[TaskDefinition] = &[
         transaction_updates: None,
         may_write: false,
     },
-    TaskDefinition {
-        task: Task::PointReadMissing,
+    PointReadMissing {
         name: "point-read-missing",
         preparation: false,
         clients: CLIENTS,
@@ -265,8 +289,7 @@ const TASK_CATALOG: &[TaskDefinition] = &[
         transaction_updates: None,
         may_write: false,
     },
-    TaskDefinition {
-        task: Task::ReadHeavy,
+    ReadHeavy {
         name: "read-heavy",
         preparation: false,
         clients: CLIENTS,
@@ -281,8 +304,7 @@ const TASK_CATALOG: &[TaskDefinition] = &[
         transaction_updates: None,
         may_write: true,
     },
-    TaskDefinition {
-        task: Task::Balanced,
+    Balanced {
         name: "balanced",
         preparation: false,
         clients: CLIENTS,
@@ -297,8 +319,7 @@ const TASK_CATALOG: &[TaskDefinition] = &[
         transaction_updates: None,
         may_write: true,
     },
-    TaskDefinition {
-        task: Task::UpdateHeavy,
+    UpdateHeavy {
         name: "update-heavy",
         preparation: false,
         clients: CLIENTS,
@@ -313,8 +334,7 @@ const TASK_CATALOG: &[TaskDefinition] = &[
         transaction_updates: None,
         may_write: true,
     },
-    TaskDefinition {
-        task: Task::RangeScan,
+    RangeScan {
         name: "range-scan",
         preparation: false,
         clients: CLIENTS,
@@ -329,8 +349,7 @@ const TASK_CATALOG: &[TaskDefinition] = &[
         transaction_updates: None,
         may_write: false,
     },
-    TaskDefinition {
-        task: Task::SustainedIngest,
+    SustainedIngest {
         name: "sustained-ingest",
         preparation: false,
         clients: CLIENTS,
@@ -345,8 +364,7 @@ const TASK_CATALOG: &[TaskDefinition] = &[
         transaction_updates: None,
         may_write: true,
     },
-    TaskDefinition {
-        task: Task::TransactionContention,
+    TransactionContention {
         name: "transaction-contention",
         preparation: false,
         clients: CLIENTS,
@@ -361,7 +379,7 @@ const TASK_CATALOG: &[TaskDefinition] = &[
         transaction_updates: Some(5),
         may_write: true,
     },
-];
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
