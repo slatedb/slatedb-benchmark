@@ -48,6 +48,21 @@ jobs:
     outputs:
       started_at: ${{ steps.validate.outputs.started_at }}
     steps:
+      - name: Summarize workflow inputs
+        shell: bash
+        env:
+          WORKFLOW_INPUTS: ${{ toJSON(inputs) }}
+        run: |
+          {
+            echo "### Workflow inputs"
+            echo
+            echo "| Input | Value |"
+            echo "| --- | --- |"
+            jq -r '
+              to_entries[]
+              | "| `\(.key)` | `\(.value | tostring | gsub("\\|"; "\\\\|"))` |"
+            ' <<< "$WORKFLOW_INPUTS"
+          } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
