@@ -106,6 +106,8 @@ export type RateSummary = {
   p50_per_second: number;
   p99_per_second: number;
   p999_per_second: number;
+  min_per_second: number;
+  max_per_second: number;
 };
 
 export type ThroughputSummary = {
@@ -116,6 +118,8 @@ export type ThroughputSummary = {
   p50_bytes_per_second: number;
   p99_bytes_per_second: number;
   p999_bytes_per_second: number;
+  min_bytes_per_second: number;
+  max_bytes_per_second: number;
 };
 
 export type LatencySummary = {
@@ -126,6 +130,8 @@ export type LatencySummary = {
   p50_ns: number;
   p99_ns: number;
   p999_ns: number;
+  min_ns: number;
+  max_ns: number;
 };
 
 export type DistributionSummary = {
@@ -135,6 +141,8 @@ export type DistributionSummary = {
   p50: number;
   p99: number;
   p999: number;
+  min: number;
+  max: number;
 };
 
 export type RecordedMetrics = {

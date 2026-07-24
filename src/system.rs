@@ -1076,6 +1076,8 @@ fn rate_summary(total: u64, elapsed: Duration, windows: &[f64]) -> RateSummary {
         p50_per_second: distribution.p50,
         p99_per_second: distribution.p99,
         p999_per_second: distribution.p999,
+        min_per_second: distribution.min,
+        max_per_second: distribution.max,
     }
 }
 
@@ -1089,6 +1091,8 @@ fn throughput_summary(total_bytes: u64, elapsed: Duration, windows: &[f64]) -> T
         p50_bytes_per_second: distribution.p50,
         p99_bytes_per_second: distribution.p99,
         p999_bytes_per_second: distribution.p999,
+        min_bytes_per_second: distribution.min,
+        max_bytes_per_second: distribution.max,
     }
 }
 
@@ -1109,6 +1113,8 @@ fn summarize_values(mut values: Vec<f64>) -> DistributionSummary {
         p50: percentile(0.5),
         p99: percentile(0.99),
         p999: percentile(0.999),
+        min: values[0],
+        max: values[values.len() - 1],
     }
 }
 

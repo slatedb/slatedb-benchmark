@@ -312,6 +312,11 @@ pub fn validate_workload_series(result: &WorkloadResult, series: &WorkloadSeries
                 "latency series {name} percentile differs from result.json"
             );
         }
+        ensure!(
+            summary.min_ns <= histogram.upper_bound_ns[0]
+                && summary.max_ns == *histogram.upper_bound_ns.last().unwrap_or(&0),
+            "latency series {name} bounds differ from result.json"
+        );
         let upper_bound_mean = histogram
             .upper_bound_ns
             .iter()
@@ -493,6 +498,8 @@ fn validate_rate_distribution(values: &[f64], summary: &RateSummary) -> Result<(
             summary.p50_per_second,
             summary.p99_per_second,
             summary.p999_per_second,
+            summary.min_per_second,
+            summary.max_per_second,
         ],
     )
 }
@@ -507,6 +514,8 @@ fn validate_throughput_distribution(values: &[f64], summary: &ThroughputSummary)
             summary.p50_bytes_per_second,
             summary.p99_bytes_per_second,
             summary.p999_bytes_per_second,
+            summary.min_bytes_per_second,
+            summary.max_bytes_per_second,
         ],
     )
 }
@@ -523,17 +532,19 @@ fn ensure_distribution_matches(
         summary.p50,
         summary.p99,
         summary.p999,
+        summary.min,
+        summary.max,
     ];
     ensure_summary_values_match(&distribution, expected)
         .map_err(|error| anyhow::anyhow!("series {name} differs from result.json: {error}"))?;
     ensure!(
-        approximately_equal(distribution[5], summary.avg),
+        approximately_equal(distribution[7], summary.avg),
         "series {name} average differs from result.json"
     );
     Ok(())
 }
 
-fn distribution_from_values(values: &[f64]) -> [f64; 6] {
+fn distribution_from_values(values: &[f64]) -> [f64; 8] {
     let mut values = values.to_vec();
     values.sort_by(f64::total_cmp);
     let percentile = |quantile: f64| {
@@ -546,13 +557,15 @@ fn distribution_from_values(values: &[f64]) -> [f64; 6] {
         percentile(0.50),
         percentile(0.99),
         percentile(0.999),
+        values[0],
+        values[values.len() - 1],
         values.iter().sum::<f64>() / values.len() as f64,
     ]
 }
 
-fn ensure_summary_values_match(actual: &[f64; 6], expected: [f64; 5]) -> Result<()> {
+fn ensure_summary_values_match(actual: &[f64; 8], expected: [f64; 7]) -> Result<()> {
     ensure!(
-        actual[..5]
+        actual[..7]
             .iter()
             .zip(expected)
             .all(|(left, right)| approximately_equal(*left, right)),
@@ -999,11 +1012,13 @@ fn validate_checkpoint(checkpoint: &crate::model::CheckpointReference) -> Result
 fn validate_rate(summary: &RateSummary) -> Result<()> {
     ensure!(summary.total > 0, "rate row has no operations");
     validate_ordered([
+        summary.min_per_second,
         summary.p001_per_second,
         summary.p01_per_second,
         summary.p50_per_second,
         summary.p99_per_second,
         summary.p999_per_second,
+        summary.max_per_second,
     ])?;
     validate_nonnegative([
         summary.avg_per_second,
@@ -1012,6 +1027,8 @@ fn validate_rate(summary: &RateSummary) -> Result<()> {
         summary.p50_per_second,
         summary.p99_per_second,
         summary.p999_per_second,
+        summary.min_per_second,
+        summary.max_per_second,
     ])
 }
 
@@ -1028,11 +1045,13 @@ fn validate_average_rate(total: u64, average: f64, elapsed_ns: u64) -> Result<()
 fn validate_throughput(summary: &ThroughputSummary) -> Result<()> {
     ensure!(summary.total_bytes > 0, "throughput row has zero bytes");
     validate_ordered([
+        summary.min_bytes_per_second,
         summary.p001_bytes_per_second,
         summary.p01_bytes_per_second,
         summary.p50_bytes_per_second,
         summary.p99_bytes_per_second,
         summary.p999_bytes_per_second,
+        summary.max_bytes_per_second,
     ])?;
     validate_nonnegative([
         summary.avg_bytes_per_second,
@@ -1041,6 +1060,8 @@ fn validate_throughput(summary: &ThroughputSummary) -> Result<()> {
         summary.p50_bytes_per_second,
         summary.p99_bytes_per_second,
         summary.p999_bytes_per_second,
+        summary.min_bytes_per_second,
+        summary.max_bytes_per_second,
     ])
 }
 
@@ -1051,10 +1072,12 @@ fn validate_latency(summary: &LatencySummary) -> Result<()> {
         "latency average is invalid"
     );
     ensure!(
-        summary.p001_ns <= summary.p01_ns
+        summary.min_ns <= summary.p001_ns
+            && summary.p001_ns <= summary.p01_ns
             && summary.p01_ns <= summary.p50_ns
             && summary.p50_ns <= summary.p99_ns
-            && summary.p99_ns <= summary.p999_ns,
+            && summary.p99_ns <= summary.p999_ns
+            && summary.p999_ns <= summary.max_ns,
         "latency percentiles are not ordered"
     );
     Ok(())
@@ -1068,13 +1091,17 @@ fn validate_distribution(summary: &DistributionSummary) -> Result<()> {
         summary.p50,
         summary.p99,
         summary.p999,
+        summary.min,
+        summary.max,
     ])?;
     validate_ordered([
+        summary.min,
         summary.p001,
         summary.p01,
         summary.p50,
         summary.p99,
         summary.p999,
+        summary.max,
     ])?;
     Ok(())
 }

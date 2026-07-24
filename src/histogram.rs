@@ -64,6 +64,8 @@ impl LatencyHistogram {
             p50_ns: self.inner.value_at_quantile(0.50) * 1_000,
             p99_ns: self.inner.value_at_quantile(0.99) * 1_000,
             p999_ns: self.inner.value_at_quantile(0.999) * 1_000,
+            min_ns: self.inner.min() * 1_000,
+            max_ns: self.inner.max() * 1_000,
         }
     }
 
