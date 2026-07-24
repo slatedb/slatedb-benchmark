@@ -15,7 +15,7 @@ const MEASUREMENT_MS: u64 = 15 * 60 * 1_000;
 const IDLE_MS: u64 = 5 * 60 * 1_000;
 const INGEST_MS: u64 = 20 * 60 * 1_000;
 const BLOCK_CACHE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
-const METADATA_CACHE_BYTES: u64 = 1024 * 1024 * 1024;
+const METADATA_CACHE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const MIN_DURATION_MS: u64 = 2_000;
 const MIN_BLOCK_CACHE_BYTES: u64 = 8 * 1024 * 1024;
 const MIN_METADATA_CACHE_BYTES: u64 = 2 * 1024 * 1024;
@@ -502,7 +502,7 @@ mod tests {
         .expect("configuration");
 
         assert_eq!(config.caches.block_bytes, 8 * 1024 * 1024 * 1024);
-        assert_eq!(config.caches.metadata_bytes, 1024 * 1024 * 1024);
+        assert_eq!(config.caches.metadata_bytes, 4 * 1024 * 1024 * 1024);
         assert!(config
             .settings
             .object_store_cache_options
