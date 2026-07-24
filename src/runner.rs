@@ -132,14 +132,12 @@ async fn run_bulk_load(
     }
     delete_prefix(Arc::clone(&context.control), &task_root).await?;
     let database_path = task_root.clone().join("database");
-    let cache = object_store_cache_directory()?;
     let recorder = Arc::new(BenchmarkMetricsRecorder::new());
     let db = open_database(
         database_path.clone(),
         context.instrumented.clone(),
         &config,
         &config.settings,
-        Some(cache.path()),
         Arc::clone(&recorder),
     )
     .await?;
@@ -236,14 +234,12 @@ async fn run_compaction(
         parse_checkpoint_id(&bulk.checkpoint)?,
     )
     .await?;
-    let cache = object_store_cache_directory()?;
     let recorder = Arc::new(BenchmarkMetricsRecorder::new());
     let db = open_database(
         database_path.clone(),
         context.instrumented.clone(),
         config,
         &config.settings,
-        Some(cache.path()),
         Arc::clone(&recorder),
     )
     .await?;
@@ -368,14 +364,12 @@ async fn run_workload(
             lsm_digest_sha256: String::new(),
         }
     };
-    let cache = object_store_cache_directory()?;
     let recorder = Arc::new(BenchmarkMetricsRecorder::new());
     let db = open_database(
         database_path.clone(),
         context.instrumented.clone(),
         config,
         &config.settings,
-        Some(cache.path()),
         Arc::clone(&recorder),
     )
     .await?;
@@ -725,19 +719,11 @@ async fn open_database(
     store: Arc<dyn ObjectStore>,
     config: &ResolvedConfig,
     settings: &Settings,
-    object_store_cache_root: Option<&FsPath>,
     recorder: Arc<BenchmarkMetricsRecorder>,
 ) -> Result<Arc<Db>> {
-    let mut settings = settings.clone();
-    settings.object_store_cache_options.root_folder =
-        object_store_cache_root.map(FsPath::to_path_buf);
-    settings.object_store_cache_options.max_cache_size_bytes = Some(
-        usize::try_from(config.caches.object_store_bytes)
-            .context("object-store cache capacity exceeds the platform limit")?,
-    );
     let metrics: Arc<dyn MetricsRecorder> = recorder;
     let db = Db::builder(path, store)
-        .with_settings(settings)
+        .with_settings(settings.clone())
         .with_metrics_recorder(metrics)
         .with_db_cache(cache_for(config))
         .build()
@@ -761,13 +747,6 @@ fn cache_for(config: &ResolvedConfig) -> Arc<dyn DbCache> {
             .with_meta_cache(Some(metadata))
             .build(),
     )
-}
-
-fn object_store_cache_directory() -> Result<tempfile::TempDir> {
-    tempfile::Builder::new()
-        .prefix("slatedb-benchmark-object-store-cache-")
-        .tempdir()
-        .context("creating temporary object-store cache")
 }
 
 async fn close_database_after<T>(
@@ -1053,7 +1032,6 @@ mod tests {
         let mut golden = ResultConfiguration::from(&config);
         golden.caches.block_bytes = 1;
         golden.caches.metadata_bytes = 1;
-        golden.caches.object_store_bytes = 1;
 
         ensure_shared_configuration(&golden, &config).expect("compatible golden data");
     }

@@ -43,7 +43,6 @@ export type ResolvedConfiguration = {
   caches: {
     block_bytes: number;
     metadata_bytes: number;
-    object_store_bytes: number;
   };
   task: {
     task: string;

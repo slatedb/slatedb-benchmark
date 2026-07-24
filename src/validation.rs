@@ -753,10 +753,6 @@ fn validate_configuration(
         "metadata cache is empty"
     );
     ensure!(
-        configuration.caches.object_store_bytes > 0,
-        "object-store cache is empty"
-    );
-    ensure!(
         configuration.slate_settings.is_object(),
         "SlateDB settings are not an object"
     );
