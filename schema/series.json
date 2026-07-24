@@ -1,8 +1,69 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://benchmark.slatedb.io/schema/series.json",
-  "title": "SlateDB benchmark workload series",
+  "title": "WorkloadSeries",
   "type": "object",
+  "properties": {
+    "rate_elapsed_ns": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "format": "uint64",
+        "minimum": 0
+      }
+    },
+    "rate_duration_ns": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "format": "uint64",
+        "minimum": 0
+      }
+    },
+    "latency_elapsed_ns": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "format": "uint64",
+        "minimum": 0
+      }
+    },
+    "latency_duration_ns": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "format": "uint64",
+        "minimum": 0
+      }
+    },
+    "resource_elapsed_ns": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "format": "uint64",
+        "minimum": 0
+      }
+    },
+    "resource_duration_ns": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "format": "uint64",
+        "minimum": 0
+      }
+    },
+    "application": {
+      "$ref": "#/$defs/ApplicationSeries"
+    },
+    "object_store": {
+      "$ref": "#/$defs/ObjectStoreSeries"
+    },
+    "process": {
+      "$ref": "#/$defs/ProcessSeries"
+    },
+    "machine": {
+      "$ref": "#/$defs/MachineSeries"
+    }
+  },
   "additionalProperties": false,
   "required": [
     "rate_elapsed_ns",
@@ -16,52 +77,265 @@
     "process",
     "machine"
   ],
-  "properties": {
-    "rate_elapsed_ns": { "$ref": "#/$defs/positiveIntegers" },
-    "rate_duration_ns": { "$ref": "#/$defs/positiveIntegers" },
-    "latency_elapsed_ns": { "$ref": "#/$defs/positiveIntegers" },
-    "latency_duration_ns": { "$ref": "#/$defs/positiveIntegers" },
-    "resource_elapsed_ns": { "$ref": "#/$defs/positiveIntegers" },
-    "resource_duration_ns": { "$ref": "#/$defs/positiveIntegers" },
-    "application": {
+  "$defs": {
+    "ApplicationSeries": {
       "type": "object",
+      "properties": {
+        "operations_per_second": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            }
+          }
+        },
+        "bytes_per_second": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            }
+          }
+        },
+        "latency_ns": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/LatencyTimeSeries"
+          }
+        },
+        "latency_histograms": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/HistogramSeries"
+          }
+        }
+      },
       "additionalProperties": false,
       "required": [
         "operations_per_second",
         "bytes_per_second",
         "latency_ns",
         "latency_histograms"
-      ],
+      ]
+    },
+    "LatencyTimeSeries": {
+      "type": "object",
       "properties": {
-        "operations_per_second": { "$ref": "#/$defs/namedSeries" },
-        "bytes_per_second": { "$ref": "#/$defs/namedSeries" },
-        "latency_ns": { "$ref": "#/$defs/namedLatencySeries" },
-        "latency_histograms": {
-          "type": "object",
-          "additionalProperties": { "$ref": "#/$defs/histogram" }
+        "avg": {
+          "type": "array",
+          "items": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          }
+        },
+        "p001": {
+          "type": "array",
+          "items": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          }
+        },
+        "p01": {
+          "type": "array",
+          "items": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          }
+        },
+        "p50": {
+          "type": "array",
+          "items": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          }
+        },
+        "p99": {
+          "type": "array",
+          "items": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          }
+        },
+        "p999": {
+          "type": "array",
+          "items": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          }
         }
-      }
-    },
-    "object_store": {
-      "type": "object",
+      },
       "additionalProperties": false,
-      "required": ["requests_per_second", "bytes_per_second"],
-      "properties": {
-        "requests_per_second": { "$ref": "#/$defs/namedSeries" },
-        "bytes_per_second": { "$ref": "#/$defs/namedSeries" }
-      }
+      "required": [
+        "avg",
+        "p001",
+        "p01",
+        "p50",
+        "p99",
+        "p999"
+      ]
     },
-    "process": {
+    "HistogramSeries": {
       "type": "object",
+      "properties": {
+        "upper_bound_ns": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "counts": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        }
+      },
       "additionalProperties": false,
-      "required": ["cpu_cores", "rss_bytes"],
-      "properties": {
-        "cpu_cores": { "$ref": "#/$defs/nonnegativeNumbers" },
-        "rss_bytes": { "$ref": "#/$defs/nonnegativeNumbers" }
-      }
+      "required": [
+        "upper_bound_ns",
+        "counts"
+      ]
     },
-    "machine": {
+    "ObjectStoreSeries": {
       "type": "object",
+      "properties": {
+        "requests_per_second": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            }
+          }
+        },
+        "bytes_per_second": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            }
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "requests_per_second",
+        "bytes_per_second"
+      ]
+    },
+    "ProcessSeries": {
+      "type": "object",
+      "properties": {
+        "cpu_cores": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "rss_bytes": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "cpu_cores",
+        "rss_bytes"
+      ]
+    },
+    "MachineSeries": {
+      "type": "object",
+      "properties": {
+        "cpu_percent": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "rss_bytes": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "network_receive_bytes_per_second": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "network_send_bytes_per_second": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "disk_read_bytes_per_second": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "disk_write_bytes_per_second": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "disk_read_operations_per_second": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "disk_write_operations_per_second": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
       "additionalProperties": false,
       "required": [
         "cpu_percent",
@@ -72,81 +346,8 @@
         "disk_write_bytes_per_second",
         "disk_read_operations_per_second",
         "disk_write_operations_per_second"
-      ],
-      "properties": {
-        "cpu_percent": { "$ref": "#/$defs/nonnegativeNumbers" },
-        "rss_bytes": { "$ref": "#/$defs/nonnegativeNumbers" },
-        "network_receive_bytes_per_second": {
-          "$ref": "#/$defs/nonnegativeNumbers"
-        },
-        "network_send_bytes_per_second": {
-          "$ref": "#/$defs/nonnegativeNumbers"
-        },
-        "disk_read_bytes_per_second": {
-          "$ref": "#/$defs/nonnegativeNumbers"
-        },
-        "disk_write_bytes_per_second": {
-          "$ref": "#/$defs/nonnegativeNumbers"
-        },
-        "disk_read_operations_per_second": {
-          "$ref": "#/$defs/nonnegativeNumbers"
-        },
-        "disk_write_operations_per_second": {
-          "$ref": "#/$defs/nonnegativeNumbers"
-        }
-      }
+      ]
     }
   },
-  "$defs": {
-    "positiveIntegers": {
-      "type": "array",
-      "minItems": 1,
-      "items": { "type": "integer", "minimum": 1 }
-    },
-    "nonnegativeNumbers": {
-      "type": "array",
-      "minItems": 1,
-      "items": { "type": "number", "minimum": 0 }
-    },
-    "namedSeries": {
-      "type": "object",
-      "additionalProperties": { "$ref": "#/$defs/nonnegativeNumbers" }
-    },
-    "namedLatencySeries": {
-      "type": "object",
-      "additionalProperties": { "$ref": "#/$defs/latencyTimeSeries" }
-    },
-    "latencyTimeSeries": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["avg", "p001", "p01", "p50", "p99", "p999"],
-      "properties": {
-        "avg": { "$ref": "#/$defs/optionalNonnegativeNumbers" },
-        "p001": { "$ref": "#/$defs/optionalNonnegativeNumbers" },
-        "p01": { "$ref": "#/$defs/optionalNonnegativeNumbers" },
-        "p50": { "$ref": "#/$defs/optionalNonnegativeNumbers" },
-        "p99": { "$ref": "#/$defs/optionalNonnegativeNumbers" },
-        "p999": { "$ref": "#/$defs/optionalNonnegativeNumbers" }
-      }
-    },
-    "optionalNonnegativeNumbers": {
-      "type": "array",
-      "minItems": 1,
-      "items": {
-        "anyOf": [
-          { "type": "number", "minimum": 0 },
-          { "type": "null" }
-        ]
-      }
-    },
-    "histogram": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["upper_bound_ns", "counts"],
-      "properties": {
-        "upper_bound_ns": { "$ref": "#/$defs/positiveIntegers" },
-        "counts": { "$ref": "#/$defs/positiveIntegers" }
-      }
-    }
-  }
+  "$id": "https://benchmark.slatedb.io/schema/series.json"
 }

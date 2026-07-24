@@ -179,14 +179,9 @@ recorded interval.
 
 ## Bundling and publication
 
-The workload artifact already uploads its output directory. Complete the
-pipeline by changing:
-
-- `scripts/bundle.py` to copy sidecars and add their digests to `run.json`.
-- `schema/run.json` to require ten workload sidecars.
-- `scripts/publish.sh` to reject missing or modified sidecars.
-- `scripts/smoke.sh` to require one sidecar per workload.
-- `scripts/fixtures.sh` to retain sidecars with scaled results.
+The Rust `bundle` command copies sidecars, records their digests in `run.json`,
+and validates the complete artifact set. The Rust `publish` command verifies
+the same digests before copying the run into the website checkout.
 
 Preparation results do not receive sidecars.
 

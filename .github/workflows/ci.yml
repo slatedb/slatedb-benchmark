@@ -5,6 +5,9 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -16,19 +19,6 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo fmt -- --check
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test --locked
-      - name: Check support files
-        shell: bash
-        run: |
-          set -euo pipefail
-          jq empty schema/*.json
-          PYTHONPYCACHEPREFIX=/tmp/slatedb-benchmark-pycache \
-            python3 -m py_compile scripts/bundle.py
-          PYTHONPYCACHEPREFIX=/tmp/slatedb-benchmark-pycache \
-            python3 -m unittest scripts.test_bundle scripts.test_warp_latency
-          bash -n scripts/*.sh
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -36,27 +26,22 @@ jobs:
           cache-dependency-path: website/package-lock.json
       - run: npm ci --ignore-scripts
         working-directory: website
-      - run: npm run build
-        working-directory: website
+      - run: cargo fmt -- --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test --locked
+      - run: cargo build --locked
+      - name: Run local end-to-end benchmark
+        run: tests/e2e/local.sh
 
-  slatedb-compatibility:
+  actionlint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
-          repository: slatedb/slatedb
-          ref: main
-          path: .slatedb-source
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@1.89.0
-      - name: Apply experimental SlateDB patch
-        run: bash scripts/apply-slatedb-patch.sh .slatedb-source
-      - name: Configure selected SlateDB source
-        run: |
-          cargo add --quiet --path "$GITHUB_WORKSPACE/.slatedb-source/slatedb" \
-            --no-default-features --features aws,foyer,wal_disable,zstd
-          cargo add --quiet --path "$GITHUB_WORKSPACE/.slatedb-source/slatedb-common" --features serde
-      - run: cargo check --locked
+          go-version: 1.25.9
+          cache: false
+      - run: go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+      - run: actionlint

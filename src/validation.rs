@@ -1,7 +1,9 @@
+use crate::config::Task;
 use crate::model::{
     ApplicationMetrics, DistributionSummary, Environment, GoldenManifest, LatencySummary,
     MachineStatistics, ObjectStoreMetrics, ProcessStatistics, RateSummary, ResultConfiguration,
-    SourceIdentity, ThroughputSummary, WorkloadResult, WorkloadSeries,
+    RunManifest, SourceIdentity, ThroughputSummary, TransferCapacity, TransferLatencySummary,
+    WorkloadResult, WorkloadSeries,
 };
 use anyhow::{bail, ensure, Result};
 use std::collections::BTreeSet;
@@ -400,6 +402,150 @@ pub fn validate_workload_series(result: &WorkloadResult, series: &WorkloadSeries
         validate_values(name, values, resource_length)?;
         ensure_distribution_matches(name, values, summary)?;
     }
+    Ok(())
+}
+
+pub fn validate_transfer_capacity(result: &TransferCapacity) -> Result<()> {
+    ensure!(result.version == 3, "transfer probe version must be 3");
+    ensure!(result.status == "ok", "transfer probe status must be ok");
+    validate_timestamp(&result.timestamp)?;
+    ensure!(
+        result.scale.is_finite() && result.scale > 0.0 && result.scale <= 1.0,
+        "transfer probe scale is invalid"
+    );
+    for (name, value) in [
+        ("runner type", result.runner_type.as_str()),
+        ("object store", result.object_store.as_str()),
+        ("endpoint", result.endpoint.as_str()),
+        ("region", result.region.as_str()),
+        ("tool version", result.tool.version.as_str()),
+    ] {
+        ensure!(!value.is_empty(), "transfer probe {name} is empty");
+    }
+    ensure!(
+        result.tool.name == "warp",
+        "transfer probe tool is not Warp"
+    );
+    let expected = [
+        ("large-put", "PUT"),
+        ("large-get", "GET"),
+        ("small-put", "PUT"),
+        ("small-get", "GET"),
+        ("small-list", "LIST"),
+    ];
+    ensure!(
+        result.benchmarks.len() == expected.len(),
+        "transfer probe must contain five benchmarks"
+    );
+    let mut names = BTreeSet::new();
+    for benchmark in &result.benchmarks {
+        let operation = expected
+            .iter()
+            .find_map(|(name, operation)| (*name == benchmark.name).then_some(*operation))
+            .ok_or_else(|| anyhow::anyhow!("unknown transfer benchmark {}", benchmark.name))?;
+        ensure!(
+            names.insert(benchmark.name.as_str()),
+            "duplicate transfer benchmark {}",
+            benchmark.name
+        );
+        ensure!(
+            benchmark.operation == operation,
+            "transfer benchmark {} uses the wrong operation",
+            benchmark.name
+        );
+        ensure!(
+            benchmark.object_size_bytes > 0
+                && benchmark.concurrency > 0
+                && benchmark.duration_seconds > 0,
+            "transfer benchmark {} has an invalid size, concurrency, or duration",
+            benchmark.name
+        );
+        ensure!(
+            benchmark.benchdata == format!("warp/{}.csv.zst", benchmark.name),
+            "transfer benchmark {} has an invalid data path",
+            benchmark.name
+        );
+        validate_transfer_latency(&benchmark.latency_ms.request)?;
+        if let Some(ttfb) = &benchmark.latency_ms.ttfb {
+            validate_transfer_latency(ttfb)?;
+        }
+    }
+    Ok(())
+}
+
+pub fn validate_run_manifest(result: &RunManifest) -> Result<()> {
+    ensure!(result.status == "ok", "run status must be ok");
+    validate_identifier(&result.run_id, "run ID")?;
+    ensure!(!result.golden_id.is_empty(), "run golden ID is empty");
+    validate_timestamp(&result.started_at)?;
+    validate_timestamp(&result.finished_at)?;
+    validate_source(&result.source)?;
+    ensure!(
+        !result.golden_runner_commit.is_empty(),
+        "golden runner commit is empty"
+    );
+    ensure!(result.max_parallel > 0, "run has no workload parallelism");
+    ensure!(
+        result.resolved_configuration.contains_key("golden"),
+        "run has no golden configuration"
+    );
+    ensure!(
+        result.results.contains_key("golden.json"),
+        "run has no golden result"
+    );
+    for patch in &result.patches {
+        ensure!(
+            patch.name.ends_with(".patch") && !patch.name.contains('/'),
+            "run contains an invalid patch name"
+        );
+        ensure!(is_sha256(&patch.sha256), "run patch digest is invalid");
+    }
+    for (path, digest) in &result.results {
+        ensure!(
+            path == "golden.json"
+                || Task::workloads().any(|task| {
+                    path == &format!("workload/{}/result.json", task.as_str())
+                        || path == &format!("workload/{}/series.json", task.as_str())
+                }),
+            "run contains an invalid result path {path}"
+        );
+        ensure!(is_sha256(digest), "run result digest is invalid");
+    }
+    if let Some(transfer) = &result.transfer_capacity {
+        validate_transfer_capacity(transfer)?;
+    }
+    Ok(())
+}
+
+pub fn validate_identifier(value: &str, kind: &str) -> Result<()> {
+    ensure!(!value.is_empty(), "{kind} is empty");
+    ensure!(value.len() <= 128, "{kind} is too long");
+    ensure!(value != "." && value != "..", "{kind} is invalid");
+    ensure!(
+        value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')),
+        "{kind} contains unsupported characters"
+    );
+    Ok(())
+}
+
+fn validate_transfer_latency(summary: &TransferLatencySummary) -> Result<()> {
+    validate_nonnegative([
+        summary.average,
+        summary.p50,
+        summary.p90,
+        summary.p99,
+        summary.min,
+        summary.max,
+    ])?;
+    ensure!(
+        summary.min <= summary.p50
+            && summary.p50 <= summary.p90
+            && summary.p90 <= summary.p99
+            && summary.p99 <= summary.max,
+        "transfer latency percentiles are not ordered"
+    );
     Ok(())
 }
 
@@ -1046,8 +1192,11 @@ fn validate_nonnegative<const N: usize>(values: [f64; N]) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{validate_actions_log_url, validate_distribution};
-    use crate::model::DistributionSummary;
+    use super::{validate_actions_log_url, validate_distribution, validate_transfer_capacity};
+    use crate::model::{
+        DistributionSummary, TransferBenchmark, TransferCapacity, TransferLatency,
+        TransferLatencySummary, TransferTool,
+    };
 
     #[test]
     fn rejects_non_finite_published_values() {
@@ -1068,5 +1217,65 @@ mod tests {
             "https://example.com/slatedb/slatedb-benchmark/actions/runs/1/job/2"
         )
         .is_err());
+    }
+
+    #[test]
+    fn validates_current_transfer_probe_contract() {
+        let mut transfer = transfer_capacity();
+        assert!(validate_transfer_capacity(&transfer).is_ok());
+
+        transfer.benchmarks[0].latency_ms.request.p99 = 10.0;
+        assert!(validate_transfer_capacity(&transfer).is_err());
+    }
+
+    fn transfer_capacity() -> TransferCapacity {
+        let latency = TransferLatencySummary {
+            average: 2.0,
+            p50: 2.0,
+            p90: 3.0,
+            p99: 4.0,
+            min: 1.0,
+            max: 5.0,
+        };
+        let benchmarks = [
+            ("large-put", "PUT", 4 * 1024 * 1024, 64, 30),
+            ("large-get", "GET", 4 * 1024 * 1024, 64, 30),
+            ("small-put", "PUT", 4 * 1024, 1, 30),
+            ("small-get", "GET", 4 * 1024, 1, 30),
+            ("small-list", "LIST", 4 * 1024, 1, 30),
+        ]
+        .into_iter()
+        .map(
+            |(name, operation, object_size_bytes, concurrency, duration_seconds)| {
+                TransferBenchmark {
+                    name: name.into(),
+                    operation: operation.into(),
+                    object_size_bytes,
+                    concurrency,
+                    duration_seconds,
+                    latency_ms: TransferLatency {
+                        request: latency.clone(),
+                        ttfb: None,
+                    },
+                    benchdata: format!("warp/{name}.csv.zst"),
+                }
+            },
+        )
+        .collect();
+        TransferCapacity {
+            version: 3,
+            status: "ok".into(),
+            timestamp: "2026-07-24T00:00:00Z".into(),
+            scale: 1.0,
+            runner_type: "runner".into(),
+            object_store: "s3".into(),
+            endpoint: "AWS default".into(),
+            region: "us-east-1".into(),
+            tool: TransferTool {
+                name: "warp".into(),
+                version: "v1.5.0".into(),
+            },
+            benchmarks,
+        }
     }
 }

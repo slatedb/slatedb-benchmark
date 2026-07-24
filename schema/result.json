@@ -1,10 +1,95 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://benchmark.slatedb.io/schema/result.json",
-  "title": "SlateDB benchmark workload result",
-  "$ref": "#/$defs/workloadResult",
-  "$defs": {
+  "title": "WorkloadResult",
+  "type": "object",
+  "properties": {
+    "status": {
+      "type": "string"
+    },
     "task": {
+      "$ref": "#/$defs/Task"
+    },
+    "golden_id": {
+      "type": "string"
+    },
+    "session": {
+      "type": "string"
+    },
+    "timestamp": {
+      "type": "string"
+    },
+    "actions_log_url": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "source": {
+      "$ref": "#/$defs/SourceIdentity"
+    },
+    "environment": {
+      "$ref": "#/$defs/Environment"
+    },
+    "configuration": {
+      "$ref": "#/$defs/ResultConfiguration"
+    },
+    "initial_state": {
+      "$ref": "#/$defs/InitialState"
+    },
+    "client_measurement_ns": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "durability_drain_ns": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "recorded_interval_ns": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "application": {
+      "$ref": "#/$defs/ApplicationMetrics"
+    },
+    "object_store": {
+      "$ref": "#/$defs/ObjectStoreMetrics"
+    },
+    "process": {
+      "$ref": "#/$defs/ProcessStatistics"
+    },
+    "machine": {
+      "$ref": "#/$defs/MachineStatistics"
+    },
+    "series": {
+      "$ref": "#/$defs/SeriesReference"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "status",
+    "task",
+    "golden_id",
+    "session",
+    "timestamp",
+    "source",
+    "environment",
+    "configuration",
+    "initial_state",
+    "client_measurement_ns",
+    "durability_drain_ns",
+    "recorded_interval_ns",
+    "application",
+    "object_store",
+    "process",
+    "machine",
+    "series"
+  ],
+  "$defs": {
+    "Task": {
+      "type": "string",
       "enum": [
         "bulk-load",
         "compaction",
@@ -20,22 +105,25 @@
         "transaction-contention"
       ]
     },
-    "workload": {
-      "enum": [
-        "idle",
-        "point-read-uniform",
-        "point-read-skewed",
-        "point-read-missing",
-        "read-heavy",
-        "balanced",
-        "update-heavy",
-        "range-scan",
-        "sustained-ingest",
-        "transaction-contention"
-      ]
-    },
-    "source": {
+    "SourceIdentity": {
       "type": "object",
+      "properties": {
+        "slate_version": {
+          "type": "string"
+        },
+        "slate_commit": {
+          "type": "string"
+        },
+        "runner_version": {
+          "type": "string"
+        },
+        "runner_commit": {
+          "type": "string"
+        },
+        "lockfile_sha256": {
+          "type": "string"
+        }
+      },
       "additionalProperties": false,
       "required": [
         "slate_version",
@@ -43,319 +131,49 @@
         "runner_version",
         "runner_commit",
         "lockfile_sha256"
-      ],
-      "properties": {
-        "slate_version": { "type": "string", "minLength": 1 },
-        "slate_commit": { "type": "string", "minLength": 1 },
-        "runner_version": { "type": "string", "minLength": 1 },
-        "runner_commit": { "type": "string", "minLength": 1 },
-        "lockfile_sha256": { "type": "string", "minLength": 1 }
-      }
+      ]
     },
-    "datasetConfiguration": {
+    "Environment": {
       "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "record_count",
-        "key_bytes",
-        "value_bytes",
-        "value_compression_ratio"
-      ],
       "properties": {
-        "record_count": { "type": "integer", "minimum": 1 },
-        "key_bytes": { "type": "integer", "minimum": 1 },
-        "value_bytes": { "type": "integer", "minimum": 1 },
-        "value_compression_ratio": {
-          "type": "number",
-          "exclusiveMinimum": 0,
-          "maximum": 1
+        "runner_type": {
+          "type": "string"
+        },
+        "hostname": {
+          "type": "string"
+        },
+        "cpu_model": {
+          "type": "string"
+        },
+        "cpu_cores": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "ram_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "local_disk": {
+          "type": "string"
+        },
+        "os": {
+          "type": "string"
+        },
+        "kernel": {
+          "type": "string"
+        },
+        "object_store": {
+          "type": "string"
+        },
+        "endpoint": {
+          "type": "string"
+        },
+        "region": {
+          "type": "string"
         }
-      }
-    },
-    "cacheConfiguration": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["block_bytes", "metadata_bytes"],
-      "properties": {
-        "block_bytes": { "type": "integer", "minimum": 1 },
-        "metadata_bytes": { "type": "integer", "minimum": 1 }
-      }
-    },
-    "taskConfiguration": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "task",
-        "clients",
-        "warmup_ms",
-        "measurement_ms",
-        "initial_state",
-        "key_selection",
-        "operation_mix",
-        "scan_limit",
-        "transaction_hot_keys",
-        "transaction_reads",
-        "transaction_updates"
-      ],
-      "properties": {
-        "task": { "$ref": "#/$defs/task" },
-        "clients": { "type": "integer", "minimum": 0 },
-        "warmup_ms": { "type": "integer", "minimum": 0 },
-        "measurement_ms": { "type": "integer", "minimum": 0 },
-        "initial_state": { "type": "string", "minLength": 1 },
-        "key_selection": { "type": "string", "minLength": 1 },
-        "operation_mix": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "number",
-            "minimum": 0,
-            "maximum": 1
-          }
-        },
-        "scan_limit": { "type": ["integer", "null"], "minimum": 1 },
-        "transaction_hot_keys": {
-          "type": ["integer", "null"],
-          "minimum": 1
-        },
-        "transaction_reads": {
-          "type": ["integer", "null"],
-          "minimum": 1
-        },
-        "transaction_updates": {
-          "type": ["integer", "null"],
-          "minimum": 1
-        }
-      }
-    },
-    "configuration": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "scale",
-        "dataset",
-        "caches",
-        "task",
-        "slate_settings",
-        "build_profile",
-        "enabled_features"
-      ],
-      "properties": {
-        "scale": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
-        "dataset": { "$ref": "#/$defs/datasetConfiguration" },
-        "caches": { "$ref": "#/$defs/cacheConfiguration" },
-        "task": { "$ref": "#/$defs/taskConfiguration" },
-        "slate_settings": { "type": "object" },
-        "slate_default_settings": { "type": "object" },
-        "build_profile": { "enum": ["debug", "release"] },
-        "enabled_features": {
-          "type": "array",
-          "items": { "type": "string" },
-          "uniqueItems": true
-        }
-      }
-    },
-    "checkpoint": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "database_path",
-        "checkpoint_id",
-        "manifest_id",
-        "lsm_digest_sha256",
-        "live_sst_bytes"
-      ],
-      "properties": {
-        "database_path": { "type": "string", "minLength": 1 },
-        "checkpoint_id": { "type": "string", "minLength": 1 },
-        "manifest_id": { "type": "integer", "minimum": 0 },
-        "lsm_digest_sha256": {
-          "type": "string",
-          "pattern": "^[0-9a-f]{64}$"
-        },
-        "live_sst_bytes": { "type": "integer", "minimum": 0 }
-      }
-    },
-    "datasetMetadata": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "record_count",
-        "key_bytes",
-        "value_bytes",
-        "logical_bytes",
-        "live_sst_bytes"
-      ],
-      "properties": {
-        "record_count": { "type": "integer", "minimum": 1 },
-        "key_bytes": { "type": "integer", "minimum": 1 },
-        "value_bytes": { "type": "integer", "minimum": 1 },
-        "logical_bytes": { "type": "integer", "minimum": 1 },
-        "live_sst_bytes": { "type": "integer", "minimum": 0 }
-      }
-    },
-    "initialState": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "kind",
-        "checkpoint_id",
-        "manifest_id",
-        "lsm_digest_sha256"
-      ],
-      "properties": {
-        "kind": { "enum": ["golden", "empty"] },
-        "checkpoint_id": { "type": ["string", "null"] },
-        "manifest_id": { "type": ["integer", "null"], "minimum": 0 },
-        "lsm_digest_sha256": {
-          "type": "string",
-          "pattern": "^[0-9a-f]{64}$"
-        }
-      }
-    },
-    "seriesReference": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["file", "sha256"],
-      "properties": {
-        "file": { "const": "series.json" },
-        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
-      }
-    },
-    "rateSummary": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "total",
-        "avg_per_second",
-        "p001_per_second",
-        "p01_per_second",
-        "p50_per_second",
-        "p99_per_second",
-        "p999_per_second",
-        "min_per_second",
-        "max_per_second"
-      ],
-      "properties": {
-        "total": { "type": "integer", "minimum": 0 },
-        "avg_per_second": { "type": "number", "minimum": 0 },
-        "p001_per_second": { "type": "number", "minimum": 0 },
-        "p01_per_second": { "type": "number", "minimum": 0 },
-        "p50_per_second": { "type": "number", "minimum": 0 },
-        "p99_per_second": { "type": "number", "minimum": 0 },
-        "p999_per_second": { "type": "number", "minimum": 0 },
-        "min_per_second": { "type": "number", "minimum": 0 },
-        "max_per_second": { "type": "number", "minimum": 0 }
-      }
-    },
-    "throughputSummary": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "total_bytes",
-        "avg_bytes_per_second",
-        "p001_bytes_per_second",
-        "p01_bytes_per_second",
-        "p50_bytes_per_second",
-        "p99_bytes_per_second",
-        "p999_bytes_per_second",
-        "min_bytes_per_second",
-        "max_bytes_per_second"
-      ],
-      "properties": {
-        "total_bytes": { "type": "integer", "minimum": 1 },
-        "avg_bytes_per_second": { "type": "number", "minimum": 0 },
-        "p001_bytes_per_second": { "type": "number", "minimum": 0 },
-        "p01_bytes_per_second": { "type": "number", "minimum": 0 },
-        "p50_bytes_per_second": { "type": "number", "minimum": 0 },
-        "p99_bytes_per_second": { "type": "number", "minimum": 0 },
-        "p999_bytes_per_second": { "type": "number", "minimum": 0 },
-        "min_bytes_per_second": { "type": "number", "minimum": 0 },
-        "max_bytes_per_second": { "type": "number", "minimum": 0 }
-      }
-    },
-    "latencySummary": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "count",
-        "avg_ns",
-        "p001_ns",
-        "p01_ns",
-        "p50_ns",
-        "p99_ns",
-        "p999_ns",
-        "min_ns",
-        "max_ns"
-      ],
-      "properties": {
-        "count": { "type": "integer", "minimum": 1 },
-        "avg_ns": { "type": "number", "minimum": 0 },
-        "p001_ns": { "type": "integer", "minimum": 0 },
-        "p01_ns": { "type": "integer", "minimum": 0 },
-        "p50_ns": { "type": "integer", "minimum": 0 },
-        "p99_ns": { "type": "integer", "minimum": 0 },
-        "p999_ns": { "type": "integer", "minimum": 0 },
-        "min_ns": { "type": "integer", "minimum": 0 },
-        "max_ns": { "type": "integer", "minimum": 0 }
-      }
-    },
-    "distributionSummary": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["avg", "p001", "p01", "p50", "p99", "p999", "min", "max"],
-      "properties": {
-        "avg": { "type": "number", "minimum": 0 },
-        "p001": { "type": "number", "minimum": 0 },
-        "p01": { "type": "number", "minimum": 0 },
-        "p50": { "type": "number", "minimum": 0 },
-        "p99": { "type": "number", "minimum": 0 },
-        "p999": { "type": "number", "minimum": 0 },
-        "min": { "type": "number", "minimum": 0 },
-        "max": { "type": "number", "minimum": 0 }
-      }
-    },
-    "applicationMetrics": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["operations", "throughput", "latency"],
-      "properties": {
-        "operations": {
-          "type": "object",
-          "additionalProperties": { "$ref": "#/$defs/rateSummary" }
-        },
-        "throughput": {
-          "type": "object",
-          "additionalProperties": { "$ref": "#/$defs/throughputSummary" }
-        },
-        "latency": {
-          "type": "object",
-          "additionalProperties": { "$ref": "#/$defs/latencySummary" }
-        }
-      }
-    },
-    "objectStoreMetrics": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["requests", "throughput"],
-      "properties": {
-        "requests": {
-          "type": "object",
-          "propertyNames": {
-            "enum": ["GET", "LIST", "PUT", "HEAD", "DELETE", "POST", "OTHER"]
-          },
-          "additionalProperties": { "$ref": "#/$defs/rateSummary" }
-        },
-        "throughput": {
-          "type": "object",
-          "propertyNames": {
-            "enum": ["GET", "LIST", "PUT", "HEAD", "DELETE", "POST", "OTHER"]
-          },
-          "additionalProperties": { "$ref": "#/$defs/throughputSummary" }
-        }
-      }
-    },
-    "environment": {
-      "type": "object",
+      },
       "additionalProperties": false,
       "required": [
         "runner_type",
@@ -369,32 +187,518 @@
         "object_store",
         "endpoint",
         "region"
-      ],
-      "properties": {
-        "runner_type": { "type": "string" },
-        "hostname": { "type": "string" },
-        "cpu_model": { "type": "string" },
-        "cpu_cores": { "type": "integer", "minimum": 1 },
-        "ram_bytes": { "type": "integer", "minimum": 1 },
-        "local_disk": { "type": "string" },
-        "os": { "type": "string" },
-        "kernel": { "type": "string" },
-        "object_store": { "type": "string" },
-        "endpoint": { "type": "string" },
-        "region": { "type": "string" }
-      }
+      ]
     },
-    "processStatistics": {
+    "ResultConfiguration": {
       "type": "object",
+      "properties": {
+        "scale": {
+          "type": "number",
+          "format": "double"
+        },
+        "dataset": {
+          "$ref": "#/$defs/DatasetConfig"
+        },
+        "caches": {
+          "$ref": "#/$defs/CacheConfig"
+        },
+        "task": {
+          "$ref": "#/$defs/TaskConfig"
+        },
+        "slate_settings": true,
+        "slate_default_settings": true,
+        "build_profile": {
+          "type": "string"
+        },
+        "enabled_features": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
       "additionalProperties": false,
-      "required": ["cpu_cores", "rss_bytes"],
-      "properties": {
-        "cpu_cores": { "$ref": "#/$defs/distributionSummary" },
-        "rss_bytes": { "$ref": "#/$defs/distributionSummary" }
-      }
+      "required": [
+        "scale",
+        "dataset",
+        "caches",
+        "task",
+        "slate_settings",
+        "build_profile",
+        "enabled_features"
+      ]
     },
-    "machineStatistics": {
+    "DatasetConfig": {
       "type": "object",
+      "properties": {
+        "record_count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "key_bytes": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "value_bytes": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "value_compression_ratio": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "record_count",
+        "key_bytes",
+        "value_bytes",
+        "value_compression_ratio"
+      ]
+    },
+    "CacheConfig": {
+      "type": "object",
+      "properties": {
+        "block_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "metadata_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "block_bytes",
+        "metadata_bytes"
+      ]
+    },
+    "TaskConfig": {
+      "type": "object",
+      "properties": {
+        "task": {
+          "$ref": "#/$defs/Task"
+        },
+        "clients": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "warmup_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "measurement_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "initial_state": {
+          "type": "string"
+        },
+        "key_selection": {
+          "type": "string"
+        },
+        "operation_mix": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "scan_limit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        },
+        "transaction_hot_keys": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "transaction_reads": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        },
+        "transaction_updates": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "task",
+        "clients",
+        "warmup_ms",
+        "measurement_ms",
+        "initial_state",
+        "key_selection",
+        "operation_mix"
+      ]
+    },
+    "InitialState": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "checkpoint_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "manifest_id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "lsm_digest_sha256": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "lsm_digest_sha256"
+      ]
+    },
+    "ApplicationMetrics": {
+      "type": "object",
+      "properties": {
+        "operations": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/RateSummary"
+          }
+        },
+        "throughput": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/ThroughputSummary"
+          }
+        },
+        "latency": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/LatencySummary"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "operations",
+        "throughput",
+        "latency"
+      ]
+    },
+    "RateSummary": {
+      "type": "object",
+      "properties": {
+        "total": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "avg_per_second": {
+          "type": "number",
+          "format": "double"
+        },
+        "p001_per_second": {
+          "type": "number",
+          "format": "double"
+        },
+        "p01_per_second": {
+          "type": "number",
+          "format": "double"
+        },
+        "p50_per_second": {
+          "type": "number",
+          "format": "double"
+        },
+        "p99_per_second": {
+          "type": "number",
+          "format": "double"
+        },
+        "p999_per_second": {
+          "type": "number",
+          "format": "double"
+        },
+        "min_per_second": {
+          "type": "number",
+          "format": "double"
+        },
+        "max_per_second": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "total",
+        "avg_per_second",
+        "p001_per_second",
+        "p01_per_second",
+        "p50_per_second",
+        "p99_per_second",
+        "p999_per_second",
+        "min_per_second",
+        "max_per_second"
+      ]
+    },
+    "ThroughputSummary": {
+      "type": "object",
+      "properties": {
+        "total_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "avg_bytes_per_second": {
+          "type": "number",
+          "format": "double"
+        },
+        "p001_bytes_per_second": {
+          "type": "number",
+          "format": "double"
+        },
+        "p01_bytes_per_second": {
+          "type": "number",
+          "format": "double"
+        },
+        "p50_bytes_per_second": {
+          "type": "number",
+          "format": "double"
+        },
+        "p99_bytes_per_second": {
+          "type": "number",
+          "format": "double"
+        },
+        "p999_bytes_per_second": {
+          "type": "number",
+          "format": "double"
+        },
+        "min_bytes_per_second": {
+          "type": "number",
+          "format": "double"
+        },
+        "max_bytes_per_second": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "total_bytes",
+        "avg_bytes_per_second",
+        "p001_bytes_per_second",
+        "p01_bytes_per_second",
+        "p50_bytes_per_second",
+        "p99_bytes_per_second",
+        "p999_bytes_per_second",
+        "min_bytes_per_second",
+        "max_bytes_per_second"
+      ]
+    },
+    "LatencySummary": {
+      "type": "object",
+      "properties": {
+        "count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "avg_ns": {
+          "type": "number",
+          "format": "double"
+        },
+        "p001_ns": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "p01_ns": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "p50_ns": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "p99_ns": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "p999_ns": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "min_ns": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "max_ns": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "count",
+        "avg_ns",
+        "p001_ns",
+        "p01_ns",
+        "p50_ns",
+        "p99_ns",
+        "p999_ns",
+        "min_ns",
+        "max_ns"
+      ]
+    },
+    "ObjectStoreMetrics": {
+      "type": "object",
+      "properties": {
+        "requests": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/RateSummary"
+          }
+        },
+        "throughput": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/ThroughputSummary"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "requests",
+        "throughput"
+      ]
+    },
+    "ProcessStatistics": {
+      "type": "object",
+      "properties": {
+        "cpu_cores": {
+          "$ref": "#/$defs/DistributionSummary"
+        },
+        "rss_bytes": {
+          "$ref": "#/$defs/DistributionSummary"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "cpu_cores",
+        "rss_bytes"
+      ]
+    },
+    "DistributionSummary": {
+      "type": "object",
+      "properties": {
+        "avg": {
+          "type": "number",
+          "format": "double"
+        },
+        "p001": {
+          "type": "number",
+          "format": "double"
+        },
+        "p01": {
+          "type": "number",
+          "format": "double"
+        },
+        "p50": {
+          "type": "number",
+          "format": "double"
+        },
+        "p99": {
+          "type": "number",
+          "format": "double"
+        },
+        "p999": {
+          "type": "number",
+          "format": "double"
+        },
+        "min": {
+          "type": "number",
+          "format": "double"
+        },
+        "max": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "avg",
+        "p001",
+        "p01",
+        "p50",
+        "p99",
+        "p999",
+        "min",
+        "max"
+      ]
+    },
+    "MachineStatistics": {
+      "type": "object",
+      "properties": {
+        "cpu_percent": {
+          "$ref": "#/$defs/DistributionSummary"
+        },
+        "rss_bytes": {
+          "$ref": "#/$defs/DistributionSummary"
+        },
+        "network_receive_bytes_per_second": {
+          "$ref": "#/$defs/DistributionSummary"
+        },
+        "network_send_bytes_per_second": {
+          "$ref": "#/$defs/DistributionSummary"
+        },
+        "disk_read_bytes_per_second": {
+          "$ref": "#/$defs/DistributionSummary"
+        },
+        "disk_write_bytes_per_second": {
+          "$ref": "#/$defs/DistributionSummary"
+        },
+        "disk_read_operations_per_second": {
+          "$ref": "#/$defs/DistributionSummary"
+        },
+        "disk_write_operations_per_second": {
+          "$ref": "#/$defs/DistributionSummary"
+        }
+      },
       "additionalProperties": false,
       "required": [
         "cpu_percent",
@@ -405,75 +709,24 @@
         "disk_write_bytes_per_second",
         "disk_read_operations_per_second",
         "disk_write_operations_per_second"
-      ],
-      "properties": {
-        "cpu_percent": { "$ref": "#/$defs/distributionSummary" },
-        "rss_bytes": { "$ref": "#/$defs/distributionSummary" },
-        "network_receive_bytes_per_second": {
-          "$ref": "#/$defs/distributionSummary"
-        },
-        "network_send_bytes_per_second": {
-          "$ref": "#/$defs/distributionSummary"
-        },
-        "disk_read_bytes_per_second": {
-          "$ref": "#/$defs/distributionSummary"
-        },
-        "disk_write_bytes_per_second": {
-          "$ref": "#/$defs/distributionSummary"
-        },
-        "disk_read_operations_per_second": {
-          "$ref": "#/$defs/distributionSummary"
-        },
-        "disk_write_operations_per_second": {
-          "$ref": "#/$defs/distributionSummary"
-        }
-      }
+      ]
     },
-    "workloadResult": {
+    "SeriesReference": {
       "type": "object",
+      "properties": {
+        "file": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        }
+      },
       "additionalProperties": false,
       "required": [
-        "status",
-        "task",
-        "golden_id",
-        "session",
-        "timestamp",
-        "source",
-        "environment",
-        "configuration",
-        "initial_state",
-        "client_measurement_ns",
-        "durability_drain_ns",
-        "recorded_interval_ns",
-        "application",
-        "object_store",
-        "process",
-        "machine",
-        "series"
-      ],
-      "properties": {
-        "status": { "const": "ok" },
-        "task": { "$ref": "#/$defs/workload" },
-        "golden_id": { "type": "string", "minLength": 1 },
-        "session": { "type": "string", "minLength": 1 },
-        "timestamp": { "type": "string", "format": "date-time" },
-        "actions_log_url": {
-          "type": "string",
-          "pattern": "^https://github\\.com/[^/]+/[^/]+/actions/runs/[0-9]+/job/[0-9]+$"
-        },
-        "source": { "$ref": "#/$defs/source" },
-        "environment": { "$ref": "#/$defs/environment" },
-        "configuration": { "$ref": "#/$defs/configuration" },
-        "initial_state": { "$ref": "#/$defs/initialState" },
-        "client_measurement_ns": { "type": "integer", "minimum": 0 },
-        "durability_drain_ns": { "type": "integer", "minimum": 0 },
-        "recorded_interval_ns": { "type": "integer", "minimum": 1 },
-        "application": { "$ref": "#/$defs/applicationMetrics" },
-        "object_store": { "$ref": "#/$defs/objectStoreMetrics" },
-        "process": { "$ref": "#/$defs/processStatistics" },
-        "machine": { "$ref": "#/$defs/machineStatistics" },
-        "series": { "$ref": "#/$defs/seriesReference" }
-      }
+        "file",
+        "sha256"
+      ]
     }
-  }
+  },
+  "$id": "https://benchmark.slatedb.io/schema/result.json"
 }

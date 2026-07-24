@@ -1,10 +1,12 @@
 use anyhow::{ensure, Context, Result};
 use clap::ValueEnum;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slatedb::config::Settings;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use ts_rs::TS;
 
 const RECORD_COUNT: u64 = 300_000_000;
 const KEY_BYTES: usize = 20;
@@ -70,7 +72,20 @@ impl FromStr for BenchmarkScale {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, ValueEnum)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    JsonSchema,
+    TS,
+    ValueEnum,
+)]
 #[serde(rename_all = "kebab-case")]
 #[clap(rename_all = "kebab-case")]
 pub enum Task {
@@ -89,57 +104,34 @@ pub enum Task {
 }
 
 impl Task {
-    pub const WORKLOADS: [Self; 10] = [
-        Self::Idle,
-        Self::PointReadUniform,
-        Self::PointReadSkewed,
-        Self::PointReadMissing,
-        Self::ReadHeavy,
-        Self::Balanced,
-        Self::UpdateHeavy,
-        Self::RangeScan,
-        Self::SustainedIngest,
-        Self::TransactionContention,
-    ];
-
-    pub const fn is_preparation(self) -> bool {
-        matches!(self, Self::BulkLoad | Self::Compaction)
+    pub fn workloads() -> impl Iterator<Item = Self> {
+        TASK_CATALOG
+            .iter()
+            .filter(|definition| !definition.preparation)
+            .map(|definition| definition.task)
     }
 
-    pub const fn uses_golden(self) -> bool {
-        !matches!(
-            self,
-            Self::BulkLoad | Self::Compaction | Self::SustainedIngest
-        )
+    pub fn is_preparation(self) -> bool {
+        self.definition().preparation
     }
 
-    pub const fn may_write(self) -> bool {
-        matches!(
-            self,
-            Self::BulkLoad
-                | Self::ReadHeavy
-                | Self::Balanced
-                | Self::UpdateHeavy
-                | Self::SustainedIngest
-                | Self::TransactionContention
-        )
+    pub fn uses_golden(self) -> bool {
+        self.definition().initial_state == "golden"
     }
 
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::BulkLoad => "bulk-load",
-            Self::Compaction => "compaction",
-            Self::Idle => "idle",
-            Self::PointReadUniform => "point-read-uniform",
-            Self::PointReadSkewed => "point-read-skewed",
-            Self::PointReadMissing => "point-read-missing",
-            Self::ReadHeavy => "read-heavy",
-            Self::Balanced => "balanced",
-            Self::UpdateHeavy => "update-heavy",
-            Self::RangeScan => "range-scan",
-            Self::SustainedIngest => "sustained-ingest",
-            Self::TransactionContention => "transaction-contention",
-        }
+    pub fn may_write(self) -> bool {
+        self.definition().may_write
+    }
+
+    pub fn as_str(self) -> &'static str {
+        self.definition().name
+    }
+
+    fn definition(self) -> &'static TaskDefinition {
+        TASK_CATALOG
+            .iter()
+            .find(|definition| definition.task == self)
+            .expect("task catalog must contain every task")
     }
 }
 
@@ -149,7 +141,229 @@ impl std::fmt::Display for Task {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy)]
+struct TaskDefinition {
+    task: Task,
+    name: &'static str,
+    preparation: bool,
+    clients: usize,
+    warmup_ms: u64,
+    measurement_ms: u64,
+    initial_state: &'static str,
+    key_selection: &'static str,
+    operation_mix: &'static [(&'static str, f64)],
+    scan_limit: Option<usize>,
+    transaction_hot_keys: Option<u64>,
+    transaction_reads: Option<usize>,
+    transaction_updates: Option<usize>,
+    may_write: bool,
+}
+
+const NO_OPERATIONS: &[(&str, f64)] = &[];
+const GET_ONLY: &[(&str, f64)] = &[("get", 1.0)];
+const READ_HEAVY: &[(&str, f64)] = &[("get", 0.95), ("put", 0.05)];
+const BALANCED: &[(&str, f64)] = &[("get", 0.5), ("put", 0.5)];
+const UPDATE_HEAVY: &[(&str, f64)] = &[("get", 0.05), ("put", 0.95)];
+const SCAN_ONLY: &[(&str, f64)] = &[("scan", 1.0)];
+const PUT_ONLY: &[(&str, f64)] = &[("put", 1.0)];
+const TRANSACTION_ONLY: &[(&str, f64)] = &[("transaction", 1.0)];
+
+const TASK_CATALOG: &[TaskDefinition] = &[
+    TaskDefinition {
+        task: Task::BulkLoad,
+        name: "bulk-load",
+        preparation: true,
+        clients: 0,
+        warmup_ms: 0,
+        measurement_ms: 0,
+        initial_state: "preparation",
+        key_selection: "none",
+        operation_mix: NO_OPERATIONS,
+        scan_limit: None,
+        transaction_hot_keys: None,
+        transaction_reads: None,
+        transaction_updates: None,
+        may_write: true,
+    },
+    TaskDefinition {
+        task: Task::Compaction,
+        name: "compaction",
+        preparation: true,
+        clients: 0,
+        warmup_ms: 0,
+        measurement_ms: 0,
+        initial_state: "preparation",
+        key_selection: "none",
+        operation_mix: NO_OPERATIONS,
+        scan_limit: None,
+        transaction_hot_keys: None,
+        transaction_reads: None,
+        transaction_updates: None,
+        may_write: false,
+    },
+    TaskDefinition {
+        task: Task::Idle,
+        name: "idle",
+        preparation: false,
+        clients: 0,
+        warmup_ms: 0,
+        measurement_ms: IDLE_MS,
+        initial_state: "golden",
+        key_selection: "none",
+        operation_mix: NO_OPERATIONS,
+        scan_limit: None,
+        transaction_hot_keys: None,
+        transaction_reads: None,
+        transaction_updates: None,
+        may_write: false,
+    },
+    TaskDefinition {
+        task: Task::PointReadUniform,
+        name: "point-read-uniform",
+        preparation: false,
+        clients: CLIENTS,
+        warmup_ms: WARMUP_MS,
+        measurement_ms: MEASUREMENT_MS,
+        initial_state: "golden",
+        key_selection: "uniform",
+        operation_mix: GET_ONLY,
+        scan_limit: None,
+        transaction_hot_keys: None,
+        transaction_reads: None,
+        transaction_updates: None,
+        may_write: false,
+    },
+    TaskDefinition {
+        task: Task::PointReadSkewed,
+        name: "point-read-skewed",
+        preparation: false,
+        clients: CLIENTS,
+        warmup_ms: WARMUP_MS,
+        measurement_ms: MEASUREMENT_MS,
+        initial_state: "golden",
+        key_selection: "scrambled-zipfian-0.99",
+        operation_mix: GET_ONLY,
+        scan_limit: None,
+        transaction_hot_keys: None,
+        transaction_reads: None,
+        transaction_updates: None,
+        may_write: false,
+    },
+    TaskDefinition {
+        task: Task::PointReadMissing,
+        name: "point-read-missing",
+        preparation: false,
+        clients: CLIENTS,
+        warmup_ms: WARMUP_MS,
+        measurement_ms: MEASUREMENT_MS,
+        initial_state: "golden",
+        key_selection: "uniform-absent",
+        operation_mix: GET_ONLY,
+        scan_limit: None,
+        transaction_hot_keys: None,
+        transaction_reads: None,
+        transaction_updates: None,
+        may_write: false,
+    },
+    TaskDefinition {
+        task: Task::ReadHeavy,
+        name: "read-heavy",
+        preparation: false,
+        clients: CLIENTS,
+        warmup_ms: WARMUP_MS,
+        measurement_ms: MEASUREMENT_MS,
+        initial_state: "golden",
+        key_selection: "scrambled-zipfian-0.99",
+        operation_mix: READ_HEAVY,
+        scan_limit: None,
+        transaction_hot_keys: None,
+        transaction_reads: None,
+        transaction_updates: None,
+        may_write: true,
+    },
+    TaskDefinition {
+        task: Task::Balanced,
+        name: "balanced",
+        preparation: false,
+        clients: CLIENTS,
+        warmup_ms: WARMUP_MS,
+        measurement_ms: MEASUREMENT_MS,
+        initial_state: "golden",
+        key_selection: "scrambled-zipfian-0.99",
+        operation_mix: BALANCED,
+        scan_limit: None,
+        transaction_hot_keys: None,
+        transaction_reads: None,
+        transaction_updates: None,
+        may_write: true,
+    },
+    TaskDefinition {
+        task: Task::UpdateHeavy,
+        name: "update-heavy",
+        preparation: false,
+        clients: CLIENTS,
+        warmup_ms: WARMUP_MS,
+        measurement_ms: MEASUREMENT_MS,
+        initial_state: "golden",
+        key_selection: "scrambled-zipfian-0.99",
+        operation_mix: UPDATE_HEAVY,
+        scan_limit: None,
+        transaction_hot_keys: None,
+        transaction_reads: None,
+        transaction_updates: None,
+        may_write: true,
+    },
+    TaskDefinition {
+        task: Task::RangeScan,
+        name: "range-scan",
+        preparation: false,
+        clients: CLIENTS,
+        warmup_ms: WARMUP_MS,
+        measurement_ms: MEASUREMENT_MS,
+        initial_state: "golden",
+        key_selection: "uniform",
+        operation_mix: SCAN_ONLY,
+        scan_limit: Some(10),
+        transaction_hot_keys: None,
+        transaction_reads: None,
+        transaction_updates: None,
+        may_write: false,
+    },
+    TaskDefinition {
+        task: Task::SustainedIngest,
+        name: "sustained-ingest",
+        preparation: false,
+        clients: CLIENTS,
+        warmup_ms: 0,
+        measurement_ms: INGEST_MS,
+        initial_state: "empty",
+        key_selection: "unique-sequential",
+        operation_mix: PUT_ONLY,
+        scan_limit: None,
+        transaction_hot_keys: None,
+        transaction_reads: None,
+        transaction_updates: None,
+        may_write: true,
+    },
+    TaskDefinition {
+        task: Task::TransactionContention,
+        name: "transaction-contention",
+        preparation: false,
+        clients: CLIENTS,
+        warmup_ms: WARMUP_MS,
+        measurement_ms: MEASUREMENT_MS,
+        initial_state: "golden",
+        key_selection: "uniform-hot-set",
+        operation_mix: TRANSACTION_ONLY,
+        scan_limit: None,
+        transaction_hot_keys: Some(10_000),
+        transaction_reads: Some(5),
+        transaction_updates: Some(5),
+        may_write: true,
+    },
+];
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct DatasetConfig {
     pub record_count: u64,
@@ -166,14 +380,14 @@ impl DatasetConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct CacheConfig {
     pub block_bytes: u64,
     pub metadata_bytes: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct TaskConfig {
     pub task: Task,
@@ -372,79 +586,26 @@ fn settings_path_for_task(task: Task, shared_path: &Path) -> Result<Option<PathB
 }
 
 fn task_config(task: Task, scale: BenchmarkScale, record_count: u64) -> TaskConfig {
-    let mut config = TaskConfig {
+    let definition = task.definition();
+    TaskConfig {
         task,
-        clients: if task.is_preparation() || task == Task::Idle {
-            0
-        } else {
-            CLIENTS
-        },
-        warmup_ms: if matches!(task, Task::Idle | Task::SustainedIngest) || task.is_preparation() {
-            0
-        } else {
-            scaled_u64(WARMUP_MS, MIN_DURATION_MS, scale)
-        },
-        measurement_ms: match task {
-            Task::BulkLoad | Task::Compaction => 0,
-            Task::Idle => scaled_u64(IDLE_MS, MIN_DURATION_MS, scale),
-            Task::SustainedIngest => scaled_u64(INGEST_MS, MIN_DURATION_MS, scale),
-            _ => scaled_u64(MEASUREMENT_MS, MIN_DURATION_MS, scale),
-        },
-        initial_state: if task == Task::SustainedIngest {
-            "empty".to_string()
-        } else if task.is_preparation() {
-            "preparation".to_string()
-        } else {
-            "golden".to_string()
-        },
-        key_selection: "none".to_string(),
-        operation_mix: BTreeMap::new(),
-        scan_limit: None,
-        transaction_hot_keys: None,
-        transaction_reads: None,
-        transaction_updates: None,
-    };
-    match task {
-        Task::PointReadUniform => {
-            config.key_selection = "uniform".to_string();
-            config.operation_mix.insert("get".to_string(), 1.0);
-        }
-        Task::PointReadSkewed => {
-            config.key_selection = "scrambled-zipfian-0.99".to_string();
-            config.operation_mix.insert("get".to_string(), 1.0);
-        }
-        Task::PointReadMissing => {
-            config.key_selection = "uniform-absent".to_string();
-            config.operation_mix.insert("get".to_string(), 1.0);
-        }
-        Task::ReadHeavy => mixed(&mut config, 0.95, 0.05),
-        Task::Balanced => mixed(&mut config, 0.5, 0.5),
-        Task::UpdateHeavy => mixed(&mut config, 0.05, 0.95),
-        Task::RangeScan => {
-            config.key_selection = "uniform".to_string();
-            config.operation_mix.insert("scan".to_string(), 1.0);
-            config.scan_limit = Some(10);
-        }
-        Task::SustainedIngest => {
-            config.key_selection = "unique-sequential".to_string();
-            config.operation_mix.insert("put".to_string(), 1.0);
-        }
-        Task::TransactionContention => {
-            config.key_selection = "uniform-hot-set".to_string();
-            config.operation_mix.insert("transaction".to_string(), 1.0);
-            config.transaction_hot_keys = Some(record_count.min(10_000));
-            config.transaction_reads = Some(5);
-            config.transaction_updates = Some(5);
-        }
-        Task::BulkLoad | Task::Compaction | Task::Idle => {}
+        clients: definition.clients,
+        warmup_ms: scaled_u64(definition.warmup_ms, MIN_DURATION_MS, scale),
+        measurement_ms: scaled_u64(definition.measurement_ms, MIN_DURATION_MS, scale),
+        initial_state: definition.initial_state.to_string(),
+        key_selection: definition.key_selection.to_string(),
+        operation_mix: definition
+            .operation_mix
+            .iter()
+            .map(|(name, fraction)| ((*name).to_string(), *fraction))
+            .collect(),
+        scan_limit: definition.scan_limit,
+        transaction_hot_keys: definition
+            .transaction_hot_keys
+            .map(|hot_keys| hot_keys.min(record_count)),
+        transaction_reads: definition.transaction_reads,
+        transaction_updates: definition.transaction_updates,
     }
-    config
-}
-
-fn mixed(config: &mut TaskConfig, reads: f64, updates: f64) {
-    config.key_selection = "scrambled-zipfian-0.99".to_string();
-    config.operation_mix.insert("get".to_string(), reads);
-    config.operation_mix.insert("put".to_string(), updates);
 }
 
 fn scaled_u64(value: u64, minimum: u64, scale: BenchmarkScale) -> u64 {
@@ -477,7 +638,7 @@ mod tests {
         let scaled = "0.01".parse::<BenchmarkScale>().expect("scale");
         let tasks = [Task::BulkLoad, Task::Compaction]
             .into_iter()
-            .chain(Task::WORKLOADS);
+            .chain(Task::workloads());
 
         for task in tasks {
             for scale in [BenchmarkScale::FULL, scaled] {

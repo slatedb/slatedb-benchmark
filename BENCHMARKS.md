@@ -13,8 +13,8 @@ results.
 
 ## Benchmark environment
 
-Release runs use an AWS CodeBuild Linux XLarge runner with 36 vCPUs, 72 GiB of
-memory, and 256 GB of disk. Amazon S3 and CodeBuild run in `us-east-1`. Each
+Release runs use the configured WarpBuild ARM runner. Amazon S3 runs in
+`us-east-1`. Each
 preparation phase and workload has one published configuration. The release
 does not vary clients, values, caches, machines, object stores, or SlateDB
 settings within a preparation phase or workload.
@@ -312,8 +312,8 @@ markers, so a retry can skip completed workloads.
 
 ## Scaling
 
-Smoke tests and website fixtures run the release suite with `--scale`; they do
-not use a separate mock catalog. Scale reduces records, durations, and cache
+The local end-to-end test runs the release suite with `--scale`; it does not
+use a separate mock catalog. Scale reduces records, durations, and cache
 capacities. It preserves operation mixes, clients, key and value sizes,
 durability, preparation and workload order, and initial state. The publisher
 rejects scaled results.

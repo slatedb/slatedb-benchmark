@@ -102,13 +102,6 @@ jobs:
           if-no-files-found: error
           overwrite: true
           retention-days: 7
-      - name: Restore local checkout after act
-        if: always()
-        shell: bash
-        run: |
-          if [[ ${ACT:-false} == true ]]; then
-            git restore Cargo.toml Cargo.lock
-          fi
 
   bulk-load:
     needs: build
@@ -128,7 +121,7 @@ jobs:
           path: bin
       - run: chmod +x bin/slatedb-benchmark
       - name: Configure S3 credentials
-        if: ${{ inputs.object_store == 's3' && env.ACT != 'true' }}
+        if: ${{ inputs.object_store == 's3' }}
         uses: aws-actions/configure-aws-credentials@v5
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
@@ -142,12 +135,10 @@ jobs:
           TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
         run: |
           set -euo pipefail
-          if [[ ${ACT:-false} != true ]]; then
-            : "${TIGRIS_ACCESS_KEY_ID:?Tigris access key ID is required}"
-            : "${TIGRIS_SECRET_ACCESS_KEY:?Tigris secret access key is required}"
-            echo "AWS_ACCESS_KEY_ID=$TIGRIS_ACCESS_KEY_ID" >> "$GITHUB_ENV"
-            echo "AWS_SECRET_ACCESS_KEY=$TIGRIS_SECRET_ACCESS_KEY" >> "$GITHUB_ENV"
-          fi
+          : "${TIGRIS_ACCESS_KEY_ID:?Tigris access key ID is required}"
+          : "${TIGRIS_SECRET_ACCESS_KEY:?Tigris secret access key is required}"
+          echo "AWS_ACCESS_KEY_ID=$TIGRIS_ACCESS_KEY_ID" >> "$GITHUB_ENV"
+          echo "AWS_SECRET_ACCESS_KEY=$TIGRIS_SECRET_ACCESS_KEY" >> "$GITHUB_ENV"
           echo "AWS_ENDPOINT_URL_S3=${AWS_ENDPOINT_URL_S3:-https://t3.storage.dev}" >> "$GITHUB_ENV"
       - name: Run bulk load
         shell: bash
@@ -163,8 +154,8 @@ jobs:
           : "${SLATEDB_BENCH_BUCKET:?SLATEDB_BENCH_BUCKET is required}"
           export SLATEDB_BENCH_PREFIX=${SLATEDB_BENCH_PREFIX:-benchmark}
           export SLATEDB_BENCH_RUNNER_TYPE=${SLATEDB_BENCH_RUNNER_TYPE:-warp-ubuntu-latest-arm64-8x}
-          bin/slatedb-benchmark run \
-            --task bulk-load \
+          bin/slatedb-benchmark prepare \
+            --phase bulk-load \
             --golden "$GOLDEN_ID" \
             --scale "$BENCHMARK_SCALE" \
             --output .runs/golden/bulk-load
@@ -195,7 +186,7 @@ jobs:
           path: bin
       - run: chmod +x bin/slatedb-benchmark
       - name: Configure S3 credentials
-        if: ${{ inputs.object_store == 's3' && env.ACT != 'true' }}
+        if: ${{ inputs.object_store == 's3' }}
         uses: aws-actions/configure-aws-credentials@v5
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
@@ -209,12 +200,10 @@ jobs:
           TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
         run: |
           set -euo pipefail
-          if [[ ${ACT:-false} != true ]]; then
-            : "${TIGRIS_ACCESS_KEY_ID:?Tigris access key ID is required}"
-            : "${TIGRIS_SECRET_ACCESS_KEY:?Tigris secret access key is required}"
-            echo "AWS_ACCESS_KEY_ID=$TIGRIS_ACCESS_KEY_ID" >> "$GITHUB_ENV"
-            echo "AWS_SECRET_ACCESS_KEY=$TIGRIS_SECRET_ACCESS_KEY" >> "$GITHUB_ENV"
-          fi
+          : "${TIGRIS_ACCESS_KEY_ID:?Tigris access key ID is required}"
+          : "${TIGRIS_SECRET_ACCESS_KEY:?Tigris secret access key is required}"
+          echo "AWS_ACCESS_KEY_ID=$TIGRIS_ACCESS_KEY_ID" >> "$GITHUB_ENV"
+          echo "AWS_SECRET_ACCESS_KEY=$TIGRIS_SECRET_ACCESS_KEY" >> "$GITHUB_ENV"
           echo "AWS_ENDPOINT_URL_S3=${AWS_ENDPOINT_URL_S3:-https://t3.storage.dev}" >> "$GITHUB_ENV"
       - name: Run compaction
         shell: bash
@@ -230,8 +219,8 @@ jobs:
           : "${SLATEDB_BENCH_BUCKET:?SLATEDB_BENCH_BUCKET is required}"
           export SLATEDB_BENCH_PREFIX=${SLATEDB_BENCH_PREFIX:-benchmark}
           export SLATEDB_BENCH_RUNNER_TYPE=${SLATEDB_BENCH_RUNNER_TYPE:-warp-ubuntu-latest-arm64-8x}
-          bin/slatedb-benchmark run \
-            --task compaction \
+          bin/slatedb-benchmark prepare \
+            --phase compaction \
             --golden "$GOLDEN_ID" \
             --scale "$BENCHMARK_SCALE" \
             --output .runs/golden/final

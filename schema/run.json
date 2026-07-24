@@ -1,8 +1,63 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://benchmark.slatedb.io/schema/run.json",
-  "title": "SlateDB benchmark run",
+  "title": "RunManifest",
   "type": "object",
+  "properties": {
+    "status": {
+      "type": "string"
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "golden_id": {
+      "type": "string"
+    },
+    "started_at": {
+      "type": "string"
+    },
+    "finished_at": {
+      "type": "string"
+    },
+    "patches": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/AppliedPatch"
+      }
+    },
+    "source": {
+      "$ref": "#/$defs/SourceIdentity"
+    },
+    "golden_runner_commit": {
+      "type": "string"
+    },
+    "resolved_configuration": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/ResultConfiguration"
+      }
+    },
+    "max_parallel": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    },
+    "transfer_capacity": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TransferCapacity"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "results": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    }
+  },
   "additionalProperties": false,
   "required": [
     "status",
@@ -17,21 +72,42 @@
     "max_parallel",
     "results"
   ],
-  "properties": {
-    "status": { "const": "ok" },
-    "run_id": {
-      "type": "string",
-      "pattern": "^(?!\\.{1,2}$)[A-Za-z0-9._-]{1,128}$"
-    },
-    "golden_id": { "type": "string", "minLength": 1 },
-    "started_at": { "type": "string", "format": "date-time" },
-    "finished_at": { "type": "string", "format": "date-time" },
-    "patches": {
-      "type": "array",
-      "items": { "$ref": "#/$defs/patch" }
-    },
-    "source": {
+  "$defs": {
+    "AppliedPatch": {
       "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "sha256"
+      ]
+    },
+    "SourceIdentity": {
+      "type": "object",
+      "properties": {
+        "slate_version": {
+          "type": "string"
+        },
+        "slate_commit": {
+          "type": "string"
+        },
+        "runner_version": {
+          "type": "string"
+        },
+        "runner_commit": {
+          "type": "string"
+        },
+        "lockfile_sha256": {
+          "type": "string"
+        }
+      },
       "additionalProperties": false,
       "required": [
         "slate_version",
@@ -39,72 +115,234 @@
         "runner_version",
         "runner_commit",
         "lockfile_sha256"
-      ],
-      "properties": {
-        "slate_version": { "type": "string", "minLength": 1 },
-        "slate_commit": { "type": "string", "minLength": 1 },
-        "runner_version": { "type": "string", "minLength": 1 },
-        "runner_commit": { "type": "string", "minLength": 1 },
-        "lockfile_sha256": { "type": "string", "minLength": 1 }
-      }
+      ]
     },
-    "golden_runner_commit": { "type": "string", "minLength": 1 },
-    "resolved_configuration": {
+    "ResultConfiguration": {
       "type": "object",
-      "required": ["golden"],
-      "minProperties": 2,
-      "maxProperties": 11,
-      "propertyNames": {
-        "enum": [
-          "golden",
-          "idle",
-          "point-read-uniform",
-          "point-read-skewed",
-          "point-read-missing",
-          "read-heavy",
-          "balanced",
-          "update-heavy",
-          "range-scan",
-          "sustained-ingest",
-          "transaction-contention"
-        ]
-      },
-      "additionalProperties": { "type": "object" }
-    },
-    "max_parallel": { "type": "integer", "minimum": 1 },
-    "transfer_capacity": { "$ref": "#/$defs/warpTransferCapacity" },
-    "results": {
-      "type": "object",
-      "required": ["golden.json"],
-      "minProperties": 3,
-      "maxProperties": 21,
-      "propertyNames": {
-        "pattern": "^(golden|workload/(idle|point-read-uniform|point-read-skewed|point-read-missing|read-heavy|balanced|update-heavy|range-scan|sustained-ingest|transaction-contention)/(result|series))\\.json$"
-      },
-      "additionalProperties": {
-        "type": "string",
-        "pattern": "^[0-9a-f]{64}$"
-      }
-    }
-  },
-  "$defs": {
-    "patch": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["name", "sha256"],
       "properties": {
-        "name": {
-          "type": "string",
-          "pattern": "^[^/]+\\.patch$"
+        "scale": {
+          "type": "number",
+          "format": "double"
         },
-        "sha256": {
-          "type": "string",
-          "pattern": "^[0-9a-f]{64}$"
+        "dataset": {
+          "$ref": "#/$defs/DatasetConfig"
+        },
+        "caches": {
+          "$ref": "#/$defs/CacheConfig"
+        },
+        "task": {
+          "$ref": "#/$defs/TaskConfig"
+        },
+        "slate_settings": true,
+        "slate_default_settings": true,
+        "build_profile": {
+          "type": "string"
+        },
+        "enabled_features": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
-      }
+      },
+      "additionalProperties": false,
+      "required": [
+        "scale",
+        "dataset",
+        "caches",
+        "task",
+        "slate_settings",
+        "build_profile",
+        "enabled_features"
+      ]
     },
-    "warpTransferCapacity": {
+    "DatasetConfig": {
       "type": "object",
+      "properties": {
+        "record_count": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "key_bytes": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "value_bytes": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "value_compression_ratio": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "record_count",
+        "key_bytes",
+        "value_bytes",
+        "value_compression_ratio"
+      ]
+    },
+    "CacheConfig": {
+      "type": "object",
+      "properties": {
+        "block_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "metadata_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "block_bytes",
+        "metadata_bytes"
+      ]
+    },
+    "TaskConfig": {
+      "type": "object",
+      "properties": {
+        "task": {
+          "$ref": "#/$defs/Task"
+        },
+        "clients": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "warmup_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "measurement_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "initial_state": {
+          "type": "string"
+        },
+        "key_selection": {
+          "type": "string"
+        },
+        "operation_mix": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "scan_limit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        },
+        "transaction_hot_keys": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "transaction_reads": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        },
+        "transaction_updates": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "task",
+        "clients",
+        "warmup_ms",
+        "measurement_ms",
+        "initial_state",
+        "key_selection",
+        "operation_mix"
+      ]
+    },
+    "Task": {
+      "type": "string",
+      "enum": [
+        "bulk-load",
+        "compaction",
+        "idle",
+        "point-read-uniform",
+        "point-read-skewed",
+        "point-read-missing",
+        "read-heavy",
+        "balanced",
+        "update-heavy",
+        "range-scan",
+        "sustained-ingest",
+        "transaction-contention"
+      ]
+    },
+    "TransferCapacity": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "status": {
+          "type": "string"
+        },
+        "timestamp": {
+          "type": "string"
+        },
+        "scale": {
+          "type": "number",
+          "format": "double"
+        },
+        "runner_type": {
+          "type": "string"
+        },
+        "object_store": {
+          "type": "string"
+        },
+        "endpoint": {
+          "type": "string"
+        },
+        "region": {
+          "type": "string"
+        },
+        "tool": {
+          "$ref": "#/$defs/TransferTool"
+        },
+        "benchmarks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TransferBenchmark"
+          }
+        }
+      },
       "additionalProperties": false,
       "required": [
         "version",
@@ -117,35 +355,55 @@
         "region",
         "tool",
         "benchmarks"
-      ],
-      "properties": {
-        "version": { "const": 3 },
-        "status": { "const": "ok" },
-        "timestamp": { "type": "string", "format": "date-time" },
-        "scale": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
-        "runner_type": { "type": "string", "minLength": 1 },
-        "object_store": { "type": "string", "minLength": 1 },
-        "endpoint": { "type": "string", "minLength": 1 },
-        "region": { "type": "string", "minLength": 1 },
-        "tool": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["name", "version"],
-          "properties": {
-            "name": { "const": "warp" },
-            "version": { "type": "string", "minLength": 1 }
-          }
-        },
-        "benchmarks": {
-          "type": "array",
-          "minItems": 5,
-          "maxItems": 5,
-          "items": { "$ref": "#/$defs/warpBenchmark" }
-        }
-      }
+      ]
     },
-    "warpBenchmark": {
+    "TransferTool": {
       "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version"
+      ]
+    },
+    "TransferBenchmark": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "operation": {
+          "type": "string"
+        },
+        "object_size_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "concurrency": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "duration_seconds": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "latency_ms": {
+          "$ref": "#/$defs/TransferLatency"
+        },
+        "benchdata": {
+          "type": "string"
+        }
+      },
       "additionalProperties": false,
       "required": [
         "name",
@@ -155,43 +413,68 @@
         "duration_seconds",
         "latency_ms",
         "benchdata"
-      ],
+      ]
+    },
+    "TransferLatency": {
+      "type": "object",
       "properties": {
-        "name": {
-          "enum": ["large-put", "large-get", "small-put", "small-get", "small-list"]
+        "request": {
+          "$ref": "#/$defs/TransferLatencySummary"
         },
-        "operation": { "enum": ["PUT", "GET", "LIST"] },
-        "object_size_bytes": { "type": "integer", "minimum": 1 },
-        "concurrency": { "type": "integer", "minimum": 1 },
-        "duration_seconds": { "type": "integer", "minimum": 1 },
-        "latency_ms": { "$ref": "#/$defs/warpLatency" },
-        "benchdata": {
-          "type": "string",
-          "pattern": "^warp/(large-(put|get)|small-(put|get|list))\\.csv\\.zst$"
+        "ttfb": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TransferLatencySummary"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
-      }
-    },
-    "warpLatency": {
-      "type": "object",
+      },
       "additionalProperties": false,
-      "required": ["request"],
-      "properties": {
-        "request": { "$ref": "#/$defs/warpLatencySummary" },
-        "ttfb": { "$ref": "#/$defs/warpLatencySummary" }
-      }
+      "required": [
+        "request"
+      ]
     },
-    "warpLatencySummary": {
+    "TransferLatencySummary": {
       "type": "object",
-      "additionalProperties": false,
-      "required": ["average", "p50", "p90", "p99", "min", "max"],
       "properties": {
-        "average": { "type": "number", "minimum": 0 },
-        "p50": { "type": "number", "minimum": 0 },
-        "p90": { "type": "number", "minimum": 0 },
-        "p99": { "type": "number", "minimum": 0 },
-        "min": { "type": "number", "minimum": 0 },
-        "max": { "type": "number", "minimum": 0 }
-      }
+        "average": {
+          "type": "number",
+          "format": "double"
+        },
+        "p50": {
+          "type": "number",
+          "format": "double"
+        },
+        "p90": {
+          "type": "number",
+          "format": "double"
+        },
+        "p99": {
+          "type": "number",
+          "format": "double"
+        },
+        "min": {
+          "type": "number",
+          "format": "double"
+        },
+        "max": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "average",
+        "p50",
+        "p90",
+        "p99",
+        "min",
+        "max"
+      ]
     }
-  }
+  },
+  "$id": "https://benchmark.slatedb.io/schema/run.json"
 }

@@ -1,5 +1,4 @@
-use crate::cli::RunArgs;
-use crate::config::{self, ResolvedConfig, Task};
+use crate::config::{self, BenchmarkScale, ResolvedConfig, Task};
 use crate::database_size::live_database_size_bytes;
 use crate::model::{
     CheckpointReference, Environment, GoldenDatasetMetadata, GoldenManifest, InitialState,
@@ -33,14 +32,23 @@ use slatedb::{Db, VersionedManifest};
 use slatedb_common::metrics::MetricsRecorder;
 use std::fs;
 use std::path::Path as FsPath;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 const SETTINGS_PATH: &str = "config/settings.toml";
-const COMPACTION_QUIET: Duration = Duration::from_secs(60);
+#[derive(Debug, Clone)]
+pub struct ExecutionArgs {
+    pub task: Task,
+    pub golden: String,
+    pub session: Option<String>,
+    pub scale: BenchmarkScale,
+    pub output: PathBuf,
+    pub compaction_quiet: Duration,
+}
 
-pub async fn execute(args: RunArgs) -> Result<()> {
+pub async fn execute(args: ExecutionArgs) -> Result<()> {
     validate_name(&args.golden, "golden")?;
     if args.task.is_preparation() {
         if args.session.is_some() {
@@ -78,6 +86,13 @@ pub async fn execute(args: RunArgs) -> Result<()> {
     result
 }
 
+pub async fn cleanup_session(session: &str) -> Result<()> {
+    validate_name(session, "session")?;
+    let context = ObjectStoreContext::load()?;
+    let session_root = context.root.clone().join("sessions").join(session);
+    delete_prefix(Arc::clone(&context.control), &session_root).await
+}
+
 fn remove_local_output(path: &FsPath) -> Result<()> {
     match fs::remove_file(path) {
         Ok(()) => Ok(()),
@@ -87,7 +102,7 @@ fn remove_local_output(path: &FsPath) -> Result<()> {
 }
 
 fn write_failure_diagnostic(
-    args: &RunArgs,
+    args: &ExecutionArgs,
     config: &ResolvedConfig,
     context: &ObjectStoreContext,
     error: &anyhow::Error,
@@ -109,7 +124,7 @@ fn write_failure_diagnostic(
 }
 
 async fn run_bulk_load(
-    args: &RunArgs,
+    args: &ExecutionArgs,
     config: &ResolvedConfig,
     context: &ObjectStoreContext,
 ) -> Result<()> {
@@ -188,7 +203,7 @@ async fn run_bulk_load(
 }
 
 async fn run_compaction(
-    args: &RunArgs,
+    args: &ExecutionArgs,
     config: &ResolvedConfig,
     context: &ObjectStoreContext,
 ) -> Result<()> {
@@ -236,20 +251,20 @@ async fn run_compaction(
     let application = Arc::new(ApplicationRegistry::default());
     let admin = AdminBuilder::new(database_path.clone(), Arc::clone(&context.control)).build();
     tracing::info!(
-        quiet_seconds = COMPACTION_QUIET.as_secs(),
+        quiet_ms = args.compaction_quiet.as_millis(),
         "waiting for normal compaction to settle"
     );
     let compaction = measure_until_complete(
         application,
         context.instrumented.metrics(),
-        wait_for_compactor_quiet(&admin),
+        wait_for_compactor_quiet(&admin, args.compaction_quiet),
     )
     .await;
     let closed = close_database_after(&db, compaction, "closing compaction database").await;
     metrics_reporter.stop().await;
     let ((), measurement) = closed?;
     tracing::info!(
-        quiet_seconds = COMPACTION_QUIET.as_secs(),
+        quiet_ms = args.compaction_quiet.as_millis(),
         "normal compaction settled"
     );
     ensure_measurement_has_no_application_errors(&measurement)?;
@@ -282,7 +297,7 @@ async fn run_compaction(
 }
 
 async fn run_workload(
-    args: &RunArgs,
+    args: &ExecutionArgs,
     config: &ResolvedConfig,
     context: &ObjectStoreContext,
 ) -> Result<()> {
@@ -450,7 +465,7 @@ fn golden_task_root(context: &ObjectStoreContext, golden: &str, task: Task) -> P
 
 fn ensure_golden_matches(
     result: &GoldenManifest,
-    args: &RunArgs,
+    args: &ExecutionArgs,
     config: &ResolvedConfig,
 ) -> Result<()> {
     anyhow::ensure!(
@@ -470,7 +485,7 @@ fn ensure_golden_matches(
 
 fn ensure_workload_matches(
     result: &WorkloadResult,
-    args: &RunArgs,
+    args: &ExecutionArgs,
     config: &ResolvedConfig,
     golden: Option<&GoldenManifest>,
 ) -> Result<()> {
@@ -670,7 +685,7 @@ fn write_local_bytes(output: &FsPath, name: &str, bytes: &[u8]) -> Result<()> {
         .with_context(|| format!("writing {}/{name}", output.display()))
 }
 
-fn print_success(args: &RunArgs, file: &str, skipped: bool) -> Result<()> {
+fn print_success(args: &ExecutionArgs, file: &str, skipped: bool) -> Result<()> {
     println!(
         "{}",
         serde_json::json!({
@@ -876,7 +891,7 @@ async fn validate_uncompacted_checkpoint(
     Ok(())
 }
 
-async fn wait_for_compactor_quiet(admin: &Admin) -> Result<()> {
+async fn wait_for_compactor_quiet(admin: &Admin, quiet: Duration) -> Result<()> {
     let mut stable_since = Instant::now();
     let mut last_state = None;
     loop {
@@ -907,7 +922,7 @@ async fn wait_for_compactor_quiet(admin: &Admin) -> Result<()> {
                 }
             }
         }
-        if !active && stable_since.elapsed() >= COMPACTION_QUIET {
+        if !active && stable_since.elapsed() >= quiet {
             return Ok(());
         }
         tokio::time::sleep(Duration::from_millis(100)).await;

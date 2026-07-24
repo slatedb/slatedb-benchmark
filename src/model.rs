@@ -1,8 +1,10 @@
 use crate::config::{CacheConfig, DatasetConfig, ResolvedConfig, Task, TaskConfig};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use ts_rs::TS;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct SourceIdentity {
     pub slate_version: String,
@@ -24,7 +26,7 @@ impl SourceIdentity {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct Environment {
     pub runner_type: String,
@@ -40,7 +42,7 @@ pub struct Environment {
     pub region: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct CheckpointReference {
     pub database_path: String,
@@ -50,7 +52,7 @@ pub struct CheckpointReference {
     pub live_sst_bytes: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct GoldenDatasetMetadata {
     pub record_count: u64,
@@ -60,7 +62,7 @@ pub struct GoldenDatasetMetadata {
     pub live_sst_bytes: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct ResultConfiguration {
     pub scale: f64,
@@ -89,7 +91,7 @@ impl From<&ResolvedConfig> for ResultConfiguration {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct GoldenManifest {
     pub status: String,
@@ -102,7 +104,7 @@ pub struct GoldenManifest {
     pub dataset: GoldenDatasetMetadata,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct InitialState {
     pub kind: String,
@@ -111,7 +113,7 @@ pub struct InitialState {
     pub lsm_digest_sha256: String,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct RateSummary {
     pub total: u64,
@@ -125,7 +127,7 @@ pub struct RateSummary {
     pub max_per_second: f64,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct ThroughputSummary {
     pub total_bytes: u64,
@@ -139,7 +141,7 @@ pub struct ThroughputSummary {
     pub max_bytes_per_second: f64,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct LatencySummary {
     pub count: u64,
@@ -153,7 +155,7 @@ pub struct LatencySummary {
     pub max_ns: u64,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct DistributionSummary {
     pub avg: f64,
@@ -166,7 +168,7 @@ pub struct DistributionSummary {
     pub max: f64,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct ApplicationMetrics {
     pub operations: BTreeMap<String, RateSummary>,
@@ -174,21 +176,21 @@ pub struct ApplicationMetrics {
     pub latency: BTreeMap<String, LatencySummary>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct ObjectStoreMetrics {
     pub requests: BTreeMap<String, RateSummary>,
     pub throughput: BTreeMap<String, ThroughputSummary>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct ProcessStatistics {
     pub cpu_cores: DistributionSummary,
     pub rss_bytes: DistributionSummary,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct MachineStatistics {
     pub cpu_percent: DistributionSummary,
@@ -201,21 +203,21 @@ pub struct MachineStatistics {
     pub disk_write_operations_per_second: DistributionSummary,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct SeriesReference {
     pub file: String,
     pub sha256: String,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct HistogramSeries {
     pub upper_bound_ns: Vec<u64>,
     pub counts: Vec<u64>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct LatencyTimeSeries {
     pub avg: Vec<Option<f64>>,
@@ -226,7 +228,7 @@ pub struct LatencyTimeSeries {
     pub p999: Vec<Option<f64>>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct ApplicationSeries {
     pub operations_per_second: BTreeMap<String, Vec<f64>>,
@@ -235,21 +237,21 @@ pub struct ApplicationSeries {
     pub latency_histograms: BTreeMap<String, HistogramSeries>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct ObjectStoreSeries {
     pub requests_per_second: BTreeMap<String, Vec<f64>>,
     pub bytes_per_second: BTreeMap<String, Vec<f64>>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct ProcessSeries {
     pub cpu_cores: Vec<f64>,
     pub rss_bytes: Vec<f64>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct MachineSeries {
     pub cpu_percent: Vec<f64>,
@@ -262,7 +264,7 @@ pub struct MachineSeries {
     pub disk_write_operations_per_second: Vec<f64>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct WorkloadSeries {
     pub rate_elapsed_ns: Vec<u64>,
@@ -277,7 +279,7 @@ pub struct WorkloadSeries {
     pub machine: MachineSeries,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct WorkloadResult {
     pub status: String,
@@ -301,14 +303,67 @@ pub struct WorkloadResult {
     pub series: SeriesReference,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct AppliedPatch {
     pub name: String,
     pub sha256: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(deny_unknown_fields)]
+pub struct TransferTool {
+    pub name: String,
+    pub version: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(deny_unknown_fields)]
+pub struct TransferLatencySummary {
+    pub average: f64,
+    pub p50: f64,
+    pub p90: f64,
+    pub p99: f64,
+    pub min: f64,
+    pub max: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(deny_unknown_fields)]
+pub struct TransferLatency {
+    pub request: TransferLatencySummary,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ttfb: Option<TransferLatencySummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(deny_unknown_fields)]
+pub struct TransferBenchmark {
+    pub name: String,
+    pub operation: String,
+    pub object_size_bytes: u64,
+    pub concurrency: usize,
+    pub duration_seconds: u64,
+    pub latency_ms: TransferLatency,
+    pub benchdata: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(deny_unknown_fields)]
+pub struct TransferCapacity {
+    pub version: u8,
+    pub status: String,
+    pub timestamp: String,
+    pub scale: f64,
+    pub runner_type: String,
+    pub object_store: String,
+    pub endpoint: String,
+    pub region: String,
+    pub tool: TransferTool,
+    pub benchmarks: Vec<TransferBenchmark>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
 pub struct RunManifest {
     pub status: String,
@@ -321,5 +376,7 @@ pub struct RunManifest {
     pub golden_runner_commit: String,
     pub resolved_configuration: BTreeMap<String, ResultConfiguration>,
     pub max_parallel: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transfer_capacity: Option<TransferCapacity>,
     pub results: BTreeMap<String, String>,
 }

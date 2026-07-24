@@ -1,12 +1,12 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import type { APIRoute, GetStaticPaths } from 'astro';
+import { schemaNames } from '../../generated/artifacts';
 
-const names = ['golden', 'result', 'run', 'series'];
 const schemaRoot = path.resolve(process.cwd(), '..', 'schema');
 
 export const getStaticPaths = (async () =>
-  Promise.all(names.map(async (name) => ({
+  Promise.all(schemaNames.map(async (name) => ({
     params: { name },
     props: { body: await fs.readFile(path.join(schemaRoot, `${name}.json`)) },
   })))) satisfies GetStaticPaths;

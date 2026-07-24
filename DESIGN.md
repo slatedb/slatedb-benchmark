@@ -10,12 +10,12 @@ defines the code and GitHub workflows that implement that contract.
 ```text
 config/settings.toml             Optional default SlateDB settings
 config/settings.<workload>.toml  Optional workload replacement
-.actrc                           Local runner and artifact configuration
-src/                             Fixed config, runner, workloads, metrics, validation
-schema/                          Published JSON schemas
+src/                             Runner, CLI, catalog, models, validation, bundling
+schema/                          Generated JSON schemas
 results/<version>/<run-id>/      Published results
-website/                         Static Astro website
-scripts/                         Smoke, fixture, and publication commands
+tests/e2e/local.sh               Deterministic local end-to-end flow
+website/                         Static Astro site using generated Rust types
+scripts/                         External tool adapters
 ```
 
 ## Runner
@@ -24,8 +24,8 @@ scripts/                         Smoke, fixture, and publication commands
 
 One worker process runs one preparation phase or workload. A worker owns the
 SlateDB instance, client tasks, recorders, and local caches. GitHub runs each
-workload on a separate WarpBuild machine. `act` runs the same jobs in local
-Docker containers. Only worker samples enter task results.
+workload on a separate WarpBuild machine. Only worker samples enter task
+results.
 
 Each worker creates new block, metadata, and local object-store caches. Golden
 workloads open separate shallow clones of the golden checkpoint. The
@@ -144,67 +144,22 @@ checkpoints remain available for later benchmark runs.
 
 ## CLI
 
-```console
-$ slatedb-benchmark --help
-Run SlateDB benchmarks
+The single crate exposes focused subcommands:
 
-Usage: slatedb-benchmark <COMMAND>
+- `prepare` runs `bulk-load` or `compaction`.
+- `run` accepts measured workloads only.
+- `validate` applies strict Serde and semantic validation to one artifact.
+- `bundle` assembles and authenticates a versioned run.
+- `publish` verifies and commits one full-scale bundle.
+- `generate` writes JSON Schema and TypeScript from Rust types.
+- `catalog` prints the workload names used by the workflow matrix.
+- `cleanup` removes one session prefix.
 
-Commands:
-  run   Run one preparation phase or workload
-  help  Print this message or the help of the given subcommand(s)
+Logs go to stderr. Commands intended for automation print their result to
+stdout. A failure returns a nonzero status.
 
-Options:
-  -h, --help     Print help
-  -V, --version  Print version
-
-$ slatedb-benchmark run --help
-Run one preparation phase or workload
-
-Usage: slatedb-benchmark run [OPTIONS] --task <TASK> --golden <GOLDEN_ID> \
-       --output <PATH>
-
-Options:
-      --task <TASK>
-          Preparation task or workload from BENCHMARKS.md
-          [possible values: bulk-load, compaction, idle,
-          point-read-uniform, point-read-skewed, point-read-missing,
-          read-heavy, balanced, update-heavy, range-scan, sustained-ingest,
-          transaction-contention]
-
-      --golden <GOLDEN_ID>
-          Golden data name, for example slatedb-v0.14.1-001
-
-      --session <SESSION>
-          Benchmark session name; required for workload tasks
-
-      --scale <FACTOR>
-          Decimal scale factor greater than 0 and at most 1.0
-          [default: 1.0]
-
-      --output <PATH>
-          Local result and diagnostic directory
-
-  -h, --help
-          Print help
-
-Examples:
-  slatedb-benchmark run --task bulk-load --golden slatedb-v0.14.1-001 \
-    --scale 1.0 --output .runs/bulk-load
-
-  slatedb-benchmark run --task compaction --golden slatedb-v0.14.1-001 \
-    --scale 1.0 --output .runs/compaction
-
-  slatedb-benchmark run --task balanced --golden slatedb-v0.14.1-001 \
-    --session github-123456 --scale 1.0 --output .runs/balanced
-```
-
-Compaction requires `bulk-load/golden.json`. A golden workload requires the
-final `golden.json`. The workflow passes its `scale` input to
-`--scale`; the scaling rules remain in [`BENCHMARKS.md`](BENCHMARKS.md).
-
-Logs go to stderr. Stdout contains one machine-readable status record. Failure
-returns a nonzero status and prints no success record.
+Compaction requires `bulk-load/golden.json`. Golden-backed workloads require
+the final `golden.json`. Scaling rules remain in [`BENCHMARKS.md`](BENCHMARKS.md).
 
 ## GitHub workflows
 
@@ -298,8 +253,7 @@ host, CPU, memory, disk, public egress, DNS, routing, and a TCP traceroute to
 Amazon S3.
 
 The workload matrix uses one WarpBuild machine per task and does not impose a
-parallelism cap. Act runs one task at a time because its jobs share the local
-checkout. `run.json` records the number of workloads. Each workload writes to
+parallelism cap. `run.json` records the number of workloads. Each workload writes to
 `sessions/<github.run_id>/<workload>/{series,result}.json`.
 
 The bundle discovers workload artifacts and accepts any nonempty subset of the
@@ -340,10 +294,8 @@ Jobs that access S3 assume a scoped AWS role through GitHub OIDC. The
 publisher uses a fresh checkout. Website installation runs
 `npm ci --ignore-scripts` without benchmark credentials.
 
-The `benchmark` GitHub environment defines `AWS_ROLE_ARN`,
-`AWS_REGION=us-east-1`, and `SLATEDB_BENCH_BUCKET`. AWS CodeBuild has a
-GitHub Actions runner project named `slatedb-benchmark` with Linux XLarge as
-its default compute type.
+Each `benchmark-<object-store>` GitHub environment defines the credentials,
+region, bucket, and optional endpoint needed by that provider.
 
 ## Results and validation
 
@@ -374,10 +326,10 @@ lists run start times in the browser's local timezone, and the Patches section
 links each patch to the benchmark commit that applied it.
 
 The worker reads each result through strict Serde models and runs one semantic
-validation pass. That pass checks internal counts, samples, durability
-coverage, database identity, and the invariants in
-[`BENCHMARKS.md`](BENCHMARKS.md). JSON schemas remain the published contract;
-the runner does not repeat validation through a schema engine.
+validation pass. Rust types are the artifact contract. `slatedb-benchmark generate`
+derives the published JSON schemas and website TypeScript declarations from
+those types. Contract tests serialize one representative value per top-level
+artifact and validate it against the generated schema.
 
 Workload sidecars contain complete rate and resource buckets plus populated HDR
 histogram buckets. `result.json` stores the sidecar digest, and `run.json`
@@ -385,50 +337,24 @@ checksums both files. Failed tasks may include raw diagnostic files in their
 GitHub artifact. Published files contain no credentials, signed URLs, cache
 paths, or session tokens.
 
-## Smoke tests and fixtures
+## Tests
 
-`act` runs the GitHub workflows locally. The repository `.actrc` supplies the
-WarpBuild label mapping and artifact server:
+Tests cover each behavior at the lowest useful layer:
 
-```text
--P warp-ubuntu-latest-arm64-8x=catthehacker/ubuntu:act-latest
--P ubuntu-latest=catthehacker/ubuntu:act-latest
---container-architecture=linux/amd64
---container-options=--add-host=host.docker.internal:host-gateway
---artifact-server-path=.runs/act-artifacts
---env-file=.act.env
---secret-file=.act.secrets
-```
+1. Rust unit tests cover workload decisions, metric aggregation, durability,
+   retries, settings precedence, and semantic validation.
+2. Contract tests serialize one representative golden, result, series, and run
+   artifact and validate each against its generated schema. They also fail when
+   checked-in schemas or TypeScript declarations are stale.
+3. `tests/e2e/local.sh` runs both preparation phases and a short balanced
+   workload against a local object store, bundles the output, and builds the
+   website from that bundle.
+4. The manual golden and benchmark workflows are the optional real-object-store
+   smoke tests. They do not run in ordinary pull-request CI.
 
-A smoke run executes both workflows against the same persistent object-store
-prefix. The two act files are gitignored.
-
-```console
-$ act workflow_dispatch \
-    -W .github/workflows/golden.yml \
-    --input slatedb_ref=v0.14.1 \
-    --input golden_id=local-smoke \
-    --input scale=0.01
-
-$ act workflow_dispatch \
-    -W .github/workflows/benchmark.yml \
-    --input slatedb_ref=main \
-    --input golden_id=local-smoke \
-    --input publish=false \
-    --input scale=0.01
-```
-
-Both local scripts run these commands and extract the `benchmark-results`
-artifact. `scripts/smoke.sh` discards the output; `scripts/fixtures.sh` copies
-it into the website fixture directory. The scripts contain no task lists or
-dependency logic. Act jobs install the AWS CLI because the local runner image
-does not include it.
-
-The golden handoff uses the object-store prefix because `act` cannot download
-artifacts from another workflow run. Local runs validate the runner and result
-bundle, not GitHub controls or performance. `act` does not enforce
-[several GitHub features](https://nektosact.com/not_supported.html), including
-concurrency groups, job timeouts, and permissions.
+Pull-request CI runs formatting, Clippy, Rust tests, generated-contract checks,
+the local end-to-end test, and `actionlint`. It does not simulate GitHub Actions
+with Docker.
 
 ## Website
 
