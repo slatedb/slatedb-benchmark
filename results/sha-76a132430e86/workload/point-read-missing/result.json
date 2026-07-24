@@ -1,11 +1,44 @@
 {
-  "actions_log_url": "https://github.com/slatedb/slatedb-benchmark/actions/runs/30049756580/job/89350061146",
+  "actions_log_url": "https://github.com/slatedb/slatedb-benchmark/actions/runs/30049756580/job/89353656725",
   "application": {
-    "latency": {},
-    "operations": {},
-    "throughput": {}
+    "latency": {
+      "get": {
+        "avg_ns": 4771573.350957382,
+        "count": 12075173,
+        "max_ns": 2410495000,
+        "min_ns": 4000,
+        "p50_ns": 10000,
+        "p95_ns": 35000,
+        "p999_ns": 1095679000,
+        "p99_ns": 727000
+      }
+    },
+    "operations": {
+      "get": {
+        "avg_per_second": 13390.71300192515,
+        "max_per_second": 30946.92340269264,
+        "min_per_second": 61.95491732726339,
+        "p50_per_second": 12758.949686902046,
+        "p95_per_second": 20124.399880984714,
+        "p999_per_second": 30018.816945254264,
+        "p99_per_second": 26557.720617191226,
+        "total": 12075173
+      }
+    },
+    "throughput": {
+      "get": {
+        "avg_bytes_per_second": 267814.26003850304,
+        "max_bytes_per_second": 618938.4680538528,
+        "min_bytes_per_second": 1239.0983465452678,
+        "p50_bytes_per_second": 255178.9937380409,
+        "p95_bytes_per_second": 402487.99761969433,
+        "p999_bytes_per_second": 600376.3389050853,
+        "p99_bytes_per_second": 531154.4123438245,
+        "total_bytes": 241503460
+      }
+    }
   },
-  "client_measurement_ns": 300001045091,
+  "client_measurement_ns": 901752843740,
   "configuration": {
     "build_profile": "release",
     "caches": {
@@ -193,17 +226,19 @@
       "wal_enabled": true
     },
     "task": {
-      "clients": 0,
+      "clients": 64,
       "initial_state": "golden",
-      "key_selection": "none",
-      "measurement_ms": 300000,
-      "operation_mix": {},
+      "key_selection": "uniform-absent",
+      "measurement_ms": 900000,
+      "operation_mix": {
+        "get": 1.0
+      },
       "scan_limit": null,
-      "task": "idle",
+      "task": "point-read-missing",
       "transaction_hot_keys": null,
       "transaction_reads": null,
       "transaction_updates": null,
-      "warmup_ms": 0
+      "warmup_ms": 300000
     }
   },
   "durability_drain_ns": 0,
@@ -211,7 +246,7 @@
     "cpu_cores": 36,
     "cpu_model": "Intel(R) Xeon(R) Platinum 8124M CPU @ 3.00GHz",
     "endpoint": "AWS default",
-    "hostname": "9f3d0e7943c9",
+    "hostname": "7819bffdce73",
     "kernel": "4.14.355-284.740.amzn2.x86_64",
     "local_disk": "overlay:/, /dev/nvme0n1p1:/codebuild/output, /dev/nvme0n1p1:/codebuild/readonly, /dev/nvme0n1p1:/codebuild/bootstrap, /dev/nvme0n1p1:/etc/resolv.conf, /dev/nvme0n1p1:/etc/hostname, /dev/nvme0n1p1:/etc/hosts, /dev/nvme0n1p1:/var/lib/docker",
     "object_store": "aws",
@@ -229,148 +264,188 @@
   },
   "machine": {
     "cpu_percent": {
-      "avg": 0.21184406484787663,
-      "max": 2.20732045173645,
-      "min": 0.027839643880724907,
-      "p50": 0.16671298444271088,
-      "p95": 0.3337969183921814,
-      "p99": 1.4452472925186157,
-      "p999": 2.20732045173645
+      "avg": 4.930406492042224,
+      "max": 14.354202270507812,
+      "min": 0.5009741187095642,
+      "p50": 4.533934116363525,
+      "p95": 8.766507148742676,
+      "p99": 11.942405700683594,
+      "p999": 13.52957820892334
     },
     "disk_read_bytes_per_second": {
-      "avg": 3512.5247623713362,
-      "max": 187900.5462000603,
+      "avg": 322.8200459800231,
+      "max": 139293.70326787225,
       "min": 0.0,
       "p50": 0.0,
       "p95": 0.0,
-      "p99": 110582.18605215225,
-      "p999": 187900.5462000603
+      "p99": 0.0,
+      "p999": 65537.23819504122
     },
     "disk_read_operations_per_second": {
-      "avg": 0.31664842932046744,
-      "max": 72.99865821166341,
+      "avg": 0.0222017761512353,
+      "max": 16.003412599709588,
       "min": 0.0,
       "p50": 0.0,
       "p95": 0.0,
-      "p99": 2.9985211233849047,
-      "p999": 72.99865821166341
+      "p99": 0.0,
+      "p999": 1.00037565806599
     },
     "disk_write_bytes_per_second": {
-      "avg": 4105494.036167897,
-      "max": 428339296.48533624,
-      "min": 0.0,
-      "p50": 0.0,
-      "p95": 129457.57136682668,
-      "p99": 256378205.495062,
-      "p999": 428339296.48533624
+      "avg": 262562864.18725336,
+      "max": 321553230.36072934,
+      "min": 224992738.12046695,
+      "p50": 262564016.6843151,
+      "p95": 263060045.12524185,
+      "p99": 263340836.7645346,
+      "p999": 263566092.13817978
     },
     "disk_write_operations_per_second": {
-      "avg": 32.31206502033181,
-      "max": 1955.9640474248442,
-      "min": 0.0,
-      "p50": 0.0,
-      "p95": 17.007572638724966,
-      "p99": 1706.0378577716174,
-      "p999": 1955.9640474248442
+      "avg": 1116.0862574687123,
+      "max": 3018.6799203120095,
+      "min": 884.2775782689289,
+      "p50": 1012.3259882023949,
+      "p95": 1607.341412174677,
+      "p99": 2658.6361326519423,
+      "p999": 3011.103039946027
     },
     "network_receive_bytes_per_second": {
-      "avg": 138884.7899763216,
-      "max": 1205978.2396176634,
-      "min": 3468.5257626036214,
-      "p50": 99587.0506576053,
-      "p95": 205900.67062195097,
-      "p99": 1199412.595267473,
-      "p999": 1205978.2396176634
+      "avg": 328725643.73985416,
+      "max": 879445799.1395168,
+      "min": 13823929.75485921,
+      "p50": 309515614.74720216,
+      "p95": 506397462.8151142,
+      "p99": 639336365.6296082,
+      "p999": 824098534.1682099
     },
     "network_send_bytes_per_second": {
-      "avg": 10530.843881740777,
-      "max": 84508.55644534196,
-      "min": 3642.5521416961906,
-      "p50": 8055.436858259429,
-      "p95": 19453.66140601767,
-      "p99": 80840.09957109776,
-      "p999": 84508.55644534196
+      "avg": 1071872.9216513433,
+      "max": 2852557.6051037237,
+      "min": 46037.49993845728,
+      "p50": 1014398.6562990808,
+      "p95": 1611269.7066576686,
+      "p99": 2171806.0518470667,
+      "p999": 2721298.7743948437
     },
     "rss_bytes": {
-      "avg": 29920392.533333335,
-      "max": 32669696.0,
-      "min": 25620480.0,
-      "p50": 29949952.0,
-      "p95": 32120832.0,
-      "p99": 32669696.0,
-      "p999": 32669696.0
+      "avg": 4624268339.143174,
+      "max": 5073592320.0,
+      "min": 3824922624.0,
+      "p50": 4696539136.0,
+      "p95": 4921298944.0,
+      "p99": 5009887232.0,
+      "p999": 5067399168.0
     }
   },
   "object_store": {
     "requests": {
+      "DELETE": {
+        "avg_per_second": 0.0011089458512871949,
+        "max_per_second": 0.9999878431477909,
+        "min_per_second": 0.0,
+        "p50_per_second": 0.0,
+        "p95_per_second": 0.0,
+        "p999_per_second": 0.0,
+        "p99_per_second": 0.0,
+        "total": 1
+      },
       "GET": {
-        "avg_per_second": 3.5699668626988883,
-        "max_per_second": 26.99889984882896,
-        "min_per_second": 0.9995430708796642,
-        "p50_per_second": 2.0013962280463833,
-        "p95_per_second": 6.998739631973376,
-        "p999_per_second": 26.99889984882896,
-        "p99_per_second": 25.000958586754134,
-        "total": 1071
+        "avg_per_second": 81.38110024256208,
+        "max_per_second": 190.9988352891024,
+        "min_per_second": 4.996364300585757,
+        "p50_per_second": 76.04542588724459,
+        "p95_per_second": 121.00966976170099,
+        "p999_per_second": 185.0049054050668,
+        "p99_per_second": 160.07061899526462,
+        "total": 73386
       },
       "LIST": {
-        "avg_per_second": 1.859982735187656,
-        "max_per_second": 16.99553075325994,
+        "avg_per_second": 1.8741184886753595,
+        "max_per_second": 19.005505742969692,
+        "min_per_second": 0.998979435615719,
+        "p50_per_second": 1.0002483846796288,
+        "p95_per_second": 3.9995600044043553,
+        "p999_per_second": 18.992086984941896,
+        "p99_per_second": 17.999587431456483,
+        "total": 1690
+      },
+      "PUT": {
+        "avg_per_second": 0.0011089458512871949,
+        "max_per_second": 0.9999878431477909,
         "min_per_second": 0.0,
-        "p50_per_second": 1.0006962073674783,
-        "p95_per_second": 3.001721102832173,
-        "p999_per_second": 16.99553075325994,
-        "p99_per_second": 15.00057515205248,
-        "total": 558
+        "p50_per_second": 0.0,
+        "p95_per_second": 0.0,
+        "p999_per_second": 0.0,
+        "p99_per_second": 0.0,
+        "total": 1
       }
     },
     "throughput": {
+      "DELETE": {
+        "avg_bytes_per_second": 0.4956987955253761,
+        "max_bytes_per_second": 446.9945658870625,
+        "min_bytes_per_second": 0.0,
+        "p50_bytes_per_second": 0.0,
+        "p95_bytes_per_second": 0.0,
+        "p999_bytes_per_second": 0.0,
+        "p99_bytes_per_second": 0.0,
+        "total_bytes": 447
+      },
       "GET": {
-        "avg_bytes_per_second": 130485.83879869271,
-        "max_bytes_per_second": 1134564.4380131115,
-        "min_bytes_per_second": 408.0793710295859,
-        "p50_bytes_per_second": 94479.56629412438,
-        "p95_bytes_per_second": 189619.9836349236,
-        "p999_bytes_per_second": 1134564.4380131115,
-        "p99_bytes_per_second": 1133428.4579139333,
-        "total_bytes": 39146115
+        "avg_bytes_per_second": 326047862.8106841,
+        "max_bytes_per_second": 874956919.5127047,
+        "min_bytes_per_second": 14333080.261818962,
+        "p50_bytes_per_second": 307263449.10057056,
+        "p95_bytes_per_second": 502273247.70729464,
+        "p999_bytes_per_second": 818843305.0497907,
+        "p99_bytes_per_second": 635023985.6474555,
+        "total_bytes": 294016035528
       },
       "LIST": {
-        "avg_bytes_per_second": 3220.203442621396,
-        "max_bytes_per_second": 29072.81534092049,
-        "min_bytes_per_second": 1482.3751595993517,
-        "p50_bytes_per_second": 1847.1857380802455,
-        "p95_bytes_per_second": 5176.578038402383,
-        "p999_bytes_per_second": 29072.81534092049,
-        "p99_bytes_per_second": 27246.526057420535,
-        "total_bytes": 966070
+        "avg_bytes_per_second": 1443.249776562084,
+        "max_bytes_per_second": 14601.822485644041,
+        "min_bytes_per_second": 0.0,
+        "p50_bytes_per_second": 749.3237190865011,
+        "p95_bytes_per_second": 3007.990741404498,
+        "p999_bytes_per_second": 14583.224643513428,
+        "p99_bytes_per_second": 13823.683147358579,
+        "total_bytes": 1301461
+      },
+      "PUT": {
+        "avg_bytes_per_second": 0.0011089458512871949,
+        "max_bytes_per_second": 0.9999878431477909,
+        "min_bytes_per_second": 0.0,
+        "p50_bytes_per_second": 0.0,
+        "p95_bytes_per_second": 0.0,
+        "p999_bytes_per_second": 0.0,
+        "p99_bytes_per_second": 0.0,
+        "total_bytes": 1
       }
     }
   },
   "process": {
     "cpu_cores": {
-      "avg": 0.008300826835632331,
-      "max": 0.050069541931152345,
-      "min": 0.0,
-      "p50": 0.01,
-      "p95": 0.020011117458343507,
-      "p99": 0.040011115074157715,
-      "p999": 0.050069541931152345
+      "avg": 1.9884716996712646,
+      "max": 5.15736083984375,
+      "min": 0.17033119201660157,
+      "p50": 1.8536859130859376,
+      "p95": 3.293853454589844,
+      "p99": 4.489841918945313,
+      "p999": 5.064251403808594
     },
     "rss_bytes": {
-      "avg": 29920392.533333335,
-      "max": 32669696.0,
-      "min": 25620480.0,
-      "p50": 29949952.0,
-      "p95": 32120832.0,
-      "p99": 32669696.0,
-      "p999": 32669696.0
+      "avg": 4624268339.143174,
+      "max": 5073592320.0,
+      "min": 3824922624.0,
+      "p50": 4696539136.0,
+      "p95": 4921298944.0,
+      "p99": 5009887232.0,
+      "p999": 5067399168.0
     }
   },
-  "recorded_interval_ns": 300002784673,
+  "recorded_interval_ns": 901757284938,
   "series": {
     "file": "series.json",
-    "sha256": "997f7d8319bac24d31057c614b024a5f0e570e5d3ab279fd0fa2b42c831f66b3"
+    "sha256": "f9ffeb0154e73de2d122938813f96c0540be3d952a8720f6e8a5d1c3854a5f94"
   },
   "session": "github-30049756580",
   "source": {
@@ -381,6 +456,6 @@
     "slate_version": "sha-76a132430e86"
   },
   "status": "ok",
-  "task": "idle",
-  "timestamp": "2026-07-23T23:16:50.404578490+00:00"
+  "task": "point-read-missing",
+  "timestamp": "2026-07-23T23:58:10.470219963+00:00"
 }
