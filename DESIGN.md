@@ -292,15 +292,16 @@ ID after changing the SlateDB commit or preparation configuration.
 | `publish` | Commit results when the `publish` input is `true` |
 | `cleanup` | Delete workload database clones after outputs are collected |
 
-The transfer probe runs on the published CodeBuild machine type alongside the
+The transfer probe runs on the published WarpBuild machine type alongside the
 build. MinIO Warp measures 4 MiB PUT and GET throughput at concurrency 64, then
-4 KiB PUT, GET, and LIST latency at concurrency 1. Workloads wait for the
-probe, so its traffic never overlaps their measurements. Scaled local runs
-shorten each measurement. Warp's per-request data remains in the workflow
-artifact, and `run.json` includes accurate request and TTFB average, p50, p90,
-p99, minimum, and maximum latency for each probe. The probe is diagnostic data
-and is not rendered on workload pages. Its log also includes host, CPU, memory,
-disk, public egress, DNS, routing, and a TCP traceroute to Amazon S3.
+4 KiB PUT, GET, and LIST latency at concurrency 1. The probe runs independently
+of the workload matrix, so its traffic may overlap workload measurements.
+Scaled local runs shorten each measurement. Warp's per-request data remains in
+the workflow artifact, and `run.json` includes accurate request and TTFB
+average, p50, p90, p99, minimum, and maximum latency for each probe. The probe
+is diagnostic data and is not rendered on workload pages. Its log also includes
+host, CPU, memory, disk, public egress, DNS, routing, and a TCP traceroute to
+Amazon S3.
 
 The workload matrix uses one WarpBuild machine per task and does not impose a
 parallelism cap. Act runs one task at a time because its jobs share the local
