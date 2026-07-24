@@ -17,42 +17,66 @@ def result(slate_commit, runner_commit):
 
 class SourceIdentityTests(unittest.TestCase):
     def setUp(self):
-        self.preparation = {
-            task: result("golden-commit", "preparation-runner")
-            for task in bundle.PREPARATION
-        }
         self.workloads = {
             task: result("measured-commit", "benchmark-runner")
             for task in bundle.WORKLOADS
         }
 
-    def test_accepts_golden_data_from_another_slatedb_commit(self):
-        source = bundle.validate_source_identities(self.preparation, self.workloads)
-
-        self.assertEqual(source["slate_commit"], "measured-commit")
-
     def test_accepts_a_single_workload(self):
         workloads = {"sustained-ingest": self.workloads["sustained-ingest"]}
 
-        source = bundle.validate_source_identities(self.preparation, workloads)
+        source = bundle.validate_source_identities(workloads)
 
         self.assertEqual(source["slate_commit"], "measured-commit")
 
     def test_rejects_no_workloads(self):
         with self.assertRaisesRegex(ValueError, "no workload results"):
-            bundle.validate_source_identities(self.preparation, {})
+            bundle.validate_source_identities({})
 
     def test_rejects_mixed_workload_commits(self):
         self.workloads["balanced"] = result("other-commit", "benchmark-runner")
 
         with self.assertRaisesRegex(ValueError, "different SlateDB commit"):
-            bundle.validate_source_identities(self.preparation, self.workloads)
+            bundle.validate_source_identities(self.workloads)
 
-    def test_rejects_mixed_preparation_commits(self):
-        self.preparation["compaction"] = result("other-commit", "preparation-runner")
+    def test_rejects_mixed_runner_commits(self):
+        self.workloads["balanced"] = result("measured-commit", "other-runner")
 
-        with self.assertRaisesRegex(ValueError, "golden-data SlateDB commit"):
-            bundle.validate_source_identities(self.preparation, self.workloads)
+        with self.assertRaisesRegex(ValueError, "different benchmark runner commit"):
+            bundle.validate_source_identities(self.workloads)
+
+
+class GoldenManifestTests(unittest.TestCase):
+    def manifest(self):
+        return {
+            "status": "ok",
+            "golden_id": "golden",
+            "source": {},
+            "environment": {},
+            "configuration": {
+                "task": {"task": "compaction"},
+            },
+            "checkpoint": {},
+            "dataset": {},
+        }
+
+    def read(self, manifest):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "golden.json"
+            path.write_text(json.dumps(manifest), encoding="utf-8")
+            return bundle.read_golden(path, "golden")
+
+    def test_accepts_final_compacted_manifest(self):
+        manifest = self.manifest()
+
+        self.assertEqual(self.read(manifest), manifest)
+
+    def test_rejects_intermediate_bulk_load_manifest(self):
+        manifest = self.manifest()
+        manifest["configuration"]["task"]["task"] = "bulk-load"
+
+        with self.assertRaisesRegex(ValueError, "not the final compacted"):
+            self.read(manifest)
 
 
 class WorkloadDiscoveryTests(unittest.TestCase):

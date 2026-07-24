@@ -1,29 +1,23 @@
 use crate::model::{
-    ApplicationMetrics, DistributionSummary, Environment, LatencySummary, MachineStatistics,
-    ObjectStoreMetrics, PreparationResult, ProcessStatistics, RateSummary, ResultConfiguration,
+    ApplicationMetrics, DistributionSummary, Environment, GoldenManifest, LatencySummary,
+    MachineStatistics, ObjectStoreMetrics, ProcessStatistics, RateSummary, ResultConfiguration,
     SourceIdentity, ThroughputSummary, WorkloadResult, WorkloadSeries,
 };
 use anyhow::{bail, ensure, Result};
 use std::collections::BTreeSet;
 
-pub fn validate_preparation_result(result: &PreparationResult) -> Result<()> {
-    ensure!(result.status == "ok", "preparation status must be ok");
+pub fn validate_golden_manifest(result: &GoldenManifest) -> Result<()> {
+    ensure!(result.status == "ok", "golden status must be ok");
+    let task = result.configuration.task.task;
     ensure!(
-        result.task.is_preparation(),
-        "preparation result has a workload task"
+        task.is_preparation(),
+        "golden manifest has a workload configuration"
     );
     ensure!(!result.golden_id.is_empty(), "golden ID is empty");
     validate_timestamp(&result.timestamp)?;
     validate_source(&result.source)?;
-    validate_configuration(&result.configuration, result.task)?;
+    validate_configuration(&result.configuration, task)?;
     validate_environment(&result.environment)?;
-    validate_recorded_metrics(
-        result.recorded_interval_ns,
-        &result.application,
-        &result.object_store,
-        &result.process,
-        &result.machine,
-    )?;
     ensure!(
         result.dataset.record_count > 0,
         "prepared dataset has no records"
@@ -58,28 +52,6 @@ pub fn validate_preparation_result(result: &PreparationResult) -> Result<()> {
         result.dataset.live_sst_bytes == result.checkpoint.live_sst_bytes,
         "prepared dataset size does not match its checkpoint"
     );
-    match result.task {
-        crate::config::Task::BulkLoad => {
-            ensure!(
-                result.source_checkpoint.is_none(),
-                "bulk load must not have a source checkpoint"
-            );
-            validate_preparation_application_rows(result)?;
-        }
-        crate::config::Task::Compaction => {
-            let source = result
-                .source_checkpoint
-                .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("compaction has no source checkpoint"))?;
-            validate_checkpoint(source)?;
-            ensure!(
-                source.checkpoint_id != result.checkpoint.checkpoint_id,
-                "compaction reused its source checkpoint"
-            );
-            validate_preparation_application_rows(result)?;
-        }
-        _ => unreachable!("checked preparation task"),
-    }
     ensure!(
         result.configuration.dataset.record_count == result.dataset.record_count
             && result.configuration.dataset.key_bytes == result.dataset.key_bytes
@@ -833,66 +805,6 @@ fn validate_initial_state(result: &WorkloadResult) -> Result<()> {
         is_sha256(&result.initial_state.lsm_digest_sha256),
         "initial LSM digest is invalid"
     );
-    Ok(())
-}
-
-fn validate_preparation_application_rows(result: &PreparationResult) -> Result<()> {
-    use crate::config::Task;
-
-    match result.task {
-        Task::BulkLoad => {
-            let expected = ["flush", "write"].into_iter().collect::<BTreeSet<_>>();
-            let operations = result
-                .application
-                .operations
-                .keys()
-                .map(String::as_str)
-                .collect::<BTreeSet<_>>();
-            let latency = result
-                .application
-                .latency
-                .keys()
-                .map(String::as_str)
-                .collect::<BTreeSet<_>>();
-            let throughput = result
-                .application
-                .throughput
-                .keys()
-                .map(String::as_str)
-                .collect::<BTreeSet<_>>();
-            ensure!(
-                operations == expected && latency == expected,
-                "bulk load must record write and flush calls"
-            );
-            ensure!(
-                throughput == ["write"].into_iter().collect(),
-                "bulk load must record write throughput"
-            );
-            ensure!(
-                result.application.operations["write"].total
-                    == result
-                        .dataset
-                        .record_count
-                        .div_ceil(crate::workloads::DATASET_BATCH_RECORDS),
-                "bulk-load write count does not match its batches"
-            );
-            ensure!(
-                result.application.operations["flush"].total == 1,
-                "bulk load must record exactly one flush"
-            );
-            ensure!(
-                result.application.throughput["write"].total_bytes == result.dataset.logical_bytes,
-                "bulk-load write throughput differs from logical dataset bytes"
-            );
-        }
-        Task::Compaction => ensure!(
-            result.application.operations.is_empty()
-                && result.application.throughput.is_empty()
-                && result.application.latency.is_empty(),
-            "compaction must not record application calls"
-        ),
-        _ => unreachable!("checked preparation task"),
-    }
     Ok(())
 }
 

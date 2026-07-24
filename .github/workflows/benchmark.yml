@@ -98,7 +98,7 @@ jobs:
             echo "AWS_SECRET_ACCESS_KEY=$TIGRIS_SECRET_ACCESS_KEY" >> "$GITHUB_ENV"
           fi
           echo "AWS_ENDPOINT_URL_S3=${AWS_ENDPOINT_URL_S3:-https://t3.storage.dev}" >> "$GITHUB_ENV"
-      - name: Fetch preparation results
+      - name: Fetch golden manifest
         shell: bash
         env:
           AWS_REGION: ${{ vars.AWS_REGION }}
@@ -108,13 +108,11 @@ jobs:
           set -euo pipefail
           bucket=${SLATEDB_BENCH_BUCKET:?SLATEDB_BENCH_BUCKET is required}
           prefix=${SLATEDB_BENCH_PREFIX:-benchmark}
-          for task in bulk-load compaction; do
-            mkdir -p ".runs/bundle/preparation/$task"
-            aws s3 cp --only-show-errors \
-              "s3://$bucket/$prefix/goldens/$GOLDEN_ID/$task/result.json" \
-              ".runs/bundle/preparation/$task/result.json"
-          done
-      - name: Validate preparation results
+          mkdir -p .runs/bundle
+          aws s3 cp --only-show-errors \
+            "s3://$bucket/$prefix/goldens/$GOLDEN_ID/golden.json" \
+            .runs/bundle/golden.json
+      - name: Validate golden manifest
         id: validate
         shell: bash
         env:
@@ -129,37 +127,19 @@ jobs:
             echo "published runs require scale 1.0" >&2
             exit 1
           fi
-          bulk=.runs/bundle/preparation/bulk-load/result.json
-          compaction=.runs/bundle/preparation/compaction/result.json
+          manifest=.runs/bundle/golden.json
           jq -e --arg golden "$GOLDEN_ID" \
-            '.status == "ok" and .task == "bulk-load" and .golden_id == $golden' "$bulk" >/dev/null
-          jq -e --arg golden "$GOLDEN_ID" \
-            '.status == "ok" and .task == "compaction" and .golden_id == $golden' "$compaction" >/dev/null
-          for result in "$bulk" "$compaction"; do
-            if ! jq -e '
-              .recorded_interval_ns > 0 and
-              (.environment | type == "object") and
-              (.application | type == "object") and
-              (.object_store | type == "object") and
-              (.process | type == "object") and
-              (.machine | type == "object")
-            ' "$result" >/dev/null; then
-              echo "preparation result has no recorded metrics; rerun golden.yml" >&2
-              exit 1
-            fi
-            jq -e --arg object_store "$OBJECT_STORE" '
+            '.status == "ok"
+              and .golden_id == $golden
+              and .configuration.task.task == "compaction"
+              and (.checkpoint | type == "object")
+              and (.dataset | type == "object")' "$manifest" >/dev/null
+          jq -e --arg object_store "$OBJECT_STORE" '
               (.environment.object_store | if . == "aws" then "s3" else . end) ==
                 $object_store
-            ' "$result" >/dev/null
-          done
-          test "$(jq -r .source.slate_commit "$compaction")" = \
-            "$(jq -r .source.slate_commit "$bulk")"
+            ' "$manifest" >/dev/null
           jq -e --argjson scale "$BENCHMARK_SCALE" \
-            '.configuration.scale == $scale' "$bulk" >/dev/null
-          jq -e --argjson scale "$BENCHMARK_SCALE" \
-            '.configuration.scale == $scale' "$compaction" >/dev/null
-          test "$(jq -r .source_checkpoint.checkpoint_id "$compaction")" = \
-            "$(jq -r .checkpoint.checkpoint_id "$bulk")"
+            '.configuration.scale == $scale' "$manifest" >/dev/null
           if [[ ${ACT:-false} == true ]]; then
             started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           else
@@ -170,8 +150,8 @@ jobs:
           echo "started_at=$started_at" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         with:
-          name: golden-results
-          path: .runs/bundle/preparation
+          name: golden-manifest
+          path: .runs/bundle/golden.json
           if-no-files-found: error
           overwrite: true
 
@@ -484,8 +464,8 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
-          name: golden-results
-          path: .runs/bundle/preparation
+          name: golden-manifest
+          path: .runs/bundle
       - uses: actions/download-artifact@v4
         with:
           pattern: workload-*

@@ -33,7 +33,7 @@ if [[ ! -f .act.secrets ]]; then
   created_secrets=true
 fi
 
-rm -rf .runs/act-artifacts .runs/bundle .runs/release .runs/workload .runs/preparation
+rm -rf .runs/act-artifacts .runs/bundle .runs/release .runs/workload .runs/golden
 mkdir -p .runs/act-artifacts/1
 docker compose down --volumes --remove-orphans
 docker compose up -d minio
@@ -62,9 +62,9 @@ fi
 mkdir -p .runs/release/results
 unzip -q "$artifact" -d .runs/release/results
 
-preparation_count=$(find .runs/release/results -path '*/preparation/*/result.json' -type f | wc -l | tr -d ' ')
-if [[ $preparation_count -ne 2 ]]; then
-  echo "expected 2 preparation results, found $preparation_count" >&2
+golden_count=$(find .runs/release/results -name golden.json -type f | wc -l | tr -d ' ')
+if [[ $golden_count -ne 1 ]]; then
+  echo "expected 1 golden manifest, found $golden_count" >&2
   exit 1
 fi
 workload_count=$(find .runs/release/results -path '*/workload/*/result.json' -type f | wc -l | tr -d ' ')

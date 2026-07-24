@@ -2,7 +2,7 @@ use crate::cli::RunArgs;
 use crate::config::{self, ResolvedConfig, Task};
 use crate::database_size::live_database_size_bytes;
 use crate::model::{
-    CheckpointReference, Environment, GoldenDatasetMetadata, InitialState, PreparationResult,
+    CheckpointReference, Environment, GoldenDatasetMetadata, GoldenManifest, InitialState,
     ResultConfiguration, SeriesReference, SourceIdentity, WorkloadResult, WorkloadSeries,
 };
 use crate::object_store::{delete_prefix, ObjectStoreContext};
@@ -11,7 +11,7 @@ use crate::system::{
     ApplicationRegistry, BenchmarkMetricsRecorder, SampledMeasurement, SlateMetricsReporter,
 };
 use crate::validation::{
-    validate_preparation_result, validate_workload_result, validate_workload_series,
+    validate_golden_manifest, validate_workload_result, validate_workload_series,
 };
 use crate::workloads::{self, DatasetLoadMetrics};
 use anyhow::{bail, Context, Result};
@@ -56,6 +56,7 @@ pub async fn execute(args: RunArgs) -> Result<()> {
     }
     fs::create_dir_all(&args.output)
         .with_context(|| format!("creating {}", args.output.display()))?;
+    remove_local_output(&args.output.join("golden.json"))?;
     remove_local_output(&args.output.join("result.json"))?;
     remove_local_output(&args.output.join("series.json"))?;
     remove_local_output(&args.output.join("failure.json"))?;
@@ -115,20 +116,16 @@ async fn run_bulk_load(
     let config = bulk_load_config(config)?;
     let environment = inspect_environment(&context.provider, &context.endpoint, &context.region);
     let task_root = golden_task_root(context, &args.golden, Task::BulkLoad);
-    let result_path = task_root.clone().join("result.json");
+    let manifest_path = task_root.clone().join("golden.json");
     if let Some(existing) =
-        load_optional::<PreparationResult>(Arc::clone(&context.control), &result_path).await?
+        load_optional::<GoldenManifest>(Arc::clone(&context.control), &manifest_path).await?
     {
-        if existing.recorded_interval_ns > 0 {
-            validate_preparation_result(&existing)?;
-            ensure_preparation_matches(&existing, args, &config)?;
-            verify_checkpoint_reference(Arc::clone(&context.control), &existing.checkpoint).await?;
-            validate_uncompacted_checkpoint(Arc::clone(&context.control), &existing.checkpoint)
-                .await?;
-            write_local_result(&args.output, &existing)?;
-            return print_success(args, true);
-        }
-        tracing::info!(task = %args.task, "rebuilding preparation result without recorded metrics");
+        validate_golden_manifest(&existing)?;
+        ensure_golden_matches(&existing, args, &config)?;
+        verify_checkpoint_reference(Arc::clone(&context.control), &existing.checkpoint).await?;
+        validate_uncompacted_checkpoint(Arc::clone(&context.control), &existing.checkpoint).await?;
+        write_local_golden(&args.output, &existing)?;
+        return print_success(args, "golden.json", true);
     }
     delete_prefix(Arc::clone(&context.control), &task_root).await?;
     let database_path = task_root.clone().join("database");
@@ -168,27 +165,26 @@ async fn run_bulk_load(
     )
     .await?;
     validate_uncompacted_checkpoint(Arc::clone(&context.control), &checkpoint).await?;
-    let result = PreparationResult {
+    let manifest = GoldenManifest {
         status: "ok".to_string(),
-        task: Task::BulkLoad,
         golden_id: args.golden.clone(),
         timestamp: Utc::now().to_rfc3339(),
         source: SourceIdentity::current(),
         environment,
         configuration: ResultConfiguration::from(&config),
-        source_checkpoint: None,
         dataset: dataset_metadata(&config, &checkpoint),
         checkpoint,
-        recorded_interval_ns: duration_ns(measurement.elapsed()),
-        application: measurement.application(),
-        object_store: measurement.object_store(),
-        process: measurement.process(),
-        machine: measurement.machine(),
     };
-    validate_preparation_result(&result)?;
-    write_local_result(&args.output, &result)?;
-    create_result(Arc::clone(&context.control), &result_path, &result).await?;
-    print_success(args, false)
+    validate_golden_manifest(&manifest)?;
+    write_local_golden(&args.output, &manifest)?;
+    create_json(
+        Arc::clone(&context.control),
+        &manifest_path,
+        &manifest,
+        "bulk-load golden manifest",
+    )
+    .await?;
+    print_success(args, "golden.json", false)
 }
 
 async fn run_compaction(
@@ -197,9 +193,9 @@ async fn run_compaction(
     context: &ObjectStoreContext,
 ) -> Result<()> {
     let environment = inspect_environment(&context.provider, &context.endpoint, &context.region);
-    let bulk_path = golden_task_root(context, &args.golden, Task::BulkLoad).join("result.json");
-    let bulk: PreparationResult = load_required(Arc::clone(&context.control), &bulk_path).await?;
-    validate_preparation_result(&bulk)?;
+    let bulk_path = golden_task_root(context, &args.golden, Task::BulkLoad).join("golden.json");
+    let bulk: GoldenManifest = load_required(Arc::clone(&context.control), &bulk_path).await?;
+    validate_golden_manifest(&bulk)?;
     ensure_shared_configuration(&bulk.configuration, config)?;
     if bulk.source.slate_commit != env!("BENCHMARK_SLATE_COMMIT") {
         bail!("bulk-load checkpoint was created by a different SlateDB commit");
@@ -208,22 +204,15 @@ async fn run_compaction(
     validate_uncompacted_checkpoint(Arc::clone(&context.control), &bulk.checkpoint).await?;
 
     let task_root = golden_task_root(context, &args.golden, Task::Compaction);
-    let result_path = task_root.clone().join("result.json");
+    let manifest_path = golden_root(context, &args.golden).join("golden.json");
     if let Some(existing) =
-        load_optional::<PreparationResult>(Arc::clone(&context.control), &result_path).await?
+        load_optional::<GoldenManifest>(Arc::clone(&context.control), &manifest_path).await?
     {
-        if existing.recorded_interval_ns > 0 {
-            validate_preparation_result(&existing)?;
-            ensure_preparation_matches(&existing, args, config)?;
-            anyhow::ensure!(
-                existing.source_checkpoint.as_ref() == Some(&bulk.checkpoint),
-                "existing compaction result belongs to another bulk-load checkpoint"
-            );
-            verify_checkpoint_reference(Arc::clone(&context.control), &existing.checkpoint).await?;
-            write_local_result(&args.output, &existing)?;
-            return print_success(args, true);
-        }
-        tracing::info!(task = %args.task, "rebuilding preparation result without recorded metrics");
+        validate_golden_manifest(&existing)?;
+        ensure_golden_matches(&existing, args, config)?;
+        verify_checkpoint_reference(Arc::clone(&context.control), &existing.checkpoint).await?;
+        write_local_golden(&args.output, &existing)?;
+        return print_success(args, "golden.json", true);
     }
     delete_prefix(Arc::clone(&context.control), &task_root).await?;
     let database_path = task_root.clone().join("database");
@@ -270,27 +259,26 @@ async fn run_compaction(
         &format!("benchmark-{}-compaction", args.golden),
     )
     .await?;
-    let result = PreparationResult {
+    let manifest = GoldenManifest {
         status: "ok".to_string(),
-        task: Task::Compaction,
         golden_id: args.golden.clone(),
         timestamp: Utc::now().to_rfc3339(),
         source: SourceIdentity::current(),
         environment,
         configuration: ResultConfiguration::from(config),
-        source_checkpoint: Some(bulk.checkpoint),
         dataset: dataset_metadata(config, &checkpoint),
         checkpoint,
-        recorded_interval_ns: duration_ns(measurement.elapsed()),
-        application: measurement.application(),
-        object_store: measurement.object_store(),
-        process: measurement.process(),
-        machine: measurement.machine(),
     };
-    validate_preparation_result(&result)?;
-    write_local_result(&args.output, &result)?;
-    create_result(Arc::clone(&context.control), &result_path, &result).await?;
-    print_success(args, false)
+    validate_golden_manifest(&manifest)?;
+    write_local_golden(&args.output, &manifest)?;
+    create_json(
+        Arc::clone(&context.control),
+        &manifest_path,
+        &manifest,
+        "final golden manifest",
+    )
+    .await?;
+    print_success(args, "golden.json", false)
 }
 
 async fn run_workload(
@@ -300,11 +288,10 @@ async fn run_workload(
 ) -> Result<()> {
     let session = args.session.as_deref().context("workload session")?;
     let golden = if args.task.uses_golden() {
-        let compaction_path =
-            golden_task_root(context, &args.golden, Task::Compaction).join("result.json");
-        let golden: PreparationResult =
-            load_required(Arc::clone(&context.control), &compaction_path).await?;
-        validate_preparation_result(&golden)?;
+        let manifest_path = golden_root(context, &args.golden).join("golden.json");
+        let golden: GoldenManifest =
+            load_required(Arc::clone(&context.control), &manifest_path).await?;
+        validate_golden_manifest(&golden)?;
         ensure_shared_configuration(&golden.configuration, config)?;
         verify_checkpoint_reference(Arc::clone(&context.control), &golden.checkpoint).await?;
         Some(golden)
@@ -340,7 +327,7 @@ async fn run_workload(
         validate_workload_series(&existing, &series)?;
         write_local_bytes(&args.output, "series.json", &series_bytes)?;
         write_local_result(&args.output, &existing)?;
-        return print_success(args, true);
+        return print_success(args, "result.json", true);
     }
     delete_prefix(Arc::clone(&context.control), &task_root).await?;
     let database_path = task_root.clone().join("database");
@@ -443,31 +430,32 @@ async fn run_workload(
         "workload series",
     )
     .await?;
-    create_result(Arc::clone(&context.control), &result_path, &result).await?;
-    print_success(args, false)
+    create_json(
+        Arc::clone(&context.control),
+        &result_path,
+        &result,
+        "workload result",
+    )
+    .await?;
+    print_success(args, "result.json", false)
+}
+
+fn golden_root(context: &ObjectStoreContext, golden: &str) -> Path {
+    context.root.clone().join("goldens").join(golden)
 }
 
 fn golden_task_root(context: &ObjectStoreContext, golden: &str, task: Task) -> Path {
-    context
-        .root
-        .clone()
-        .join("goldens")
-        .join(golden)
-        .join(task.as_str())
+    golden_root(context, golden).join(task.as_str())
 }
 
-fn ensure_preparation_matches(
-    result: &PreparationResult,
+fn ensure_golden_matches(
+    result: &GoldenManifest,
     args: &RunArgs,
     config: &ResolvedConfig,
 ) -> Result<()> {
     anyhow::ensure!(
-        result.task == args.task,
-        "existing result belongs to another task"
-    );
-    anyhow::ensure!(
         result.golden_id == args.golden,
-        "existing result belongs to another golden ID"
+        "existing manifest belongs to another golden ID"
     );
     anyhow::ensure!(
         result.source.slate_commit == env!("BENCHMARK_SLATE_COMMIT"),
@@ -475,7 +463,7 @@ fn ensure_preparation_matches(
     );
     anyhow::ensure!(
         result.configuration == ResultConfiguration::from(config),
-        "existing preparation result uses a different resolved configuration"
+        "existing golden uses a different resolved configuration"
     );
     Ok(())
 }
@@ -484,7 +472,7 @@ fn ensure_workload_matches(
     result: &WorkloadResult,
     args: &RunArgs,
     config: &ResolvedConfig,
-    golden: Option<&PreparationResult>,
+    golden: Option<&GoldenManifest>,
 ) -> Result<()> {
     anyhow::ensure!(
         result.task == args.task,
@@ -665,18 +653,17 @@ async fn create_bytes(
     }
 }
 
-async fn create_result(
+async fn create_json(
     store: Arc<dyn ObjectStore>,
     path: &Path,
     value: &impl Serialize,
+    description: &str,
 ) -> Result<()> {
-    create_bytes(
-        store,
-        path,
-        serde_json::to_vec_pretty(value)?,
-        "completion result",
-    )
-    .await
+    create_bytes(store, path, serde_json::to_vec_pretty(value)?, description).await
+}
+
+fn write_local_golden(output: &FsPath, value: &impl Serialize) -> Result<()> {
+    write_local_bytes(output, "golden.json", &serde_json::to_vec_pretty(value)?)
 }
 
 fn write_local_result(output: &FsPath, value: &impl Serialize) -> Result<()> {
@@ -688,13 +675,13 @@ fn write_local_bytes(output: &FsPath, name: &str, bytes: &[u8]) -> Result<()> {
         .with_context(|| format!("writing {}/{name}", output.display()))
 }
 
-fn print_success(args: &RunArgs, skipped: bool) -> Result<()> {
+fn print_success(args: &RunArgs, file: &str, skipped: bool) -> Result<()> {
     println!(
         "{}",
         serde_json::json!({
             "status": "ok",
             "task": args.task,
-            "result": args.output.join("result.json"),
+            "result": args.output.join(file),
             "skipped": skipped,
         })
     );

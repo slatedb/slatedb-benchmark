@@ -9,7 +9,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-PREPARATION = ["bulk-load", "compaction"]
 WORKLOADS = [
     "idle",
     "point-read-uniform",
@@ -49,6 +48,21 @@ def read_result(path, task, golden):
         if not isinstance(result.get(field), dict):
             raise ValueError(f"{path} has no {field} metrics")
     return result
+
+
+def read_golden(path, golden):
+    with path.open(encoding="utf-8") as file:
+        manifest = json.load(file)
+    if manifest.get("status") != "ok":
+        raise ValueError(f"{path} does not contain a successful golden manifest")
+    if manifest.get("golden_id") != golden:
+        raise ValueError(f"{path} belongs to another golden data set")
+    if manifest.get("configuration", {}).get("task", {}).get("task") != "compaction":
+        raise ValueError(f"{path} is not the final compacted golden manifest")
+    for field in ("source", "environment", "checkpoint", "dataset"):
+        if not isinstance(manifest.get(field), dict):
+            raise ValueError(f"{path} has no {field}")
+    return manifest
 
 
 def sha256(path):
@@ -225,7 +239,7 @@ def discover_workloads(directory):
     return tasks
 
 
-def validate_source_identities(preparation, workloads):
+def validate_source_identities(workloads):
     if not workloads:
         raise ValueError("no workload results were provided")
     source = next(iter(workloads.values()))["source"]
@@ -237,20 +251,13 @@ def validate_source_identities(preparation, workloads):
         if result["source"]["runner_commit"] != runner_commit:
             raise ValueError(f"{task} used a different benchmark runner commit")
 
-    golden_commit = preparation[PREPARATION[0]]["source"]["slate_commit"]
-    for task, result in preparation.items():
-        if result["source"]["slate_commit"] != golden_commit:
-            raise ValueError(f"{task} used a different golden-data SlateDB commit")
     return source
 
 
 def main():
     args = arguments()
 
-    preparation = {
-        task: read_result(args.input / "preparation" / task / "result.json", task, args.golden)
-        for task in PREPARATION
-    }
+    golden = read_golden(args.input / "golden.json", args.golden)
     workload_tasks = discover_workloads(args.input / "workload")
     workloads = {
         task: read_result(args.input / "workload" / task / "result.json", task, args.golden)
@@ -261,12 +268,7 @@ def main():
         for task in workload_tasks
     }
 
-    compaction = preparation["compaction"]
-    bulk = preparation["bulk-load"]
-    if compaction.get("source_checkpoint") != bulk["checkpoint"]:
-        raise ValueError("compaction did not use the published bulk-load checkpoint")
-
-    source = validate_source_identities(preparation, workloads)
+    source = validate_source_identities(workloads)
     version = source["slate_version"]
     first_workload = next(iter(workloads.values()))
     scale = first_workload["configuration"]["scale"]
@@ -286,16 +288,15 @@ def main():
                 raise ValueError("sustained-ingest did not start empty")
         else:
             initial = result["initial_state"]
-            checkpoint = compaction["checkpoint"]
+            checkpoint = golden["checkpoint"]
             if (
                 initial["checkpoint_id"] != checkpoint["checkpoint_id"]
                 or initial["manifest_id"] != checkpoint["manifest_id"]
                 or initial["lsm_digest_sha256"] != checkpoint["lsm_digest_sha256"]
             ):
                 raise ValueError(f"{task} did not start from the golden checkpoint")
-    for task, result in preparation.items():
-        if result["configuration"]["scale"] != scale:
-            raise ValueError(f"{task} used a different scale")
+    if golden["configuration"]["scale"] != scale:
+        raise ValueError("golden manifest used a different scale")
 
     transfer_capacity_path = args.input / "transfer-capacity" / "result.json"
     transfer_capacity = (
@@ -311,21 +312,21 @@ def main():
     destination = args.output / version / run_id
     if destination.exists():
         shutil.rmtree(destination)
-    checksums = {}
-    configurations = {}
-    for kind, results in (("preparation", preparation), ("workload", workloads)):
-        for task, result in results.items():
-            relative = Path(kind) / task / "result.json"
-            target = destination / relative
-            write_json(target, result)
-            checksums[relative.as_posix()] = sha256(target)
-            configurations[task] = result["configuration"]
-            if kind == "workload":
-                series_relative = Path(kind) / task / "series.json"
-                series_target = destination / series_relative
-                series_target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(workload_series[task], series_target)
-                checksums[series_relative.as_posix()] = sha256(series_target)
+    golden_target = destination / "golden.json"
+    write_json(golden_target, golden)
+    checksums = {"golden.json": sha256(golden_target)}
+    configurations = {"golden": golden["configuration"]}
+    for task, result in workloads.items():
+        relative = Path("workload") / task / "result.json"
+        target = destination / relative
+        write_json(target, result)
+        checksums[relative.as_posix()] = sha256(target)
+        configurations[task] = result["configuration"]
+        series_relative = Path("workload") / task / "series.json"
+        series_target = destination / series_relative
+        series_target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(workload_series[task], series_target)
+        checksums[series_relative.as_posix()] = sha256(series_target)
 
     manifest = {
         "status": "ok",
@@ -335,9 +336,7 @@ def main():
         "finished_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "patches": read_patches(),
         "source": source,
-        "preparation_runner_commits": {
-            task: preparation[task]["source"]["runner_commit"] for task in PREPARATION
-        },
+        "golden_runner_commit": golden["source"]["runner_commit"],
         "resolved_configuration": configurations,
         "max_parallel": len(workloads),
         "results": checksums,

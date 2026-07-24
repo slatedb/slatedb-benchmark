@@ -43,7 +43,7 @@ once, and all later workloads use the same mapping.
 compaction disabled, flushes the writes, and saves an uncompacted checkpoint.
 `compaction` clones that checkpoint, lets SlateDB's normal compactor settle the
 database, and saves the golden checkpoint. These are tool phases, not
-workloads. The tool records their results separately.
+workloads. They write checkpoint metadata, not benchmark results.
 
 ### Bulk load
 
@@ -51,10 +51,6 @@ The loader inserts all 300,000,000 records once. It prepares keys and values in
 parallel, submits ordered batches through SlateDB's write API, and does not
 wait for each batch to become durable. It disables background compaction for
 the load, flushes the database, and saves the uncompacted checkpoint.
-
-Measurement starts after the database opens and ends when the final flush
-returns. Each 1,024-record batch appears as a `write` API call. The final flush
-appears as one `flush` call.
 
 Progress logs include completed records, recent and average records per second,
 logical MiB/s, physical HTTP upload MiB/s, L0 flush MiB/s, backpressure,
@@ -70,10 +66,6 @@ specific number of L0 SSTs or sorted runs. This phase has no warmup or client
 operations. Its output becomes the golden checkpoint. The wait has no
 runner-level deadline. The GitHub job's 24-hour timeout remains the outer
 limit.
-
-Measurement starts after the cloned database opens and ends after the normal
-compactor remains idle for one minute. This phase has no application API rows;
-its activity appears in the object-store, process, and machine tables.
 
 The measured steady-state workloads clone the golden checkpoint and do not
 inherit another workload's writes.
@@ -288,10 +280,10 @@ calculates each column from complete one-second samples.
 | Disk read ops/s | 478 | 190 | 248 | 462 | 738 | 811 | 172 | 844 |
 | Disk write ops/s | 320 | 124 | 171 | 311 | 502 | 558 | 110 | 579 |
 
-Result bundles record the resolved preparation or workload definition, source
-commits, scale, caches, and SlateDB settings. Preparation results identify the
-SlateDB source that created the golden data. Workload results identify the
-independently selected SlateDB source being measured.
+Result bundles record the golden manifest, each resolved workload definition,
+source commits, scale, caches, and SlateDB settings. The golden manifest
+identifies the SlateDB source that created the data. Workload results identify
+the independently selected SlateDB source being measured.
 
 ## Validation
 
@@ -313,9 +305,10 @@ The runner also checks these preparation and workload invariants:
 - Sustained-ingest keys do not collide.
 - Transaction outcomes reconcile with attempted transactions.
 
-Golden prefixes store preparation results and checkpoints. Benchmark sessions
-store workload results and database clones. Successful cleanup deletes the
-clones and keeps the result markers, so a retry can skip completed workloads.
+Golden prefixes store an intermediate bulk-load manifest, the final
+`golden.json`, and their checkpoints. Benchmark sessions store workload results
+and database clones. Successful cleanup deletes the clones and keeps the result
+markers, so a retry can skip completed workloads.
 
 ## Scaling
 

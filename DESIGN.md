@@ -51,20 +51,17 @@ stop recorders
 write and validate the result
 ```
 
-A measured preparation phase follows this sequence:
+A preparation phase follows this sequence:
 
 ```text
 open database and caches
-reset recorders and take counter baselines
 run bulk load through its final flush, or wait for compaction to settle
-stop recorders
 close database and create checkpoint
-write and validate the result
+write and validate the golden manifest
 ```
 
-Database cloning, opening, closing, checkpoint creation, and validation stay
-outside preparation metrics. Bulk-load `write` rows count 1,024-record API
-batches. Compaction has no application rows.
+Preparation metrics are used only to detect task errors. They are not
+serialized or published.
 
 The runner implements the metric definitions in
 [`BENCHMARKS.md`](BENCHMARKS.md) at these boundaries:
@@ -90,7 +87,6 @@ Iterator creation and the total time to consume a scan are not recorded as
 `scan` latency.
 
 API and object-store rate percentiles use complete one-second client windows.
-Preparation tasks also retain their final partial rate bucket.
 Resource statistics continue to use one-second buckets through the drain. API
 and durability latencies use HDR histograms with microsecond precision and
 three significant digits. The worker retains each window's average and
@@ -110,36 +106,35 @@ Preparation data and benchmark sessions have different lifetimes:
 
 ```text
 goldens/<golden-id>/
-  bulk-load/result.json
-  compaction/result.json
+  bulk-load/golden.json
+  golden.json
 
 sessions/<session>/
   <workload>/series.json
   <workload>/result.json
 ```
 
-Preparation results contain checkpoint references, golden dataset metadata, and
-phase metrics. Workload results contain their summaries, configuration, source
-commits, and environment. Each workload result names and authenticates its
-chart sidecar.
+Golden manifests contain checkpoint references, dataset metadata,
+configuration, source commits, and environment. Workload results contain their
+metric summaries, configuration, source commits, and environment. Each
+workload result names and authenticates its chart sidecar.
 
 Every result is also its task's completion signal and is created last:
 
 ```text
 run task
-  -> validate its database, summaries, and series
+  -> validate its database and output
   -> finish database writes
-  -> create series.json
-  -> create result.json
+  -> create golden.json, or series.json followed by result.json
 ```
 
-The workflow creates `result.json` with an object-store create precondition. A
-valid existing result skips the task. A missing result reruns it, while an
-invalid result or sidecar fails and requires cleanup. A resumed workload checks
-the sidecar digest and restores both files to its local artifact. GitHub
-concurrency groups prevent two jobs from writing the same golden phase or
-session task. The operator chooses a new golden ID when the SlateDB commit or
-preparation configuration changes.
+The workflow creates each completion file with an object-store create
+precondition. A valid existing manifest or result skips the task. A missing
+completion file reruns it, while an invalid file or sidecar fails and requires
+cleanup. A resumed workload checks the sidecar digest and restores both files
+to its local artifact. GitHub concurrency groups prevent two jobs from writing
+the same golden phase or session task. The operator chooses a new golden ID
+when the SlateDB commit or preparation configuration changes.
 
 Golden checkpoints remain immutable until explicit deletion. Each workload
 clone uses a session- and task-specific prefix and owns its new manifests and
@@ -204,8 +199,8 @@ Examples:
     --session github-123456 --scale 1.0 --output .runs/balanced
 ```
 
-Compaction requires `bulk-load/result.json`. A golden workload requires
-`compaction/result.json`. The workflow passes its `scale` input to
+Compaction requires `bulk-load/golden.json`. A golden workload requires the
+final `golden.json`. The workflow passes its `scale` input to
 `--scale`; the scaling rules remain in [`BENCHMARKS.md`](BENCHMARKS.md).
 
 Logs go to stderr. Stdout contains one machine-readable status record. Failure
@@ -269,8 +264,8 @@ $ gh workflow run benchmark.yml \
 | `bulk-load` | Restore or create the uncompacted checkpoint |
 | `compaction` | Restore or create the golden checkpoint |
 
-Compaction waits for the bulk-load job. Both jobs use the `result.json`
-recovery rule defined above. A repeat dispatch skips phases with valid results.
+Compaction waits for the bulk-load job. Both jobs use the `golden.json`
+recovery rule defined above. A repeat dispatch skips phases with valid manifests.
 Before rerunning a phase without a result, the workflow deletes that phase's
 database prefix. Retrying compaction preserves the bulk-load checkpoint and
 replaces only the incomplete clone.
@@ -283,7 +278,7 @@ ID after changing the SlateDB commit or preparation configuration.
 
 | Job | Work |
 | --- | --- |
-| `validate-golden` | Verify and upload both preparation results |
+| `validate-golden` | Verify and upload the final golden manifest |
 | `build` | Resolve the requested SlateDB ref and build the runner against it |
 | `transfer-capacity` | Record diagnostic Amazon S3 throughput and request latency |
 | `workloads` | Run the workload matrix |
@@ -356,9 +351,7 @@ its default compute type.
 results/<version>/
   <run-id>/
     run.json
-    preparation/
-      bulk-load/result.json
-      compaction/result.json
+    golden.json
     workload/
       <name>/
         result.json
@@ -368,13 +361,11 @@ results/<version>/
 The run ID is the benchmark session, such as `github-123456`. Publishing a run
 replaces only that run ID and preserves every other run for the version.
 `run.json` records the run ID, timestamp, applied patches, golden ID, measured
-SlateDB source, preparation and benchmark runner commits, resolved
-configuration, matrix concurrency, diagnostic Amazon S3 bandwidth, and result
-checksums. Preparation results record the SlateDB source that created the
-golden data. Workload results record the independently selected SlateDB source
-being measured. Both result types contain the environment and metric summaries
-defined in [`BENCHMARKS.md`](BENCHMARKS.md). Workload results also contain
-their initial database identity.
+SlateDB source, golden and benchmark runner commits, resolved configuration,
+matrix concurrency, diagnostic Amazon S3 bandwidth, and file checksums.
+`golden.json` records the source and final checkpoint that created the golden
+data. Workload results record the independently selected SlateDB source,
+environment, metric summaries, and initial database identity.
 
 The website generates immutable
 `/<version>/run/<run-id>/workload/<name>/` routes. Shorter
@@ -433,7 +424,7 @@ it into the website fixture directory. The scripts contain no task lists or
 dependency logic. Act jobs install the AWS CLI because the local runner image
 does not include it.
 
-The preparation handoff uses the golden prefix because `act` cannot download
+The golden handoff uses the object-store prefix because `act` cannot download
 artifacts from another workflow run. Local runs validate the runner and result
 bundle, not GitHub controls or performance. `act` does not enforce
 [several GitHub features](https://nektosact.com/not_supported.html), including
@@ -450,8 +441,8 @@ GitHub Pages. It has no database service.
 ```
 
 The dataset page displays metadata from the final compaction checkpoint. The
-Golden data value on every workload page links to it. Preparation results have
-no HTML routes. Workload descriptions live in
+Golden data value on every workload page links to it. The intermediate
+bulk-load manifest has no HTML route. Workload descriptions live in
 `website/src/content/workloads/<name>.md`; the build requires one file per
 workload. Each page renders the description below the workload title. Workload
 table rows open their charts below the row. The browser fetches one sidecar

@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://benchmark.slatedb.io/schema/golden.json",
+  "title": "SlateDB benchmark golden manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "status",
+    "golden_id",
+    "timestamp",
+    "source",
+    "environment",
+    "configuration",
+    "checkpoint",
+    "dataset"
+  ],
+  "properties": {
+    "status": { "const": "ok" },
+    "golden_id": { "type": "string", "minLength": 1 },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "source": { "$ref": "result.json#/$defs/source" },
+    "environment": { "$ref": "result.json#/$defs/environment" },
+    "configuration": { "$ref": "result.json#/$defs/configuration" },
+    "checkpoint": { "$ref": "result.json#/$defs/checkpoint" },
+    "dataset": { "$ref": "result.json#/$defs/datasetMetadata" }
+  }
+}

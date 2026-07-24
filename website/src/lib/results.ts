@@ -23,6 +23,7 @@ export type RunManifest = {
   finished_at: string;
   patches: AppliedPatch[];
   source: SourceIdentity;
+  golden_runner_commit: string;
   results: Record<string, string>;
 };
 
@@ -79,15 +80,13 @@ export type ResolvedConfiguration = {
   enabled_features: string[];
 };
 
-export type PreparationResult = {
+export type GoldenManifest = {
   status: 'ok';
-  task: 'bulk-load' | 'compaction';
   golden_id: string;
   timestamp: string;
   source: SourceIdentity;
   environment: Environment;
   configuration: ResolvedConfiguration;
-  source_checkpoint: CheckpointReference | null;
   checkpoint: CheckpointReference;
   dataset: {
     record_count: number;
@@ -96,7 +95,7 @@ export type PreparationResult = {
     logical_bytes: number;
     live_sst_bytes: number;
   };
-} & RecordedMetrics;
+};
 
 export type RateSummary = {
   total: number;
@@ -245,7 +244,7 @@ export type ResultRoute<T> = {
   version: string;
   run: BenchmarkRun;
   rawBase: string;
-  kind: 'preparation' | 'workload';
+  kind: 'golden' | 'workload';
   name: string;
   result: T;
 };
@@ -287,34 +286,44 @@ async function walk(directory: string): Promise<string[]> {
   return values.flat();
 }
 
-export async function loadPreparationResults(): Promise<ResultRoute<PreparationResult>[]> {
-  return loadTaskResults<PreparationResult>('preparation');
-}
-
-export async function loadDatasetResults(): Promise<ResultRoute<PreparationResult>[]> {
-  return (await loadPreparationResults()).filter((route) => route.name === 'compaction');
+export async function loadDatasetResults(): Promise<ResultRoute<GoldenManifest>[]> {
+  const runs = await loadRuns();
+  const routes = await Promise.all(runs
+    .filter((stored) => Object.hasOwn(stored.manifest.results, 'golden.json'))
+    .map(async (stored) => {
+      const { root: _root, manifest: _manifest, ...routeRun } = stored;
+      return {
+        ...routeRun,
+        kind: 'golden' as const,
+        name: 'dataset',
+        result: JSON.parse(
+          await fs.readFile(path.join(stored.root, 'golden.json'), 'utf8'),
+        ) as GoldenManifest,
+      };
+    }));
+  return routes.sort(compareRoutes);
 }
 
 export async function loadWorkloadResults(): Promise<ResultRoute<WorkloadResult>[]> {
-  return loadTaskResults<WorkloadResult>('workload');
+  return loadTaskResults<WorkloadResult>();
 }
 
-async function loadTaskResults<T>(kind: 'preparation' | 'workload'): Promise<ResultRoute<T>[]> {
+async function loadTaskResults<T>(): Promise<ResultRoute<T>[]> {
   const runs = await loadRuns();
   const routes = await Promise.all(runs.flatMap((stored) =>
     Object.keys(stored.manifest.results)
       .map((relative) => relative.split('/'))
       .filter((parts) =>
         parts.length === 3
-        && parts[0] === kind
+        && parts[0] === 'workload'
         && parts[2] === 'result.json'
       )
       .map(async ([, name]) => {
-        const file = path.join(stored.root, kind, name, 'result.json');
+        const file = path.join(stored.root, 'workload', name, 'result.json');
         const { root: _root, manifest: _manifest, ...routeRun } = stored;
         return {
           ...routeRun,
-          kind,
+          kind: 'workload' as const,
           name,
           result: JSON.parse(await fs.readFile(file, 'utf8')) as T,
         };
@@ -384,7 +393,7 @@ function compareRunDates(left: ResultRoute<unknown>, right: ResultRoute<unknown>
 
 export async function rawResultFiles() {
   const files = (await walk(resultsRoot)).filter((file) =>
-    ['result.json', 'run.json', 'series.json'].includes(path.basename(file)),
+    ['golden.json', 'result.json', 'run.json', 'series.json'].includes(path.basename(file)),
   );
   return Promise.all(
     files.map(async (file) => ({
@@ -401,7 +410,7 @@ export function latestStable<T>(routes: ResultRoute<T>[]): ResultRoute<T> | unde
 export function routeHref(
   route: Pick<ResultRoute<unknown>, 'version' | 'run' | 'kind' | 'name'>,
 ) {
-  if (route.kind === 'preparation') {
+  if (route.kind === 'golden') {
     return datasetHref(route.version, route.run.id);
   }
   return `/${route.version}/run/${route.run.id}/workload/${route.name}/`;
@@ -410,7 +419,7 @@ export function routeHref(
 export function latestRouteHref(
   route: Pick<ResultRoute<unknown>, 'version' | 'kind' | 'name'>,
 ) {
-  if (route.kind === 'preparation') return datasetHref(route.version);
+  if (route.kind === 'golden') return datasetHref(route.version);
   return `/${route.version}/workload/${route.name}/`;
 }
 
@@ -440,8 +449,7 @@ export const workloadNames = [
 ] as const;
 
 const taskOrder = [
-  'bulk-load',
-  'compaction',
+  'dataset',
   ...workloadNames,
 ];
 

@@ -39,7 +39,7 @@ const {
 } = Astro.props;
 const versions = [...new Set(
   routes
-    .filter((route) => route.kind === 'workload' || route.name === 'compaction')
+    .filter((route) => route.kind === 'workload' || route.kind === 'golden')
     .map((route) => route.version),
 )]
   .sort((left, right) => compareVersions(right, left));
@@ -52,7 +52,7 @@ const versionOptions = versions.map((candidate) => {
   const candidateRoutes = routes.filter((route) => route.version === candidate);
   const target = kind === 'dataset'
     ? candidateRoutes.find(
-      (route) => route.kind === 'preparation' && route.name === 'compaction',
+      (route) => route.kind === 'golden',
     )
     : candidateRoutes.find(
       (route) => route.kind === 'workload' && route.name === name,
@@ -65,7 +65,7 @@ const versionOptions = versions.map((candidate) => {
 });
 const recordedRoutes = versionRoutes.filter((route) =>
   kind === 'dataset'
-    ? route.kind === 'preparation' && route.name === 'compaction'
+    ? route.kind === 'golden'
     : route.kind === 'workload' && route.name === name
 );
 const recordedOptions = [...new Map(
@@ -74,7 +74,7 @@ const recordedOptions = [...new Map(
   Date.parse(right.run.startedAt) - Date.parse(left.run.startedAt)
 );
 const hasDataset = currentRunRoutes.some(
-  (route) => route.kind === 'preparation' && route.name === 'compaction',
+  (route) => route.kind === 'golden',
 );
 const patchHref = (patch: string) =>
   `https://github.com/slatedb/slatedb-benchmark/blob/${source.runner_commit}/patches/slatedb/${encodeURIComponent(patch)}`;

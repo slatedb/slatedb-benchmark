@@ -2,10 +2,10 @@
 import Base from '../layouts/Base.astro';
 import ResultContext from './ResultContext.astro';
 import SiteHeader from './SiteHeader.astro';
-import type { PreparationResult, ResultRoute } from '../lib/results';
+import type { GoldenManifest, ResultRoute } from '../lib/results';
 
 interface Props {
-  route: ResultRoute<PreparationResult>;
+  route: ResultRoute<GoldenManifest>;
   routes: ResultRoute<unknown>[];
 }
 
@@ -34,7 +34,7 @@ const bytes = (value: number) => {
       source={result.source}
       environment={result.environment}
       run={route.run}
-      rawResult={`/raw/${route.rawBase}/preparation/compaction/result.json`}
+      rawResult={`/raw/${route.rawBase}/golden.json`}
       routes={routes}
     />
     <article class="result-content">

@@ -46,8 +46,11 @@ fi
 source_directory=$(dirname "$run_manifest")
 mapfile -t manifest_files < <(jq -r '.results | keys[]' "$run_manifest" | sort)
 mapfile -t actual_files < <(
-  find "$source_directory" -mindepth 3 -maxdepth 3 -name '*.json' -type f \
-    -printf '%P\n' | sort
+  {
+    [[ -f "$source_directory/golden.json" ]] && echo golden.json
+    find "$source_directory" -mindepth 3 -maxdepth 3 -name '*.json' -type f \
+      -printf '%P\n'
+  } | sort
 )
 if [[ "${manifest_files[*]}" != "${actual_files[*]}" ]]; then
   echo "bundle files do not match run.json" >&2

@@ -1,11 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://benchmark.slatedb.io/schema/result.json",
-  "title": "SlateDB benchmark task result",
-  "oneOf": [
-    { "$ref": "#/$defs/preparationResult" },
-    { "$ref": "#/$defs/workloadResult" }
-  ],
+  "title": "SlateDB benchmark workload result",
+  "$ref": "#/$defs/workloadResult",
   "$defs": {
     "task": {
       "enum": [
@@ -194,49 +191,6 @@
         "value_bytes": { "type": "integer", "minimum": 1 },
         "logical_bytes": { "type": "integer", "minimum": 1 },
         "live_sst_bytes": { "type": "integer", "minimum": 0 }
-      }
-    },
-    "preparationResult": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "status",
-        "task",
-        "golden_id",
-        "timestamp",
-        "source",
-        "environment",
-        "configuration",
-        "source_checkpoint",
-        "checkpoint",
-        "dataset",
-        "recorded_interval_ns",
-        "application",
-        "object_store",
-        "process",
-        "machine"
-      ],
-      "properties": {
-        "status": { "const": "ok" },
-        "task": { "enum": ["bulk-load", "compaction"] },
-        "golden_id": { "type": "string", "minLength": 1 },
-        "timestamp": { "type": "string", "format": "date-time" },
-        "source": { "$ref": "#/$defs/source" },
-        "environment": { "$ref": "#/$defs/environment" },
-        "configuration": { "$ref": "#/$defs/configuration" },
-        "source_checkpoint": {
-          "oneOf": [
-            { "$ref": "#/$defs/checkpoint" },
-            { "type": "null" }
-          ]
-        },
-        "checkpoint": { "$ref": "#/$defs/checkpoint" },
-        "dataset": { "$ref": "#/$defs/datasetMetadata" },
-        "recorded_interval_ns": { "type": "integer", "minimum": 1 },
-        "application": { "$ref": "#/$defs/applicationMetrics" },
-        "object_store": { "$ref": "#/$defs/objectStoreMetrics" },
-        "process": { "$ref": "#/$defs/processStatistics" },
-        "machine": { "$ref": "#/$defs/machineStatistics" }
       }
     },
     "initialState": {

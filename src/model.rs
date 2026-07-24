@@ -91,28 +91,15 @@ impl From<&ResolvedConfig> for ResultConfiguration {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct PreparationResult {
+pub struct GoldenManifest {
     pub status: String,
-    pub task: Task,
     pub golden_id: String,
     pub timestamp: String,
     pub source: SourceIdentity,
-    #[serde(default)]
     pub environment: Environment,
     pub configuration: ResultConfiguration,
-    pub source_checkpoint: Option<CheckpointReference>,
     pub checkpoint: CheckpointReference,
     pub dataset: GoldenDatasetMetadata,
-    #[serde(default)]
-    pub recorded_interval_ns: u64,
-    #[serde(default)]
-    pub application: ApplicationMetrics,
-    #[serde(default)]
-    pub object_store: ObjectStoreMetrics,
-    #[serde(default)]
-    pub process: ProcessStatistics,
-    #[serde(default)]
-    pub machine: MachineStatistics,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -331,7 +318,7 @@ pub struct RunManifest {
     pub finished_at: String,
     pub patches: Vec<AppliedPatch>,
     pub source: SourceIdentity,
-    pub preparation_runner_commits: BTreeMap<String, String>,
+    pub golden_runner_commit: String,
     pub resolved_configuration: BTreeMap<String, ResultConfiguration>,
     pub max_parallel: usize,
     pub results: BTreeMap<String, String>,
