@@ -1490,7 +1490,7 @@ mod tests {
         assert!(object_store.throughput["GET"].p001_bytes_per_second > 0.0);
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn drain_activity_is_totaled_without_contaminating_rate_windows() {
         let registry = Arc::new(ApplicationRegistry::default());
         let recorder = registry.recorder();
@@ -1510,13 +1510,15 @@ mod tests {
         recorder.record_success("get", Duration::from_millis(1), 16);
         store_metrics.record_request(HttpMethod::Get);
         store_metrics.record_response_bytes(HttpMethod::Get, 16);
-        tokio::time::sleep(Duration::from_millis(1_200)).await;
+        tokio::time::advance(Duration::from_millis(1_200)).await;
+        tokio::task::yield_now().await;
 
         rate_windows.finish();
         recorder.record_success("flush", Duration::from_millis(1), 0);
         store_metrics.record_request(HttpMethod::Put);
         store_metrics.record_response_bytes(HttpMethod::Put, 16);
-        tokio::time::sleep(Duration::from_millis(1_200)).await;
+        tokio::time::advance(Duration::from_millis(1_200)).await;
+        tokio::task::yield_now().await;
         stop_tx.send(true).expect("stop sampler");
 
         let measurement = sampler.await.expect("join sampler").expect("measurement");
