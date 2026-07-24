@@ -161,7 +161,6 @@ jobs:
           overwrite: true
 
   build:
-    needs: validate-golden
     runs-on: warp-ubuntu-latest-arm64-8x
     steps:
       - uses: actions/checkout@v4
@@ -220,7 +219,6 @@ jobs:
           fi
 
   transfer-capacity:
-    needs: validate-golden
     runs-on: warp-ubuntu-latest-arm64-8x
     timeout-minutes: 60
     environment: benchmark-${{ inputs.object_store }}
