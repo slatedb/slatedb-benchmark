@@ -388,10 +388,10 @@ paths, or session tokens.
 ## Smoke tests and fixtures
 
 `act` runs the GitHub workflows locally. The repository `.actrc` supplies the
-CodeBuild label mapping and artifact server:
+WarpBuild label mapping and artifact server:
 
 ```text
--P codebuild-slatedb-benchmark-1-1=catthehacker/ubuntu:act-latest
+-P warp-ubuntu-latest-arm64-8x=catthehacker/ubuntu:act-latest
 -P ubuntu-latest=catthehacker/ubuntu:act-latest
 --container-architecture=linux/amd64
 --container-options=--add-host=host.docker.internal:host-gateway

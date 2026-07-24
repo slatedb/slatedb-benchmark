@@ -29,7 +29,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: codebuild-slatedb-benchmark-${{ github.run_id }}-${{ github.run_attempt }}
+    runs-on: warp-ubuntu-latest-arm64-8x
     outputs:
       slate_version: ${{ steps.source.outputs.version }}
       slate_commit: ${{ steps.source.outputs.commit }}
@@ -89,7 +89,7 @@ jobs:
 
   bulk-load:
     needs: build
-    runs-on: codebuild-slatedb-benchmark-${{ github.run_id }}-${{ github.run_attempt }}
+    runs-on: warp-ubuntu-latest-arm64-8x
     timeout-minutes: 1440
     environment: benchmark
     concurrency:
@@ -123,7 +123,7 @@ jobs:
           : "${SLATEDB_BENCH_BUCKET:?SLATEDB_BENCH_BUCKET is required}"
           export SLATEDB_BENCH_PREFIX=${SLATEDB_BENCH_PREFIX:-benchmark}
           export SLATEDB_BENCH_REGION=${SLATEDB_BENCH_REGION:-$AWS_REGION}
-          export SLATEDB_BENCH_RUNNER_TYPE=${SLATEDB_BENCH_RUNNER_TYPE:-codebuild-linux-xlarge}
+          export SLATEDB_BENCH_RUNNER_TYPE=${SLATEDB_BENCH_RUNNER_TYPE:-warp-ubuntu-latest-arm64-8x}
           bin/slatedb-benchmark run \
             --task bulk-load \
             --golden "$GOLDEN_ID" \
@@ -140,7 +140,7 @@ jobs:
 
   compaction:
     needs: [build, bulk-load]
-    runs-on: codebuild-slatedb-benchmark-${{ github.run_id }}-${{ github.run_attempt }}
+    runs-on: warp-ubuntu-latest-arm64-8x
     timeout-minutes: 1440
     environment: benchmark
     concurrency:
@@ -174,7 +174,7 @@ jobs:
           : "${SLATEDB_BENCH_BUCKET:?SLATEDB_BENCH_BUCKET is required}"
           export SLATEDB_BENCH_PREFIX=${SLATEDB_BENCH_PREFIX:-benchmark}
           export SLATEDB_BENCH_REGION=${SLATEDB_BENCH_REGION:-$AWS_REGION}
-          export SLATEDB_BENCH_RUNNER_TYPE=${SLATEDB_BENCH_RUNNER_TYPE:-codebuild-linux-xlarge}
+          export SLATEDB_BENCH_RUNNER_TYPE=${SLATEDB_BENCH_RUNNER_TYPE:-warp-ubuntu-latest-arm64-8x}
           bin/slatedb-benchmark run \
             --task compaction \
             --golden "$GOLDEN_ID" \

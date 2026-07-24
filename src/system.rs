@@ -1155,16 +1155,13 @@ pub fn inspect_environment(provider: &str, endpoint: &str, region: &str) -> Envi
 
 pub fn verify_environment(environment: &Environment) -> Result<()> {
     anyhow::ensure!(
-        environment.runner_type == "codebuild-linux-xlarge",
-        "published runs require codebuild-linux-xlarge"
+        environment.runner_type == "warp-ubuntu-latest-arm64-8x",
+        "published runs require warp-ubuntu-latest-arm64-8x"
     );
+    anyhow::ensure!(environment.cpu_cores == 8, "published runs require 8 CPUs");
     anyhow::ensure!(
-        environment.cpu_cores == 36,
-        "published runs require 36 CPUs"
-    );
-    anyhow::ensure!(
-        environment.ram_bytes >= 68 * 1024 * 1024 * 1024,
-        "published runs require at least 68 GiB RAM"
+        environment.ram_bytes >= 30 * 1024 * 1024 * 1024,
+        "published runs require at least 30 GiB RAM"
     );
     anyhow::ensure!(
         environment.object_store == "aws",
@@ -1349,11 +1346,11 @@ mod tests {
     use tokio::sync::{oneshot, watch};
 
     #[test]
-    fn published_environment_requires_codebuild_and_s3() {
+    fn published_environment_requires_warpbuild_arm_and_s3() {
         let environment = Environment {
-            runner_type: "codebuild-linux-xlarge".to_string(),
-            cpu_cores: 36,
-            ram_bytes: 72 * 1024 * 1024 * 1024,
+            runner_type: "warp-ubuntu-latest-arm64-8x".to_string(),
+            cpu_cores: 8,
+            ram_bytes: 32 * 1024 * 1024 * 1024,
             object_store: "aws".to_string(),
             endpoint: "AWS default".to_string(),
             region: "us-east-1".to_string(),
