@@ -5,6 +5,7 @@ import {
   routeHref,
   versionLabel,
   type BenchmarkRun,
+  type Environment,
   type ResultRoute,
   type SourceIdentity,
 } from '../lib/results';
@@ -15,6 +16,7 @@ interface Props {
   name: string;
   goldenId: string;
   source: SourceIdentity;
+  environment: Environment;
   run: BenchmarkRun;
   rawResult: string;
   rawSeries?: string;
@@ -28,6 +30,7 @@ const {
   name,
   goldenId,
   source,
+  environment,
   run,
   rawResult,
   rawSeries,
@@ -75,6 +78,23 @@ const hasDataset = currentRunRoutes.some(
 );
 const patchHref = (patch: string) =>
   `https://github.com/slatedb/slatedb-benchmark/blob/${source.runner_commit}/patches/slatedb/${encodeURIComponent(patch)}`;
+const objectStore = environment.object_store === 's3' || environment.object_store === 'aws'
+  ? 'S3'
+  : environment.object_store === 'tigris'
+    ? 'Tigris'
+    : environment.object_store;
+const warpBuildDocs = (() => {
+  const runner = environment.runner_type.toLowerCase();
+  if (!runner.startsWith('warp-')) return undefined;
+  if (runner.includes('ubuntu') && runner.includes('arm64')) return 'linux-arm64';
+  if (runner.includes('ubuntu') && runner.includes('x64')) return 'linux-x86-64';
+  if (runner.includes('macos')) return 'macos-m4-pro-on-arm64';
+  if (runner.includes('windows')) return 'windows-x86-64';
+  return undefined;
+})();
+const machineHref = warpBuildDocs
+  ? `https://www.warpbuild.com/docs/ci/cloud-runners#${warpBuildDocs}`
+  : undefined;
 ---
 
 <aside class="result-context" aria-label="Benchmark context">
@@ -128,6 +148,18 @@ const patchHref = (patch: string) =>
     <div>
       <dt>Golden data</dt>
       <dd>{hasDataset ? <a href={datasetHref(version, run.id)}>{goldenId}</a> : goldenId}</dd>
+    </div>
+    <div>
+      <dt>Object store</dt>
+      <dd>{objectStore}</dd>
+    </div>
+    <div>
+      <dt>Machine</dt>
+      <dd>
+        {machineHref
+          ? <a href={machineHref}>{environment.runner_type} ↗</a>
+          : environment.runner_type}
+      </dd>
     </div>
     <div>
       <dt>Patches</dt>
