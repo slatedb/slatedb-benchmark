@@ -90,7 +90,18 @@ pub async fn cleanup_session(session: &str) -> Result<()> {
     validate_name(session, "session")?;
     let context = ObjectStoreContext::load()?;
     let session_root = context.root.clone().join("sessions").join(session);
-    delete_prefix(Arc::clone(&context.control), &session_root).await
+    cleanup_workload_databases(Arc::clone(&context.control), &session_root).await
+}
+
+async fn cleanup_workload_databases(
+    store: Arc<dyn ObjectStore>,
+    session_root: &Path,
+) -> Result<()> {
+    for task in Task::workloads() {
+        let database = session_root.clone().join(task.as_str()).join("database");
+        delete_prefix(Arc::clone(&store), &database).await?;
+    }
+    Ok(())
 }
 
 fn remove_local_output(path: &FsPath) -> Result<()> {
@@ -966,14 +977,15 @@ fn manifest_lsm_digest(manifest: &VersionedManifest) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        create_bytes, ensure_shared_configuration, sha256_bytes, validate_name,
-        validate_series_digest, SETTINGS_PATH,
+        cleanup_workload_databases, create_bytes, ensure_shared_configuration, sha256_bytes,
+        validate_name, validate_series_digest, SETTINGS_PATH,
     };
     use crate::config::{self, BenchmarkScale, Task};
     use crate::model::{ResultConfiguration, SeriesReference};
+    use bytes::Bytes;
     use object_store::memory::InMemory;
     use object_store::path::Path as ObjectPath;
-    use object_store::ObjectStore;
+    use object_store::{ObjectStore, ObjectStoreExt};
     use std::path::Path;
     use std::sync::Arc;
 
@@ -1020,6 +1032,31 @@ mod tests {
             .expect_err("different retry must fail");
 
         assert!(error.to_string().contains("different contents"));
+    }
+
+    #[tokio::test]
+    async fn cleanup_preserves_workload_completion_markers() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let session = ObjectPath::from("sessions/run");
+        let result = ObjectPath::from("sessions/run/idle/result.json");
+        let series = ObjectPath::from("sessions/run/idle/series.json");
+        let idle_database = ObjectPath::from("sessions/run/idle/database/manifest/0001");
+        let balanced_database = ObjectPath::from("sessions/run/balanced/database/manifest/0001");
+        for path in [&result, &series, &idle_database, &balanced_database] {
+            store
+                .put(path, Bytes::from_static(b"data").into())
+                .await
+                .expect("write session object");
+        }
+
+        cleanup_workload_databases(Arc::clone(&store), &session)
+            .await
+            .expect("clean workload databases");
+
+        assert!(store.get(&result).await.is_ok());
+        assert!(store.get(&series).await.is_ok());
+        assert!(store.get(&idle_database).await.is_err());
+        assert!(store.get(&balanced_database).await.is_err());
     }
 
     #[test]
