@@ -1,0 +1,253 @@
+---
+import Base from '../layouts/Base.astro';
+import SiteHeader from '../components/SiteHeader.astro';
+---
+
+<Base
+  title="Page not found · SlateDB Benchmarks"
+  description="The requested SlateDB benchmark result could not be found."
+>
+  <SiteHeader />
+  <main class="not-found">
+    <section class="not-found-copy">
+      <p class="eyebrow">HTTP 404</p>
+      <h1>Result not found.</h1>
+      <p class="explanation">
+        This benchmark URL may be stale, incomplete, or not published yet.
+      </p>
+      <nav class="not-found-actions" aria-label="Page not found">
+        <a class="primary-link" href="/">
+          View latest benchmarks <span aria-hidden="true">→</span>
+        </a>
+        <a class="secondary-link" href="https://slatedb.io">SlateDB home</a>
+      </nav>
+    </section>
+
+    <div class="missing-trace" aria-hidden="true">
+      <span class="trace-label">No samples</span>
+      <svg viewBox="0 0 760 300" role="presentation">
+        <g class="grid">
+          <path d="M0 48H760 M0 122H760 M0 196H760 M0 270H760"></path>
+          <path d="M90 0V300 M260 0V300 M430 0V300 M600 0V300"></path>
+        </g>
+        <path
+          class="trace"
+          pathLength="1"
+          d="M0 234 C58 226 71 173 122 184 S193 241 241 205 S306 86 357 116 S404 222 463 196 S522 91 572 126"
+        ></path>
+        <circle class="trace-end" cx="572" cy="126" r="7"></circle>
+        <path class="missing-line" d="M572 126H760"></path>
+      </svg>
+      <strong>404</strong>
+    </div>
+  </main>
+</Base>
+
+<style>
+  .not-found {
+    width: min(1500px, 94vw);
+    min-height: calc(100svh - 62px);
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: minmax(320px, .8fr) minmax(460px, 1.2fr);
+    align-items: center;
+    gap: clamp(54px, 8vw, 140px);
+    overflow: hidden;
+  }
+
+  .not-found-copy {
+    position: relative;
+    z-index: 1;
+    padding: 72px 0;
+    animation: copy-in 500ms ease-out both;
+  }
+
+  .not-found-copy h1 {
+    max-width: 7ch;
+  }
+
+  .explanation {
+    max-width: 42ch;
+    margin: 24px 0 0;
+    color: var(--ink-4);
+    font-size: 14px;
+    line-height: 1.65;
+  }
+
+  .not-found-actions {
+    margin-top: 34px;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 16px 24px;
+  }
+
+  .not-found-actions a {
+    font-size: 12px;
+    font-weight: 500;
+  }
+
+  .primary-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 14px;
+    padding: 11px 15px;
+    border: 1px solid var(--accent);
+    border-radius: 3px;
+    color: var(--paper);
+    background: var(--accent);
+    text-decoration: none;
+  }
+
+  .primary-link span {
+    transition: transform 160ms ease;
+  }
+
+  .primary-link:hover span {
+    transform: translateX(4px);
+  }
+
+  .secondary-link {
+    color: var(--ink-4);
+  }
+
+  .missing-trace {
+    position: relative;
+    min-width: 0;
+    color: var(--accent);
+  }
+
+  .missing-trace svg {
+    position: relative;
+    z-index: 1;
+    width: 100%;
+    overflow: visible;
+  }
+
+  .grid {
+    fill: none;
+    stroke: var(--line);
+    stroke-width: 1;
+  }
+
+  .trace {
+    fill: none;
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-width: 3;
+    stroke-dasharray: 1;
+    stroke-dashoffset: 1;
+    animation: draw-trace 900ms 180ms ease-out forwards;
+  }
+
+  .trace-end {
+    fill: var(--surface);
+    stroke: currentColor;
+    stroke-width: 3;
+    opacity: 0;
+    animation: reveal 160ms 950ms ease-out forwards;
+  }
+
+  .missing-line {
+    fill: none;
+    stroke: var(--ink-5);
+    stroke-dasharray: 5 9;
+    stroke-width: 1;
+    opacity: .65;
+  }
+
+  .trace-label {
+    position: absolute;
+    top: 7px;
+    right: 0;
+    color: var(--ink-5);
+    font: 9px 'JetBrains Mono', ui-monospace, monospace;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+  }
+
+  .missing-trace strong {
+    position: absolute;
+    right: -1vw;
+    bottom: -88px;
+    color: rgba(15, 22, 32, .055);
+    font: 400 clamp(180px, 25vw, 390px)/.75 Marcellus, serif;
+    letter-spacing: -.07em;
+    user-select: none;
+  }
+
+  @keyframes copy-in {
+    from { opacity: 0; transform: translateY(12px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  @keyframes draw-trace {
+    to { stroke-dashoffset: 0; }
+  }
+
+  @keyframes reveal {
+    to { opacity: 1; }
+  }
+
+  @media (max-width: 850px) {
+    .not-found {
+      grid-template-columns: 1fr;
+      align-content: center;
+      gap: 12px;
+    }
+
+    .not-found-copy {
+      padding: 54px 0 0;
+    }
+
+    .missing-trace {
+      width: 100%;
+      margin-bottom: 54px;
+    }
+
+    .missing-trace strong {
+      right: 0;
+      bottom: -34px;
+      font-size: clamp(130px, 40vw, 220px);
+    }
+  }
+
+  @media (max-width: 560px) {
+    .not-found {
+      width: 90vw;
+    }
+
+    .not-found-copy h1 {
+      font-size: clamp(44px, 15vw, 66px);
+    }
+
+    .not-found-actions {
+      align-items: flex-start;
+      flex-direction: column;
+    }
+
+    .missing-trace {
+      margin-top: 16px;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .not-found-copy,
+    .trace,
+    .trace-end {
+      animation: none;
+    }
+
+    .trace {
+      stroke-dashoffset: 0;
+    }
+
+    .trace-end {
+      opacity: 1;
+    }
+
+    .primary-link span {
+      transition: none;
+    }
+  }
+</style>
