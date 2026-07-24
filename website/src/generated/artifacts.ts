@@ -60,17 +60,7 @@ export type WorkloadResult = { status: string, task: Task, golden_id: string, se
 
 export type AppliedPatch = { name: string, sha256: string, };
 
-export type TransferTool = { name: string, version: string, };
-
-export type TransferLatencySummary = { average: number, p50: number, p90: number, p99: number, min: number, max: number, };
-
-export type TransferLatency = { request: TransferLatencySummary, ttfb?: TransferLatencySummary | null, };
-
-export type TransferBenchmark = { name: string, operation: string, object_size_bytes: number, concurrency: number, duration_seconds: number, latency_ms: TransferLatency, benchdata: string, };
-
-export type TransferCapacity = { version: number, status: string, timestamp: string, scale: number, runner_type: string, object_store: string, endpoint: string, region: string, tool: TransferTool, benchmarks: Array<TransferBenchmark>, };
-
-export type RunManifest = { status: string, run_id: string, golden_id: string, started_at: string, finished_at: string, patches: Array<AppliedPatch>, source: SourceIdentity, golden_runner_commit: string, resolved_configuration: { [key in string]: ResultConfiguration }, max_parallel: number, transfer_capacity?: TransferCapacity | null, results: { [key in string]: string }, };
+export type RunManifest = { status: string, run_id: string, golden_id: string, started_at: string, finished_at: string, patches: Array<AppliedPatch>, source: SourceIdentity, golden_runner_commit: string, resolved_configuration: { [key in string]: ResultConfiguration }, max_parallel: number, results: { [key in string]: string }, };
 
 export const workloadNames = [
   'idle',

@@ -4,8 +4,7 @@ use crate::model::{
     Environment, GoldenDatasetMetadata, GoldenManifest, HistogramSeries, InitialState,
     LatencySummary, LatencyTimeSeries, MachineSeries, MachineStatistics, ObjectStoreMetrics,
     ObjectStoreSeries, ProcessSeries, ProcessStatistics, RateSummary, ResultConfiguration,
-    RunManifest, SeriesReference, SourceIdentity, ThroughputSummary, TransferBenchmark,
-    TransferCapacity, TransferLatency, TransferLatencySummary, TransferTool, WorkloadResult,
+    RunManifest, SeriesReference, SourceIdentity, ThroughputSummary, WorkloadResult,
     WorkloadSeries,
 };
 use anyhow::{bail, Context, Result};
@@ -94,11 +93,6 @@ fn typescript() -> String {
     declaration!(WorkloadSeries);
     declaration!(WorkloadResult);
     declaration!(AppliedPatch);
-    declaration!(TransferTool);
-    declaration!(TransferLatencySummary);
-    declaration!(TransferLatency);
-    declaration!(TransferBenchmark);
-    declaration!(TransferCapacity);
     declaration!(RunManifest);
 
     let workloads = Task::workloads()
@@ -212,7 +206,6 @@ mod tests {
             golden_runner_commit: "runner".into(),
             resolved_configuration: BTreeMap::from([("balanced".into(), workload_configuration)]),
             max_parallel: 1,
-            transfer_capacity: None,
             results: BTreeMap::from([("golden.json".into(), "0".repeat(64))]),
         };
 

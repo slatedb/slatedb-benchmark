@@ -1,11 +1,10 @@
 use crate::config::Task;
 use crate::model::{
-    AppliedPatch, GoldenManifest, RunManifest, SourceIdentity, TransferCapacity, WorkloadResult,
-    WorkloadSeries,
+    AppliedPatch, GoldenManifest, RunManifest, SourceIdentity, WorkloadResult, WorkloadSeries,
 };
 use crate::validation::{
-    validate_golden_manifest, validate_identifier, validate_run_manifest,
-    validate_transfer_capacity, validate_workload_result, validate_workload_series,
+    validate_golden_manifest, validate_identifier, validate_run_manifest, validate_workload_result,
+    validate_workload_series,
 };
 use anyhow::{ensure, Context, Result};
 use chrono::Utc;
@@ -111,49 +110,6 @@ pub fn bundle(args: BundleArgs) -> Result<PathBuf> {
         "golden manifest used a different scale"
     );
 
-    let transfer_path = args.input.join("transfer-capacity/result.json");
-    let transfer_capacity = if transfer_path.is_file() {
-        let transfer: TransferCapacity = read_json(&transfer_path)?;
-        validate_transfer_capacity(&transfer)
-            .with_context(|| format!("validating {}", transfer_path.display()))?;
-        ensure!(
-            transfer.scale == scale,
-            "{} used a different scale",
-            transfer_path.display()
-        );
-        for (name, actual, expected) in [
-            (
-                "runner type",
-                transfer.runner_type.as_str(),
-                first.environment.runner_type.as_str(),
-            ),
-            (
-                "object store",
-                transfer.object_store.as_str(),
-                first.environment.object_store.as_str(),
-            ),
-            (
-                "endpoint",
-                transfer.endpoint.as_str(),
-                first.environment.endpoint.as_str(),
-            ),
-            (
-                "region",
-                transfer.region.as_str(),
-                first.environment.region.as_str(),
-            ),
-        ] {
-            ensure!(
-                actual == expected,
-                "{} used a different {name}",
-                transfer_path.display()
-            );
-        }
-        Some(transfer)
-    } else {
-        None
-    };
-
     let destination = args.output.join(&source.slate_version).join(&first.session);
     if destination.exists() {
         fs::remove_dir_all(&destination)
@@ -193,7 +149,6 @@ pub fn bundle(args: BundleArgs) -> Result<PathBuf> {
         golden_runner_commit: golden.source.runner_commit.clone(),
         resolved_configuration,
         max_parallel: workloads.len(),
-        transfer_capacity,
         results,
     };
     validate_run_manifest(&manifest)?;

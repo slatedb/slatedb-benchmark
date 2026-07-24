@@ -116,7 +116,6 @@ pub enum Artifact {
     Result,
     Series,
     Run,
-    TransferCapacity,
 }
 
 #[derive(Debug, Clone, Args)]

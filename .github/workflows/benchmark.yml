@@ -196,164 +196,6 @@ jobs:
           overwrite: true
           retention-days: 7
 
-  transfer-capacity:
-    runs-on: warp-ubuntu-latest-arm64-8x
-    timeout-minutes: 60
-    environment: benchmark-${{ inputs.object_store }}
-    env:
-      WARP_VERSION: v1.5.0
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@v5
-        with:
-          go-version: 1.25.9
-          cache: false
-      - name: Install Warp
-        shell: bash
-        run: |
-          set -euo pipefail
-          warp_bin_dir="${RUNNER_TEMP:-/tmp}/warp-bin"
-          mkdir -p "$warp_bin_dir"
-          GOBIN="$warp_bin_dir" go install "github.com/minio/warp@${WARP_VERSION}"
-          echo "$warp_bin_dir" >> "$GITHUB_PATH"
-          "$warp_bin_dir/warp" --version
-      - name: Configure S3 credentials
-        if: ${{ inputs.object_store == 's3' }}
-        uses: aws-actions/configure-aws-credentials@v5
-        with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION }}
-      - name: Configure Tigris credentials
-        if: ${{ inputs.object_store == 'tigris' }}
-        shell: bash
-        env:
-          AWS_ENDPOINT_URL_S3: ${{ vars.AWS_ENDPOINT_URL_S3 }}
-          TIGRIS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
-          TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
-        run: |
-          set -euo pipefail
-          : "${TIGRIS_ACCESS_KEY_ID:?Tigris access key ID is required}"
-          : "${TIGRIS_SECRET_ACCESS_KEY:?Tigris secret access key is required}"
-          {
-            echo "AWS_ACCESS_KEY_ID=$TIGRIS_ACCESS_KEY_ID"
-            echo "AWS_SECRET_ACCESS_KEY=$TIGRIS_SECRET_ACCESS_KEY"
-            echo "AWS_ENDPOINT_URL_S3=${AWS_ENDPOINT_URL_S3:-https://t3.storage.dev}"
-          } >> "$GITHUB_ENV"
-      - name: Install runner diagnostics
-        shell: bash
-        run: |
-          set -euo pipefail
-          if ! command -v traceroute >/dev/null 2>&1 || \
-            ! command -v mtr >/dev/null 2>&1; then
-            if ! sudo apt-get update -qq || \
-              ! sudo apt-get install -y --no-install-recommends traceroute mtr-tiny; then
-              echo "::warning::network diagnostics installation failed"
-            fi
-          fi
-      - name: Record runner diagnostics
-        shell: bash
-        env:
-          AWS_REGION: ${{ vars.AWS_REGION }}
-          CLOUD_PROVIDER: ${{ inputs.object_store }}
-        run: |
-          set -uo pipefail
-
-          echo "::group::Host"
-          hostname
-          uname -a
-          cat /etc/os-release
-          systemd-detect-virt || true
-          for field in sys_vendor product_name; do
-            if [[ -r /sys/devices/virtual/dmi/id/$field ]]; then
-              printf '%s: ' "$field"
-              cat "/sys/devices/virtual/dmi/id/$field"
-            fi
-          done
-          echo "::endgroup::"
-
-          echo "::group::CPU"
-          lscpu
-          echo "::endgroup::"
-
-          echo "::group::Memory"
-          free -h
-          echo "::endgroup::"
-
-          echo "::group::Disk"
-          lsblk -o NAME,MODEL,SIZE,TYPE,FSTYPE,MOUNTPOINTS
-          df -h
-          du -sh "$GITHUB_WORKSPACE"
-          echo "::endgroup::"
-
-          echo "::group::Network"
-          if command -v ip >/dev/null 2>&1; then
-            ip -brief address
-            ip route
-          else
-            echo "::warning::ip command unavailable"
-          fi
-          echo "Public egress:"
-          curl --fail --location --silent --show-error --max-time 10 \
-            https://ipinfo.io/json || true
-          echo
-          if [[ "$CLOUD_PROVIDER" == tigris ]]; then
-            object_store_name=Tigris
-            object_store_host=${AWS_ENDPOINT_URL_S3#*://}
-            object_store_host=${object_store_host%%/*}
-          else
-            object_store_name="Amazon S3"
-            object_store_host="s3.${AWS_REGION}.amazonaws.com"
-          fi
-          echo "$object_store_name DNS:"
-          getent ahosts "$object_store_host" || true
-          echo "$object_store_name connection:"
-          curl --location --silent --show-error --max-time 20 \
-            --output /dev/null \
-            --write-out 'remote_ip=%{remote_ip} http_code=%{http_code} connect_seconds=%{time_connect} tls_seconds=%{time_appconnect} total_seconds=%{time_total}\n' \
-            "https://$object_store_host" || true
-          echo "::endgroup::"
-
-          echo "::group::TCP traceroute to $object_store_name"
-          sudo traceroute -T -p 443 -m 20 -w 2 -q 1 "$object_store_host" || true
-          echo "::endgroup::"
-
-          echo "::group::MTR packet loss to $object_store_name"
-          if command -v mtr >/dev/null 2>&1; then
-            sudo mtr \
-              --report \
-              --report-wide \
-              --report-cycles 20 \
-              --tcp \
-              --port 443 \
-              --show-ips \
-              "$object_store_host" || true
-          else
-            echo "::warning::mtr command unavailable"
-          fi
-          echo "::endgroup::"
-      - name: Measure object store transfer capacity
-        shell: bash
-        env:
-          AWS_REGION: ${{ vars.AWS_REGION }}
-          BENCHMARK_SCALE: ${{ inputs.scale }}
-          CLOUD_PROVIDER: ${{ inputs.object_store }}
-          SLATEDB_BENCH_BUCKET: ${{ vars.SLATEDB_BENCH_BUCKET }}
-          SLATEDB_BENCH_REGION: ${{ vars.AWS_REGION }}
-        run: |
-          set -euo pipefail
-          : "${SLATEDB_BENCH_BUCKET:?SLATEDB_BENCH_BUCKET is required}"
-          export SLATEDB_BENCH_PREFIX=${SLATEDB_BENCH_PREFIX:-benchmark}
-          export SLATEDB_BENCH_RUNNER_TYPE=${SLATEDB_BENCH_RUNNER_TYPE:-warp-ubuntu-latest-arm64-8x}
-          ./scripts/transfer-capacity.sh .runs/transfer-capacity/result.json
-      - uses: actions/upload-artifact@v4
-        with:
-          name: transfer-capacity
-          path: .runs/transfer-capacity
-          if-no-files-found: error
-          overwrite: true
-
   workloads:
     needs: [validate-golden, build]
     runs-on: warp-ubuntu-latest-arm64-8x
@@ -433,7 +275,7 @@ jobs:
           overwrite: true
 
   bundle:
-    needs: [validate-golden, build, transfer-capacity, workloads]
+    needs: [validate-golden, build, workloads]
     runs-on: warp-ubuntu-latest-arm64-8x
     steps:
       - uses: actions/checkout@v4
@@ -448,10 +290,6 @@ jobs:
           pattern: workload-*
           path: .runs/bundle/workload
           merge-multiple: true
-      - uses: actions/download-artifact@v4
-        with:
-          name: transfer-capacity
-          path: .runs/bundle/transfer-capacity
       - uses: actions/download-artifact@v4
         with:
           name: benchmark-runner

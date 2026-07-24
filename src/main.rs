@@ -4,8 +4,8 @@ use slatedb_benchmark::cli::{Artifact, Cli, Command};
 use slatedb_benchmark::model::{WorkloadResult, WorkloadSeries};
 use slatedb_benchmark::runner::ExecutionArgs;
 use slatedb_benchmark::validation::{
-    validate_golden_manifest, validate_run_manifest, validate_transfer_capacity,
-    validate_workload_result, validate_workload_series,
+    validate_golden_manifest, validate_run_manifest, validate_workload_result,
+    validate_workload_series,
 };
 use std::fs;
 use std::time::Duration;
@@ -76,7 +76,6 @@ fn validate(args: slatedb_benchmark::cli::ValidateArgs) -> Result<()> {
         Artifact::Golden => validate_golden_manifest(&read(&args.input)?),
         Artifact::Result => validate_workload_result(&read(&args.input)?),
         Artifact::Run => validate_run_manifest(&read(&args.input)?),
-        Artifact::TransferCapacity => validate_transfer_capacity(&read(&args.input)?),
         Artifact::Series => {
             let result_path = args
                 .result

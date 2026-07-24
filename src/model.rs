@@ -312,59 +312,6 @@ pub struct AppliedPatch {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
-pub struct TransferTool {
-    pub name: String,
-    pub version: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
-#[serde(deny_unknown_fields)]
-pub struct TransferLatencySummary {
-    pub average: f64,
-    pub p50: f64,
-    pub p90: f64,
-    pub p99: f64,
-    pub min: f64,
-    pub max: f64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
-#[serde(deny_unknown_fields)]
-pub struct TransferLatency {
-    pub request: TransferLatencySummary,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ttfb: Option<TransferLatencySummary>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
-#[serde(deny_unknown_fields)]
-pub struct TransferBenchmark {
-    pub name: String,
-    pub operation: String,
-    pub object_size_bytes: u64,
-    pub concurrency: usize,
-    pub duration_seconds: u64,
-    pub latency_ms: TransferLatency,
-    pub benchdata: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
-#[serde(deny_unknown_fields)]
-pub struct TransferCapacity {
-    pub version: u8,
-    pub status: String,
-    pub timestamp: String,
-    pub scale: f64,
-    pub runner_type: String,
-    pub object_store: String,
-    pub endpoint: String,
-    pub region: String,
-    pub tool: TransferTool,
-    pub benchmarks: Vec<TransferBenchmark>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
-#[serde(deny_unknown_fields)]
 pub struct RunManifest {
     pub status: String,
     pub run_id: String,
@@ -376,7 +323,5 @@ pub struct RunManifest {
     pub golden_runner_commit: String,
     pub resolved_configuration: BTreeMap<String, ResultConfiguration>,
     pub max_parallel: usize,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub transfer_capacity: Option<TransferCapacity>,
     pub results: BTreeMap<String, String>,
 }

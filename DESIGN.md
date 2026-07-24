@@ -163,11 +163,12 @@ the final `golden.json`. Scaling rules remain in [`BENCHMARKS.md`](BENCHMARKS.md
 
 ## GitHub workflows
 
-GitHub exposes two manual workflows. `golden.yml` creates reusable
-golden data. `benchmark.yml` measures workloads against it. Neither workflow
-starts the other. Both use the same repository concurrency group, so golden
-preparation and benchmark sessions never compete for the benchmark object
-store.
+GitHub exposes three manual workflows. `golden.yml` creates reusable
+golden data, `benchmark.yml` measures workloads against it, and
+`transfer-capacity.yml` measures object-store performance independently. None
+of the workflows starts another. Golden preparation and benchmark sessions use
+the same repository concurrency group, so they never compete for the benchmark
+object store. The transfer probe has its own concurrency group.
 
 ### Inputs
 
@@ -188,13 +189,20 @@ store.
 | `publish` | Yes | `true` |
 | `scale` | Yes | `1.0` |
 
+`transfer-capacity.yml` accepts:
+
+| Input | Required | Example |
+| --- | --- | --- |
+| `object_store` | Yes | `s3` |
+| `scale` | Yes | `1.0` |
+
 `scale` is decimal. `1.0` runs the published size; `0.01` runs one percent.
-The two workflows resolve `slatedb_ref` independently. A benchmark can use a
-golden checkpoint prepared by another SlateDB commit, provided the requested
-build can read it. Before building the benchmark runner, every `*.patch` file
-in `patches/slatedb` is applied in filename order. Patches do not change the
-SlateDB version. Each run records their filenames and SHA-256 digests, while
-the benchmark commit provides their exact contents.
+The golden and benchmark workflows resolve `slatedb_ref` independently. A
+benchmark can use a golden checkpoint prepared by another SlateDB commit,
+provided the requested build can read it. Before building the benchmark
+runner, every `*.patch` file in `patches/slatedb` is applied in filename order.
+Patches do not change the SlateDB version. Each run records their filenames
+and SHA-256 digests, while the benchmark commit provides their exact contents.
 
 A published run starts with these commands:
 
@@ -235,22 +243,10 @@ ID after changing the SlateDB commit or preparation configuration.
 | --- | --- |
 | `validate-golden` | Verify and upload the final golden manifest |
 | `build` | Resolve the requested SlateDB ref and build the runner against it |
-| `transfer-capacity` | Record diagnostic Amazon S3 throughput and request latency |
 | `workloads` | Run the workload matrix |
 | `bundle` | Assemble and checksum all run results |
 | `publish` | Commit results when the `publish` input is `true` |
 | `cleanup` | Delete workload database clones after outputs are collected |
-
-The transfer probe runs on the published WarpBuild machine type alongside the
-build. MinIO Warp measures 4 MiB PUT and GET throughput at concurrency 64, then
-4 KiB PUT, GET, and LIST latency at concurrency 1. The probe runs independently
-of the workload matrix, so its traffic may overlap workload measurements.
-Scaled local runs shorten each measurement. Warp's per-request data remains in
-the workflow artifact, and `run.json` includes accurate request and TTFB
-average, p50, p90, p99, minimum, and maximum latency for each probe. The probe
-is diagnostic data and is not rendered on workload pages. Its log also includes
-host, CPU, memory, disk, public egress, DNS, routing, and a TCP traceroute to
-Amazon S3.
 
 The workload matrix uses one WarpBuild machine per task and does not impose a
 parallelism cap. `run.json` records the number of workloads. Each workload writes to
@@ -276,6 +272,15 @@ The `publish` input controls the final job:
 Failed runs retain their session data. Successful cleanup keeps workload
 completion markers and never deletes golden data.
 
+### `transfer-capacity.yml`
+
+This standalone diagnostic workflow uses MinIO Warp to measure 4 MiB PUT and
+GET throughput at concurrency 64, then 4 KiB PUT, GET, and LIST latency at
+concurrency 1. It also records host and network diagnostics, including a TCP
+traceroute and MTR packet-loss report. The workflow uploads its results and
+per-request data as a GitHub artifact. Benchmark runs do not invoke, bundle, or
+publish this data.
+
 ### Credentials
 
 | Jobs | Repository | Amazon S3 |
@@ -283,7 +288,7 @@ completion markers and never deletes golden data.
 | `build` | Read | None |
 | Preparation jobs | Read | Read and write |
 | `validate-golden` | Read | Read |
-| `transfer-capacity` | Read | Read and write |
+| Standalone transfer capacity | Read | Read and write |
 | `workloads` | Read | Read and write |
 | `bundle` | Read | None |
 | `publish` | Write | None |
@@ -314,7 +319,7 @@ The run ID is the benchmark session, such as `github-123456`. Publishing a run
 replaces only that run ID and preserves every other run for the version.
 `run.json` records the run ID, timestamp, applied patches, golden ID, measured
 SlateDB source, golden and benchmark runner commits, resolved configuration,
-matrix concurrency, diagnostic Amazon S3 bandwidth, and file checksums.
+matrix concurrency, and file checksums.
 `golden.json` records the source and final checkpoint that created the golden
 data. Workload results record the independently selected SlateDB source,
 environment, metric summaries, and initial database identity.
