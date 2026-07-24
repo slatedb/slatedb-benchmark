@@ -83,9 +83,11 @@ jobs:
           set -euo pipefail
           : "${TIGRIS_ACCESS_KEY_ID:?Tigris access key ID is required}"
           : "${TIGRIS_SECRET_ACCESS_KEY:?Tigris secret access key is required}"
-          echo "AWS_ACCESS_KEY_ID=$TIGRIS_ACCESS_KEY_ID" >> "$GITHUB_ENV"
-          echo "AWS_SECRET_ACCESS_KEY=$TIGRIS_SECRET_ACCESS_KEY" >> "$GITHUB_ENV"
-          echo "AWS_ENDPOINT_URL_S3=${AWS_ENDPOINT_URL_S3:-https://t3.storage.dev}" >> "$GITHUB_ENV"
+          {
+            echo "AWS_ACCESS_KEY_ID=$TIGRIS_ACCESS_KEY_ID"
+            echo "AWS_SECRET_ACCESS_KEY=$TIGRIS_SECRET_ACCESS_KEY"
+            echo "AWS_ENDPOINT_URL_S3=${AWS_ENDPOINT_URL_S3:-https://t3.storage.dev}"
+          } >> "$GITHUB_ENV"
       - name: Fetch golden manifest
         shell: bash
         env:
@@ -234,9 +236,11 @@ jobs:
           set -euo pipefail
           : "${TIGRIS_ACCESS_KEY_ID:?Tigris access key ID is required}"
           : "${TIGRIS_SECRET_ACCESS_KEY:?Tigris secret access key is required}"
-          echo "AWS_ACCESS_KEY_ID=$TIGRIS_ACCESS_KEY_ID" >> "$GITHUB_ENV"
-          echo "AWS_SECRET_ACCESS_KEY=$TIGRIS_SECRET_ACCESS_KEY" >> "$GITHUB_ENV"
-          echo "AWS_ENDPOINT_URL_S3=${AWS_ENDPOINT_URL_S3:-https://t3.storage.dev}" >> "$GITHUB_ENV"
+          {
+            echo "AWS_ACCESS_KEY_ID=$TIGRIS_ACCESS_KEY_ID"
+            echo "AWS_SECRET_ACCESS_KEY=$TIGRIS_SECRET_ACCESS_KEY"
+            echo "AWS_ENDPOINT_URL_S3=${AWS_ENDPOINT_URL_S3:-https://t3.storage.dev}"
+          } >> "$GITHUB_ENV"
       - name: Install runner diagnostics
         shell: bash
         run: |
@@ -372,9 +376,11 @@ jobs:
           set -euo pipefail
           : "${TIGRIS_ACCESS_KEY_ID:?Tigris access key ID is required}"
           : "${TIGRIS_SECRET_ACCESS_KEY:?Tigris secret access key is required}"
-          echo "AWS_ACCESS_KEY_ID=$TIGRIS_ACCESS_KEY_ID" >> "$GITHUB_ENV"
-          echo "AWS_SECRET_ACCESS_KEY=$TIGRIS_SECRET_ACCESS_KEY" >> "$GITHUB_ENV"
-          echo "AWS_ENDPOINT_URL_S3=${AWS_ENDPOINT_URL_S3:-https://t3.storage.dev}" >> "$GITHUB_ENV"
+          {
+            echo "AWS_ACCESS_KEY_ID=$TIGRIS_ACCESS_KEY_ID"
+            echo "AWS_SECRET_ACCESS_KEY=$TIGRIS_SECRET_ACCESS_KEY"
+            echo "AWS_ENDPOINT_URL_S3=${AWS_ENDPOINT_URL_S3:-https://t3.storage.dev}"
+          } >> "$GITHUB_ENV"
       - name: Run ${{ matrix.task }}
         shell: bash
         env:
@@ -540,9 +546,11 @@ jobs:
           set -euo pipefail
           : "${TIGRIS_ACCESS_KEY_ID:?Tigris access key ID is required}"
           : "${TIGRIS_SECRET_ACCESS_KEY:?Tigris secret access key is required}"
-          echo "AWS_ACCESS_KEY_ID=$TIGRIS_ACCESS_KEY_ID" >> "$GITHUB_ENV"
-          echo "AWS_SECRET_ACCESS_KEY=$TIGRIS_SECRET_ACCESS_KEY" >> "$GITHUB_ENV"
-          echo "AWS_ENDPOINT_URL_S3=${AWS_ENDPOINT_URL_S3:-https://t3.storage.dev}" >> "$GITHUB_ENV"
+          {
+            echo "AWS_ACCESS_KEY_ID=$TIGRIS_ACCESS_KEY_ID"
+            echo "AWS_SECRET_ACCESS_KEY=$TIGRIS_SECRET_ACCESS_KEY"
+            echo "AWS_ENDPOINT_URL_S3=${AWS_ENDPOINT_URL_S3:-https://t3.storage.dev}"
+          } >> "$GITHUB_ENV"
       - name: Delete benchmark session data
         shell: bash
         env:
