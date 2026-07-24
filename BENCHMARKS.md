@@ -181,12 +181,12 @@ window. Average rates divide the total by the full recorded interval. Latency
 statistics use individual calls and milliseconds.
 
 All charts use elapsed seconds on the x-axis. Rate charts use the same complete
-client windows as rate percentiles. Latency charts plot `avg`, `p50`, `p95`,
-`p99`, and `p99.9` for calls completed in each sampling window. Latency,
-process, and machine charts continue through durability drain and mark its
-start. Other charts include the row's published average as a horizontal
-reference. Chart data lives in a separate workload file and is fetched after
-page load.
+client windows as rate percentiles. Latency charts plot `avg`, `p0.1`, `p1`,
+`p50`, `p99`, and `p99.9` for calls completed in each sampling window.
+Latency, process, and machine charts continue through durability drain and
+mark its start. Other charts include the row's published average as a
+horizontal reference. Chart data lives in a separate workload file and is
+fetched after page load.
 
 ### Application operations
 
@@ -195,10 +195,10 @@ Each row identifies a SlateDB API call such as `get`, `put`, `delete`, `scan`,
 `transaction.put`, and `transaction.commit`. All columns except `total` use
 calls per second.
 
-| API | total | avg/s | p50/s | p95/s | p99/s | p99.9/s | min/s | max/s |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `get` | 45.5M | 50.6K | 50.5K | 52.1K | 53.2K | 54.0K | 47.1K | 54.0K |
-| `put` | 45.6M | 50.6K | 50.5K | 52.2K | 53.3K | 54.1K | 47.2K | 54.1K |
+| API | total | avg/s | p0.1/s | p1/s | p50/s | p99/s | p99.9/s |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `get` | 45.5M | 50.6K | 47.1K | 48.0K | 50.5K | 53.2K | 54.0K |
+| `put` | 45.6M | 50.6K | 47.2K | 48.1K | 50.5K | 53.3K | 54.1K |
 
 ### Application throughput
 
@@ -209,10 +209,10 @@ returned keys and values. Calls such as `flush` transfer no logical data and do
 not appear in this table. The `total` column uses GiB; the remaining columns use
 MiB/s.
 
-| API | total | avg | p50 | p95 | p99 | p99.9 | min | max |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `get` | 17.8 | 20.3 | 20.2 | 20.9 | 21.3 | 21.6 | 18.9 | 21.6 |
-| `put` | 17.8 | 20.3 | 20.2 | 20.9 | 21.4 | 21.7 | 18.9 | 21.7 |
+| API | total | avg | p0.1 | p1 | p50 | p99 | p99.9 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `get` | 17.8 | 20.3 | 18.9 | 19.2 | 20.2 | 21.3 | 21.6 |
+| `put` | 17.8 | 20.3 | 18.9 | 19.3 | 20.2 | 21.4 | 21.7 |
 
 ### Application latency
 
@@ -222,11 +222,11 @@ returns and ends when SlateDB's durable frontier reaches the write's sequence
 number. The row combines durability latency for the workload's accepted
 writes. All values use milliseconds.
 
-| API | avg ms | p50 | p95 | p99 | p99.9 | min | max |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `get` | 0.82 | 0.62 | 1.98 | 5.10 | 19.42 | 0.08 | 406.7 |
-| `put` | 0.41 | 0.24 | 1.04 | 3.62 | 13.91 | 0.05 | 298.6 |
-| `durable` | 54.8 | 48.3 | 99.2 | 132.8 | 241.7 | 1.2 | 1,932.4 |
+| API | avg ms | p0.1 | p1 | p50 | p99 | p99.9 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `get` | 0.82 | 0.08 | 0.12 | 0.62 | 5.10 | 19.42 |
+| `put` | 0.41 | 0.05 | 0.08 | 0.24 | 3.62 | 13.91 |
+| `durable` | 54.8 | 1.2 | 4.8 | 48.3 | 132.8 | 241.7 |
 
 ### Object-store requests
 
@@ -240,11 +240,11 @@ Costs use Amazon S3 Standard prices in US East (N. Virginia): $0.005 per 1,000
 `PUT` and `POST` requests, $0.0004 per 1,000 `GET`, `HEAD`, and other requests,
 and no charge for `DELETE`. They include API request charges only.
 
-| Method | total | avg/s | p50/s | p95/s | p99/s | p99.9/s | min/s | max/s | $ | $/month |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `GET` | 2,840,100 | 3,155.7 | 3,141 | 3,388 | 3,510 | 3,622 | 2,801 | 3,622 | $1.14 | $3,271.83 |
-| `PUT` | 84,200 | 93.6 | 92 | 108 | 116 | 124 | 71 | 124 | $0.4210 | $1,213.06 |
-| `HEAD` | 18,400 | 20.4 | 20 | 25 | 28 | 31 | 13 | 31 | $0.007360 | $21.15 |
+| Method | total | avg/s | p0.1/s | p1/s | p50/s | p99/s | p99.9/s | $ | $/month |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `GET` | 2,840,100 | 3,155.7 | 2,801 | 2,910 | 3,141 | 3,510 | 3,622 | $1.14 | $3,271.83 |
+| `PUT` | 84,200 | 93.6 | 71 | 76 | 92 | 116 | 124 | $0.4210 | $1,213.06 |
+| `HEAD` | 18,400 | 20.4 | 13 | 15 | 20 | 28 | 31 | $0.007360 | $21.15 |
 
 ### Object-store throughput
 
@@ -253,10 +253,10 @@ combines request and response bodies. Methods that transfer no body remain in
 the requests table and do not appear here. The `total` column uses GiB; the
 remaining columns use MiB/s.
 
-| Method | total | avg | p50 | p95 | p99 | p99.9 | min | max |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `GET` | 167.0 | 190.0 | 184 | 238 | 270 | 310 | 110 | 310 |
-| `PUT` | 83.5 | 95.0 | 92 | 121 | 139 | 158 | 54 | 158 |
+| Method | total | avg | p0.1 | p1 | p50 | p99 | p99.9 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `GET` | 167.0 | 190.0 | 110 | 138 | 184 | 270 | 310 |
+| `PUT` | 83.5 | 95.0 | 54 | 68 | 92 | 139 | 158 |
 
 ### Process statistics
 
@@ -265,10 +265,10 @@ embedded compactor, the async runtime, and the object-store client. CPU uses
 cores, where `1.0` means one fully occupied vCPU. RSS uses GiB. The runner
 calculates every column from complete one-second samples.
 
-| Metric | avg | p50 | p95 | p99 | p99.9 | min | max |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| CPU utilization (cores) | 6.8 | 6.7 | 9.1 | 10.8 | 12.4 | 2.3 | 12.4 |
-| RSS (GiB) | 7.1 | 7.2 | 7.7 | 7.8 | 7.9 | 5.9 | 7.9 |
+| Metric | avg | p0.1 | p1 | p50 | p99 | p99.9 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| CPU utilization (cores) | 6.8 | 2.3 | 3.1 | 6.7 | 10.8 | 12.4 |
+| RSS (GiB) | 7.1 | 5.9 | 6.1 | 7.2 | 7.8 | 7.9 |
 
 ### Machine statistics
 
@@ -276,16 +276,16 @@ CPU, network, and disk statistics cover the whole runner. RSS covers the
 benchmark process, including SlateDB and its embedded compactor. The runner
 calculates each column from complete one-second samples.
 
-| Metric | avg | p50 | p95 | p99 | p99.9 | min | max |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| CPU (%) | 46.2 | 45.8 | 63.1 | 74.4 | 88.7 | 21.0 | 88.7 |
-| RSS (GiB) | 7.1 | 7.2 | 7.7 | 7.8 | 7.8 | 5.9 | 7.8 |
-| Network receive (MiB/s) | 46.4 | 45.9 | 61.2 | 70.5 | 82.1 | 18.4 | 82.1 |
-| Network send (MiB/s) | 21.5 | 21.2 | 29.8 | 34.6 | 41.0 | 8.2 | 41.0 |
-| Disk read (MiB/s) | 14.9 | 14.2 | 22.4 | 27.1 | 34.8 | 3.1 | 34.8 |
-| Disk write (MiB/s) | 10.7 | 10.3 | 16.1 | 19.5 | 24.2 | 2.8 | 24.2 |
-| Disk read ops/s | 478 | 462 | 655 | 738 | 811 | 190 | 811 |
-| Disk write ops/s | 320 | 311 | 446 | 502 | 558 | 124 | 558 |
+| Metric | avg | p0.1 | p1 | p50 | p99 | p99.9 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| CPU (%) | 46.2 | 21.0 | 26.2 | 45.8 | 74.4 | 88.7 |
+| RSS (GiB) | 7.1 | 5.9 | 6.1 | 7.2 | 7.8 | 7.8 |
+| Network receive (MiB/s) | 46.4 | 18.4 | 24.1 | 45.9 | 70.5 | 82.1 |
+| Network send (MiB/s) | 21.5 | 8.2 | 10.4 | 21.2 | 34.6 | 41.0 |
+| Disk read (MiB/s) | 14.9 | 3.1 | 5.2 | 14.2 | 27.1 | 34.8 |
+| Disk write (MiB/s) | 10.7 | 2.8 | 4.3 | 10.3 | 19.5 | 24.2 |
+| Disk read ops/s | 478 | 190 | 248 | 462 | 738 | 811 |
+| Disk write ops/s | 320 | 124 | 171 | 311 | 502 | 558 |
 
 Result bundles record the resolved preparation or workload definition, source
 commits, scale, caches, and SlateDB settings. Preparation results identify the

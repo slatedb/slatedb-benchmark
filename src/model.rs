@@ -129,12 +129,11 @@ pub struct InitialState {
 pub struct RateSummary {
     pub total: u64,
     pub avg_per_second: f64,
+    pub p001_per_second: f64,
+    pub p01_per_second: f64,
     pub p50_per_second: f64,
-    pub p95_per_second: f64,
     pub p99_per_second: f64,
     pub p999_per_second: f64,
-    pub min_per_second: f64,
-    pub max_per_second: f64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -142,12 +141,11 @@ pub struct RateSummary {
 pub struct ThroughputSummary {
     pub total_bytes: u64,
     pub avg_bytes_per_second: f64,
+    pub p001_bytes_per_second: f64,
+    pub p01_bytes_per_second: f64,
     pub p50_bytes_per_second: f64,
-    pub p95_bytes_per_second: f64,
     pub p99_bytes_per_second: f64,
     pub p999_bytes_per_second: f64,
-    pub min_bytes_per_second: f64,
-    pub max_bytes_per_second: f64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -155,24 +153,22 @@ pub struct ThroughputSummary {
 pub struct LatencySummary {
     pub count: u64,
     pub avg_ns: f64,
+    pub p001_ns: u64,
+    pub p01_ns: u64,
     pub p50_ns: u64,
-    pub p95_ns: u64,
     pub p99_ns: u64,
     pub p999_ns: u64,
-    pub min_ns: u64,
-    pub max_ns: u64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DistributionSummary {
     pub avg: f64,
+    pub p001: f64,
+    pub p01: f64,
     pub p50: f64,
-    pub p95: f64,
     pub p99: f64,
     pub p999: f64,
-    pub min: f64,
-    pub max: f64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -228,8 +224,9 @@ pub struct HistogramSeries {
 #[serde(deny_unknown_fields)]
 pub struct LatencyTimeSeries {
     pub avg: Vec<Option<f64>>,
+    pub p001: Vec<Option<f64>>,
+    pub p01: Vec<Option<f64>>,
     pub p50: Vec<Option<f64>>,
-    pub p95: Vec<Option<f64>>,
     pub p99: Vec<Option<f64>>,
     pub p999: Vec<Option<f64>>,
 }

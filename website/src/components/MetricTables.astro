@@ -22,11 +22,11 @@ const {
   chartSeriesUrl,
   clientMeasurementNs,
 } = Astro.props;
-const statisticColumns = ['avg', 'p50', 'p95', 'p99', 'p99.9', 'min', 'max'];
-const latencyColumns = ['avg ms', 'p50', 'p95', 'p99', 'p99.9', 'min', 'max'];
-const rateColumns = ['total', 'avg/s', 'p50/s', 'p95/s', 'p99/s', 'p99.9/s', 'min/s', 'max/s'];
+const statisticColumns = ['avg', 'p0.1', 'p1', 'p50', 'p99', 'p99.9'];
+const latencyColumns = ['avg ms', 'p0.1', 'p1', 'p50', 'p99', 'p99.9'];
+const rateColumns = ['total', 'avg/s', 'p0.1/s', 'p1/s', 'p50/s', 'p99/s', 'p99.9/s'];
 const objectRequestColumns = [...rateColumns, '$', '$/month'];
-const throughputColumns = ['total GiB', 'avg MiB/s', 'p50', 'p95', 'p99', 'p99.9', 'min', 'max'];
+const throughputColumns = ['total GiB', 'avg MiB/s', 'p0.1', 'p1', 'p50', 'p99', 'p99.9'];
 const number = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 });
 const compact = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 2 });
 const usd = (value: number) => {
@@ -51,38 +51,35 @@ const ordered = <T,>(values: Record<string, T>, order = apiOrder) => Object.entr
 const rateValues = (value: RateSummary) => [
   compact.format(value.total),
   compact.format(value.avg_per_second),
+  compact.format(value.p001_per_second),
+  compact.format(value.p01_per_second),
   compact.format(value.p50_per_second),
-  compact.format(value.p95_per_second),
   compact.format(value.p99_per_second),
   compact.format(value.p999_per_second),
-  compact.format(value.min_per_second),
-  compact.format(value.max_per_second),
 ];
 const throughputValues = (value: ThroughputSummary) => {
   const mib = (bytes: number) => number.format(bytes / 1024 / 1024);
   return [
     number.format(value.total_bytes / 1024 / 1024 / 1024),
     mib(value.avg_bytes_per_second),
+    mib(value.p001_bytes_per_second),
+    mib(value.p01_bytes_per_second),
     mib(value.p50_bytes_per_second),
-    mib(value.p95_bytes_per_second),
     mib(value.p99_bytes_per_second),
     mib(value.p999_bytes_per_second),
-    mib(value.min_bytes_per_second),
-    mib(value.max_bytes_per_second),
   ];
 };
 const latencyValues = (value: LatencySummary) => {
   const ms = (nanoseconds: number) => number.format(nanoseconds / 1_000_000);
-  return [ms(value.avg_ns), ms(value.p50_ns), ms(value.p95_ns), ms(value.p99_ns), ms(value.p999_ns), ms(value.min_ns), ms(value.max_ns)];
+  return [ms(value.avg_ns), ms(value.p001_ns), ms(value.p01_ns), ms(value.p50_ns), ms(value.p99_ns), ms(value.p999_ns)];
 };
 const distributionValues = (value: DistributionSummary, divisor = 1) => [
   number.format(value.avg / divisor),
+  number.format(value.p001 / divisor),
+  number.format(value.p01 / divisor),
   number.format(value.p50 / divisor),
-  number.format(value.p95 / divisor),
   number.format(value.p99 / divisor),
   number.format(value.p999 / divisor),
-  number.format(value.min / divisor),
-  number.format(value.max / divisor),
 ];
 
 const timeChart = (source: string, key: string | undefined, unit: string, average: number, divisor = 1) =>

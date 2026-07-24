@@ -770,13 +770,17 @@ impl SampledMeasurement {
                         .iter()
                         .map(|summary| summary.as_ref().map(|value| value.avg_ns))
                         .collect(),
+                    p001: summaries
+                        .iter()
+                        .map(|summary| summary.as_ref().map(|value| value.p001_ns as f64))
+                        .collect(),
+                    p01: summaries
+                        .iter()
+                        .map(|summary| summary.as_ref().map(|value| value.p01_ns as f64))
+                        .collect(),
                     p50: summaries
                         .iter()
                         .map(|summary| summary.as_ref().map(|value| value.p50_ns as f64))
-                        .collect(),
-                    p95: summaries
-                        .iter()
-                        .map(|summary| summary.as_ref().map(|value| value.p95_ns as f64))
                         .collect(),
                     p99: summaries
                         .iter()
@@ -1067,12 +1071,11 @@ fn rate_summary(total: u64, elapsed: Duration, windows: &[f64]) -> RateSummary {
     RateSummary {
         total,
         avg_per_second: rate(total, elapsed),
+        p001_per_second: distribution.p001,
+        p01_per_second: distribution.p01,
         p50_per_second: distribution.p50,
-        p95_per_second: distribution.p95,
         p99_per_second: distribution.p99,
         p999_per_second: distribution.p999,
-        min_per_second: distribution.min,
-        max_per_second: distribution.max,
     }
 }
 
@@ -1081,12 +1084,11 @@ fn throughput_summary(total_bytes: u64, elapsed: Duration, windows: &[f64]) -> T
     ThroughputSummary {
         total_bytes,
         avg_bytes_per_second: rate(total_bytes, elapsed),
+        p001_bytes_per_second: distribution.p001,
+        p01_bytes_per_second: distribution.p01,
         p50_bytes_per_second: distribution.p50,
-        p95_bytes_per_second: distribution.p95,
         p99_bytes_per_second: distribution.p99,
         p999_bytes_per_second: distribution.p999,
-        min_bytes_per_second: distribution.min,
-        max_bytes_per_second: distribution.max,
     }
 }
 
@@ -1102,12 +1104,11 @@ fn summarize_values(mut values: Vec<f64>) -> DistributionSummary {
     };
     DistributionSummary {
         avg: values.iter().sum::<f64>() / values.len() as f64,
+        p001: percentile(0.001),
+        p01: percentile(0.01),
         p50: percentile(0.5),
-        p95: percentile(0.95),
         p99: percentile(0.99),
         p999: percentile(0.999),
-        min: values[0],
-        max: values[values.len() - 1],
     }
 }
 
@@ -1386,8 +1387,8 @@ mod tests {
     fn distribution_contains_the_published_columns() {
         let summary = summarize_values(vec![1.0, 2.0, 3.0, 4.0]);
         assert_eq!(summary.avg, 2.5);
-        assert_eq!(summary.min, 1.0);
-        assert_eq!(summary.max, 4.0);
+        assert_eq!(summary.p001, 1.0);
+        assert_eq!(summary.p01, 1.0);
         assert_eq!(summary.p50, 3.0);
     }
 
@@ -1476,11 +1477,11 @@ mod tests {
         let measurement = sampler.await.expect("join sampler").expect("measurement");
         let application = measurement.application();
         assert_eq!(application.operations["flush"].total, 1);
-        assert!(application.operations["flush"].min_per_second > 0.0);
+        assert!(application.operations["flush"].p001_per_second > 0.0);
         let object_store = measurement.object_store();
         assert_eq!(object_store.requests["GET"].total, 1);
-        assert!(object_store.requests["GET"].min_per_second > 0.0);
-        assert!(object_store.throughput["GET"].min_bytes_per_second > 0.0);
+        assert!(object_store.requests["GET"].p001_per_second > 0.0);
+        assert!(object_store.throughput["GET"].p001_bytes_per_second > 0.0);
     }
 
     #[tokio::test]
@@ -1515,13 +1516,13 @@ mod tests {
         let measurement = sampler.await.expect("join sampler").expect("measurement");
         let application = measurement.application();
         assert_eq!(application.operations["get"].total, 1);
-        assert!(application.operations["get"].min_per_second > 0.0);
+        assert!(application.operations["get"].p001_per_second > 0.0);
         assert_eq!(application.operations["flush"].total, 1);
         assert_eq!(application.operations["flush"].p50_per_second, 0.0);
 
         let object_store = measurement.object_store();
         assert_eq!(object_store.requests["GET"].total, 1);
-        assert!(object_store.requests["GET"].min_per_second > 0.0);
+        assert!(object_store.requests["GET"].p001_per_second > 0.0);
         assert_eq!(object_store.requests["PUT"].total, 1);
         assert_eq!(object_store.requests["PUT"].p50_per_second, 0.0);
 
@@ -1546,8 +1547,9 @@ mod tests {
             let latency = &series.application.latency_ns[name];
             for values in [
                 &latency.avg,
+                &latency.p001,
+                &latency.p01,
                 &latency.p50,
-                &latency.p95,
                 &latency.p99,
                 &latency.p999,
             ] {

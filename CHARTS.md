@@ -44,11 +44,11 @@ The average reference may differ from the arithmetic mean of plotted points.
 The table divides totals by the full recorded interval, including partial
 boundary intervals, while rate percentiles and charts use complete buckets.
 
-Application latency plots `avg`, `p50`, `p95`, `p99`, and `p99.9` for calls
-completed in each sampling window. Windows with no calls for that API appear
-as gaps. The aggregate HDR histogram remains in the sidecar so the published
-table can be validated. Time-chart tooltips show elapsed time, values, and
-whether the point falls in measurement or drain.
+Application latency plots `avg`, `p0.1`, `p1`, `p50`, `p99`, and `p99.9` for
+calls completed in each sampling window. Windows with no calls for that API
+appear as gaps. The aggregate HDR histogram remains in the sidecar so the
+published table can be validated. Time-chart tooltips show elapsed time,
+values, and whether the point falls in measurement or drain.
 
 ## Data contract
 
@@ -91,8 +91,9 @@ results/<version>/workload/<name>/
     "latency_ns": {
       "get": {
         "avg": [72000.0, 68000.0, null],
+        "p001": [18000.0, 17000.0, null],
+        "p01": [26000.0, 25000.0, null],
         "p50": [61000.0, 59000.0, null],
-        "p95": [98000.0, 91000.0, null],
         "p99": [121000.0, 117000.0, null],
         "p999": [164000.0, 151000.0, null]
       }

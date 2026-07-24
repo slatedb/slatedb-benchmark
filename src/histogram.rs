@@ -59,12 +59,11 @@ impl LatencyHistogram {
         LatencySummary {
             count: self.len(),
             avg_ns: self.inner.mean() * 1_000.0,
+            p001_ns: self.inner.value_at_quantile(0.001) * 1_000,
+            p01_ns: self.inner.value_at_quantile(0.01) * 1_000,
             p50_ns: self.inner.value_at_quantile(0.50) * 1_000,
-            p95_ns: self.inner.value_at_quantile(0.95) * 1_000,
             p99_ns: self.inner.value_at_quantile(0.99) * 1_000,
             p999_ns: self.inner.value_at_quantile(0.999) * 1_000,
-            min_ns: self.inner.min() * 1_000,
-            max_ns: self.inner.max() * 1_000,
         }
     }
 

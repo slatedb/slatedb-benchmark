@@ -14,7 +14,7 @@ type DestroyChart = () => void;
 
 const number = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 });
 const seriesColor = '#a45632';
-const latencyColors = ['#286f91', '#4f7b67', '#b07a24', '#ad5537', '#7b466c'];
+const latencyColors = ['#286f91', '#4f7b67', '#8c7a35', '#b07a24', '#ad5537', '#7b466c'];
 
 export function initializeMetricCharts() {
   document.querySelectorAll<HTMLElement>('[data-metric-charts]').forEach((root) => {
@@ -197,8 +197,9 @@ function renderLatencySeries(
   const values = raw as Record<string, unknown>;
   const definitions = [
     { key: 'avg', label: 'avg' },
+    { key: 'p001', label: 'p0.1' },
+    { key: 'p01', label: 'p1' },
     { key: 'p50', label: 'p50' },
-    { key: 'p95', label: 'p95' },
     { key: 'p99', label: 'p99' },
     { key: 'p999', label: 'p99.9' },
   ];

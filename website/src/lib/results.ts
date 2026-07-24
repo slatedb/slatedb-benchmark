@@ -101,44 +101,40 @@ export type PreparationResult = {
 export type RateSummary = {
   total: number;
   avg_per_second: number;
+  p001_per_second: number;
+  p01_per_second: number;
   p50_per_second: number;
-  p95_per_second: number;
   p99_per_second: number;
   p999_per_second: number;
-  min_per_second: number;
-  max_per_second: number;
 };
 
 export type ThroughputSummary = {
   total_bytes: number;
   avg_bytes_per_second: number;
+  p001_bytes_per_second: number;
+  p01_bytes_per_second: number;
   p50_bytes_per_second: number;
-  p95_bytes_per_second: number;
   p99_bytes_per_second: number;
   p999_bytes_per_second: number;
-  min_bytes_per_second: number;
-  max_bytes_per_second: number;
 };
 
 export type LatencySummary = {
   count: number;
   avg_ns: number;
+  p001_ns: number;
+  p01_ns: number;
   p50_ns: number;
-  p95_ns: number;
   p99_ns: number;
   p999_ns: number;
-  min_ns: number;
-  max_ns: number;
 };
 
 export type DistributionSummary = {
   avg: number;
+  p001: number;
+  p01: number;
   p50: number;
-  p95: number;
   p99: number;
   p999: number;
-  min: number;
-  max: number;
 };
 
 export type RecordedMetrics = {
@@ -209,8 +205,9 @@ export type WorkloadSeries = {
     bytes_per_second: Record<string, number[]>;
     latency_ns: Record<string, {
       avg: (number | null)[];
+      p001: (number | null)[];
+      p01: (number | null)[];
       p50: (number | null)[];
-      p95: (number | null)[];
       p99: (number | null)[];
       p999: (number | null)[];
     }>;
