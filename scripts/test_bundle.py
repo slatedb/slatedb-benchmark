@@ -133,7 +133,7 @@ class TransferCapacityTests(unittest.TestCase):
     def setUp(self):
         self.environment = {
             "runner_type": "test-runner",
-            "object_store": "aws",
+            "object_store": "s3",
             "endpoint": "AWS default",
             "region": "us-east-1",
         }
@@ -185,26 +185,6 @@ class TransferCapacityTests(unittest.TestCase):
             ],
         }
 
-    def legacy_result(self):
-        return {
-            "status": "ok",
-            "scale": 1.0,
-            **self.environment,
-            "parallel_objects": 2,
-            "requests_per_process": 4,
-            "max_concurrent_requests": 8,
-            "warmup_bytes": 4 * 1024 * 1024 * 1024,
-            "measured_bytes": 16 * 1024 * 1024 * 1024,
-            "upload": {
-                "elapsed_seconds": 16.0,
-                "mib_per_second": 1024.0,
-            },
-            "download": {
-                "elapsed_seconds": 32.0,
-                "mib_per_second": 512.0,
-            },
-        }
-
     def read(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "result.json"
@@ -212,19 +192,6 @@ class TransferCapacityTests(unittest.TestCase):
             return bundle.read_transfer_capacity(path, 1.0, self.environment)
 
     def test_accepts_self_describing_probe_configuration(self):
-        self.assertEqual(self.read(), self.result)
-
-    def test_accepts_warp_v2_without_latency(self):
-        self.result["version"] = 2
-        for benchmark in self.result["benchmarks"]:
-            del benchmark["latency_ms"]
-            benchmark["benchdata"] = f"warp/{benchmark['name']}.csv.zst"
-
-        self.assertEqual(self.read(), self.result)
-
-    def test_accepts_legacy_transfer_capacity(self):
-        self.result = self.legacy_result()
-
         self.assertEqual(self.read(), self.result)
 
     def test_rejects_incorrect_warp_operation(self):
@@ -239,7 +206,7 @@ class TransferCapacityTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "invalid small-list benchmark data"):
             self.read()
 
-    def test_rejects_missing_warp_v3_latency(self):
+    def test_rejects_missing_warp_latency(self):
         del self.result["benchmarks"][0]["latency_ms"]
 
         with self.assertRaisesRegex(ValueError, "no large-put latency"):

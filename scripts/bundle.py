@@ -111,43 +111,13 @@ def read_transfer_capacity(path, scale, environment):
     for field in ("runner_type", "object_store", "endpoint", "region"):
         if result.get(field) != environment[field]:
             raise ValueError(f"{path} used a different {field.replace('_', ' ')}")
-    if result.get("version") in (2, 3):
-        validate_warp_transfer_capacity(path, result)
-        return result
-    validate_legacy_transfer_capacity(path, result)
+    validate_warp_transfer_capacity(path, result)
     return result
 
 
-def validate_legacy_transfer_capacity(path, result):
-    for field in (
-        "parallel_objects",
-        "requests_per_process",
-        "max_concurrent_requests",
-        "warmup_bytes",
-        "measured_bytes",
-    ):
-        value = result.get(field)
-        if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
-            raise ValueError(f"{path} has an invalid {field.replace('_', ' ')}")
-    expected_concurrency = result["parallel_objects"] * result["requests_per_process"]
-    if result["max_concurrent_requests"] != expected_concurrency:
-        raise ValueError(f"{path} has inconsistent transfer concurrency")
-    if result["measured_bytes"] < result["warmup_bytes"]:
-        raise ValueError(f"{path} measures fewer bytes than it warms up")
-    for direction in ("upload", "download"):
-        measurement = result.get(direction)
-        if not isinstance(measurement, dict):
-            raise ValueError(f"{path} has no {direction} measurement")
-        for field in ("elapsed_seconds", "mib_per_second"):
-            value = measurement.get(field)
-            if not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
-                raise ValueError(f"{path} has an invalid {direction} {field}")
-        expected_rate = result["measured_bytes"] / 1024 / 1024 / measurement["elapsed_seconds"]
-        if not math.isclose(measurement["mib_per_second"], expected_rate, rel_tol=1e-9):
-            raise ValueError(f"{path} has an inconsistent {direction} rate")
-
-
 def validate_warp_transfer_capacity(path, result):
+    if result.get("version") != 3:
+        raise ValueError(f"{path} has unsupported transfer probe version")
     tool = result.get("tool")
     if (
         not isinstance(tool, dict)
@@ -181,10 +151,9 @@ def validate_warp_transfer_capacity(path, result):
             if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
                 raise ValueError(f"{path} has invalid {name} {field.replace('_', ' ')}")
         latency = benchmark.get("latency_ms")
-        if result["version"] == 3 and latency is None:
+        if latency is None:
             raise ValueError(f"{path} has no {name} latency")
-        if latency is not None:
-            validate_warp_latency(path, name, latency)
+        validate_warp_latency(path, name, latency)
         if benchmark.get("benchdata") != f"warp/{name}.csv.zst":
             raise ValueError(f"{path} has invalid {name} benchmark data")
 

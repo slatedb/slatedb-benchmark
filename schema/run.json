@@ -72,12 +72,7 @@
       "additionalProperties": { "type": "object" }
     },
     "max_parallel": { "type": "integer", "minimum": 1 },
-    "transfer_capacity": {
-      "oneOf": [
-        { "$ref": "#/$defs/legacyTransferCapacity" },
-        { "$ref": "#/$defs/warpTransferCapacity" }
-      ]
-    },
+    "transfer_capacity": { "$ref": "#/$defs/warpTransferCapacity" },
     "results": {
       "type": "object",
       "required": ["golden.json"],
@@ -108,55 +103,9 @@
         }
       }
     },
-    "legacyTransferCapacity": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "status",
-        "timestamp",
-        "scale",
-        "runner_type",
-        "object_store",
-        "endpoint",
-        "region",
-        "parallel_objects",
-        "requests_per_process",
-        "max_concurrent_requests",
-        "warmup_bytes",
-        "measured_bytes",
-        "upload",
-        "download"
-      ],
-      "properties": {
-        "status": { "const": "ok" },
-        "timestamp": { "type": "string", "format": "date-time" },
-        "scale": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
-        "runner_type": { "type": "string", "minLength": 1 },
-        "object_store": { "type": "string", "minLength": 1 },
-        "endpoint": { "type": "string", "minLength": 1 },
-        "region": { "type": "string", "minLength": 1 },
-        "parallel_objects": { "type": "integer", "minimum": 1 },
-        "requests_per_process": { "type": "integer", "minimum": 1 },
-        "max_concurrent_requests": { "type": "integer", "minimum": 1 },
-        "warmup_bytes": { "type": "integer", "minimum": 1 },
-        "measured_bytes": { "type": "integer", "minimum": 1 },
-        "upload": { "$ref": "#/$defs/transferMeasurement" },
-        "download": { "$ref": "#/$defs/transferMeasurement" }
-      }
-    },
     "warpTransferCapacity": {
       "type": "object",
       "additionalProperties": false,
-      "allOf": [
-        {
-          "if": { "properties": { "version": { "const": 3 } } },
-          "then": {
-            "properties": {
-              "benchmarks": { "items": { "required": ["latency_ms"] } }
-            }
-          }
-        }
-      ],
       "required": [
         "version",
         "status",
@@ -170,7 +119,7 @@
         "benchmarks"
       ],
       "properties": {
-        "version": { "enum": [2, 3] },
+        "version": { "const": 3 },
         "status": { "const": "ok" },
         "timestamp": { "type": "string", "format": "date-time" },
         "scale": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
@@ -204,6 +153,7 @@
         "object_size_bytes",
         "concurrency",
         "duration_seconds",
+        "latency_ms",
         "benchdata"
       ],
       "properties": {
@@ -217,7 +167,7 @@
         "latency_ms": { "$ref": "#/$defs/warpLatency" },
         "benchdata": {
           "type": "string",
-          "pattern": "^warp/(large-(put|get)|small-(put|get|list))\\.(csv|json)\\.zst$"
+          "pattern": "^warp/(large-(put|get)|small-(put|get|list))\\.csv\\.zst$"
         }
       }
     },
@@ -241,15 +191,6 @@
         "p99": { "type": "number", "minimum": 0 },
         "min": { "type": "number", "minimum": 0 },
         "max": { "type": "number", "minimum": 0 }
-      }
-    },
-    "transferMeasurement": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["elapsed_seconds", "mib_per_second"],
-      "properties": {
-        "elapsed_seconds": { "type": "number", "exclusiveMinimum": 0 },
-        "mib_per_second": { "type": "number", "exclusiveMinimum": 0 }
       }
     }
   }

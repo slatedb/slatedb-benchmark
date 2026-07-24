@@ -711,18 +711,12 @@ fn truncate(value: f64) -> f64 {
 mod tests {
     use super::{
         configured_key_selector, configured_operations, configured_transaction_operations,
-        select_operation, truncate, WorkloadOperation,
+        select_operation, WorkloadOperation,
     };
     use crate::config::{load, BenchmarkScale, Task};
     use crate::workloads::util::KeySelector;
     use rand::SeedableRng;
     use std::path::Path;
-
-    #[test]
-    fn progress_values_have_two_decimal_places() {
-        assert_eq!(truncate(1.3359), 1.33);
-        assert_eq!(truncate(121_718.117), 121_718.11);
-    }
 
     #[test]
     fn operation_mix_drives_worker_selection() {

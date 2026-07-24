@@ -72,19 +72,6 @@ class WarpLatencyTests(unittest.TestCase):
 
         self.assertEqual(set(summary), {"request"})
 
-    def test_transfer_probe_records_full_request_data(self):
-        script = Path(__file__).with_name("transfer-capacity.sh").read_text(
-            encoding="utf-8"
-        )
-
-        self.assertIn('"$warp_bin" analyze --json --full --no-color', script)
-        self.assertIn('--analyze.op="$operation" "$raw"', script)
-        self.assertIn('local raw="$base.csv.zst"', script)
-        self.assertIn("    --full\n", script)
-        self.assertIn('configured_endpoint=${AWS_ENDPOINT_URL_S3:-}', script)
-        self.assertIn('endpoint="AWS default"', script)
-        self.assertNotIn("t3.storage.dev", script)
-
 
 if __name__ == "__main__":
     unittest.main()

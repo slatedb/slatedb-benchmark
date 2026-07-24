@@ -1171,7 +1171,7 @@ pub fn verify_environment(environment: &Environment) -> Result<()> {
         "published runs require at least 30 GiB RAM"
     );
     match environment.object_store.as_str() {
-        "s3" | "aws" => {
+        "s3" => {
             anyhow::ensure!(
                 environment.endpoint == "AWS default",
                 "published S3 runs require the default AWS endpoint"

@@ -134,10 +134,8 @@ jobs:
               and .configuration.task.task == "compaction"
               and (.checkpoint | type == "object")
               and (.dataset | type == "object")' "$manifest" >/dev/null
-          jq -e --arg object_store "$OBJECT_STORE" '
-              (.environment.object_store | if . == "aws" then "s3" else . end) ==
-                $object_store
-            ' "$manifest" >/dev/null
+          jq -e --arg object_store "$OBJECT_STORE" \
+            '.environment.object_store == $object_store' "$manifest" >/dev/null
           jq -e --argjson scale "$BENCHMARK_SCALE" \
             '.configuration.scale == $scale' "$manifest" >/dev/null
           if [[ ${ACT:-false} == true ]]; then

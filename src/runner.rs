@@ -535,13 +535,8 @@ fn ensure_shared_configuration(
 }
 
 fn ensure_same_object_store(golden: &Environment, current: &Environment) -> Result<()> {
-    let same_provider = golden.object_store == current.object_store
-        || matches!(
-            (golden.object_store.as_str(), current.object_store.as_str()),
-            ("aws", "s3") | ("s3", "aws")
-        );
     anyhow::ensure!(
-        same_provider,
+        golden.object_store == current.object_store,
         "golden data uses object store {}, but the benchmark uses {}",
         golden.object_store,
         current.object_store
@@ -956,11 +951,11 @@ fn manifest_lsm_digest(manifest: &VersionedManifest) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        create_bytes, ensure_same_object_store, ensure_shared_configuration, sha256_bytes,
-        validate_name, validate_series_digest, SETTINGS_PATH,
+        create_bytes, ensure_shared_configuration, sha256_bytes, validate_name,
+        validate_series_digest, SETTINGS_PATH,
     };
     use crate::config::{self, BenchmarkScale, Task};
-    use crate::model::{Environment, ResultConfiguration, SeriesReference};
+    use crate::model::{ResultConfiguration, SeriesReference};
     use object_store::memory::InMemory;
     use object_store::path::Path as ObjectPath;
     use object_store::ObjectStore;
@@ -1039,24 +1034,5 @@ mod tests {
         golden.caches.metadata_bytes = 1;
 
         ensure_shared_configuration(&golden, &config).expect("compatible golden data");
-    }
-
-    #[test]
-    fn golden_object_store_matches_selected_provider() {
-        let golden = Environment {
-            object_store: "aws".to_string(),
-            ..Environment::default()
-        };
-        let s3 = Environment {
-            object_store: "s3".to_string(),
-            ..Environment::default()
-        };
-        ensure_same_object_store(&golden, &s3).expect("legacy AWS name matches S3");
-
-        let tigris = Environment {
-            object_store: "tigris".to_string(),
-            ..Environment::default()
-        };
-        assert!(ensure_same_object_store(&golden, &tigris).is_err());
     }
 }

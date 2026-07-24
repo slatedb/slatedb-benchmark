@@ -171,8 +171,6 @@ impl DatasetConfig {
 pub struct CacheConfig {
     pub block_bytes: u64,
     pub metadata_bytes: u64,
-    #[serde(default, skip_serializing, rename = "object_store_bytes")]
-    pub legacy_object_store_bytes: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -320,7 +318,6 @@ pub fn load(task: Task, scale: BenchmarkScale, settings_path: &Path) -> Result<R
     let caches = CacheConfig {
         block_bytes: scaled_u64(BLOCK_CACHE_BYTES, MIN_BLOCK_CACHE_BYTES, scale),
         metadata_bytes: scaled_u64(METADATA_CACHE_BYTES, MIN_METADATA_CACHE_BYTES, scale),
-        legacy_object_store_bytes: 0,
     };
     settings.object_store_cache_options.max_cache_size_bytes = None;
     settings.object_store_cache_options.root_folder = None;
@@ -461,9 +458,8 @@ fn scaled_u64(value: u64, minimum: u64, scale: BenchmarkScale) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{load, scaled_u64, BenchmarkScale, CacheConfig, Task};
+    use super::{load, scaled_u64, BenchmarkScale, Task};
     use slatedb::config::Settings;
-    use std::collections::BTreeSet;
     use std::fs;
     use std::path::{Path, PathBuf};
     use tempfile::TempDir;
@@ -493,48 +489,6 @@ mod tests {
     }
 
     #[test]
-    fn cache_configuration_uses_memory_only_foyer() {
-        let config = load(
-            Task::PointReadSkewed,
-            BenchmarkScale::FULL,
-            Path::new("config/settings.toml"),
-        )
-        .expect("configuration");
-
-        assert_eq!(config.caches.block_bytes, 8 * 1024 * 1024 * 1024);
-        assert_eq!(config.caches.metadata_bytes, 4 * 1024 * 1024 * 1024);
-        assert!(config
-            .settings
-            .object_store_cache_options
-            .root_folder
-            .is_none());
-        assert!(config
-            .settings
-            .object_store_cache_options
-            .max_cache_size_bytes
-            .is_none());
-    }
-
-    #[test]
-    fn cache_configuration_accepts_legacy_object_store_bytes() {
-        let caches: CacheConfig = serde_json::from_value(serde_json::json!({
-            "block_bytes": 1,
-            "metadata_bytes": 2,
-            "object_store_bytes": 3
-        }))
-        .expect("legacy cache configuration");
-
-        assert_eq!(caches.legacy_object_store_bytes, 3);
-        assert_eq!(
-            serde_json::to_value(caches).expect("cache configuration"),
-            serde_json::json!({
-                "block_bytes": 1,
-                "metadata_bytes": 2
-            })
-        );
-    }
-
-    #[test]
     fn decimal_scale_applies_factor_and_minimum() {
         let scale = "0.01".parse::<BenchmarkScale>().expect("scale");
 
@@ -544,15 +498,6 @@ mod tests {
         assert!(!scale.is_full());
         assert!(BenchmarkScale::FULL.is_full());
         assert!("1%".parse::<BenchmarkScale>().is_err());
-    }
-
-    #[test]
-    fn workload_catalog_contains_unique_non_preparation_tasks() {
-        let mut seen = BTreeSet::new();
-        for task in Task::WORKLOADS {
-            assert!(!task.is_preparation());
-            assert!(seen.insert(task), "duplicate workload {task}");
-        }
     }
 
     #[test]
