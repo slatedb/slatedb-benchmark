@@ -157,7 +157,7 @@ const machineHref = warpBuildDocs
       <dt>Machine</dt>
       <dd>
         {machineHref
-          ? <a href={machineHref}>{environment.runner_type} ↗</a>
+          ? <a href={machineHref} target="_blank" rel="noreferrer">{environment.runner_type}<span aria-hidden="true">&nbsp;↗</span></a>
           : environment.runner_type}
       </dd>
     </div>
@@ -182,9 +182,21 @@ const machineHref = warpBuildDocs
   <div class="context-links">
     <a href={rawResult}>Raw result</a>
     {rawSeries && <a href={rawSeries}>Raw time series</a>}
-    {actionsLogUrl && <a href={actionsLogUrl}>Actions log ↗</a>}
-    <a href={`https://github.com/slatedb/slatedb/tree/${source.slate_commit}`}>SlateDB source ↗</a>
-    <a href={`https://github.com/slatedb/slatedb-benchmark/tree/${source.runner_commit}`}>Benchmark source ↗</a>
+    {actionsLogUrl && <a href={actionsLogUrl} target="_blank" rel="noreferrer">Actions log ↗</a>}
+    <a
+      href={`https://github.com/slatedb/slatedb/tree/${source.slate_commit}`}
+      target="_blank"
+      rel="noreferrer"
+    >
+      SlateDB source ↗
+    </a>
+    <a
+      href={`https://github.com/slatedb/slatedb-benchmark/tree/${source.runner_commit}`}
+      target="_blank"
+      rel="noreferrer"
+    >
+      Benchmark source ↗
+    </a>
   </div>
 </aside>
 
