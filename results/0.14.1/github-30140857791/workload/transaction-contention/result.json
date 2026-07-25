@@ -1,0 +1,616 @@
+{
+  "status": "ok",
+  "task": "transaction-contention",
+  "golden_id": "golden",
+  "session": "github-30140857791",
+  "timestamp": "2026-07-25T03:02:42.549989483+00:00",
+  "actions_log_url": "https://github.com/slatedb/slatedb-benchmark/actions/runs/30140857791/job/89633809541",
+  "source": {
+    "slate_version": "0.14.1",
+    "slate_commit": "3fe856c15c43f158236e978947ca0b4b6b071306",
+    "runner_version": "0.1.0",
+    "runner_commit": "c309aba006d06cee26e5d7e98e7ba103b89eb2eb",
+    "lockfile_sha256": "ea3d624e4d60c200951858d62df16ee6fdd06b5da6a1cb3f3f4d743e69d64da2"
+  },
+  "environment": {
+    "runner_type": "warp-ubuntu-latest-arm64-16x",
+    "hostname": "ip-172-31-2-171",
+    "cpu_model": "Neoverse-V2",
+    "cpu_cores": 16,
+    "ram_bytes": 66192830464,
+    "local_disk": "/dev/root:/, /dev/nvme0n1p16:/boot, /dev/nvme0n1p15:/boot/efi",
+    "os": "Ubuntu 24.04",
+    "kernel": "6.17.0-1019-aws",
+    "object_store": "s3",
+    "endpoint": "AWS default",
+    "region": "us-east-1"
+  },
+  "configuration": {
+    "scale": 1.0,
+    "dataset": {
+      "record_count": 300000000,
+      "key_bytes": 20,
+      "value_bytes": 400,
+      "value_compression_ratio": 1.0
+    },
+    "caches": {
+      "block_bytes": 8589934592,
+      "metadata_bytes": 4294967296
+    },
+    "task": {
+      "task": "transaction-contention",
+      "clients": 64,
+      "warmup_ms": 300000,
+      "measurement_ms": 900000,
+      "initial_state": "golden",
+      "key_selection": "uniform-hot-set",
+      "operation_mix": {
+        "transaction": 1.0
+      },
+      "scan_limit": null,
+      "transaction_hot_keys": 10000,
+      "transaction_reads": 5,
+      "transaction_updates": 5
+    },
+    "slate_settings": {
+      "flush_interval": "100ms",
+      "wal_enabled": true,
+      "manifest_poll_interval": "1s",
+      "manifest_update_timeout": "300s",
+      "min_filter_keys": 1000,
+      "l0_sst_size_bytes": 67108864,
+      "max_wal_flushes_before_l0_flush": 4096,
+      "l0_max_ssts": 32,
+      "l0_max_ssts_per_key": 32,
+      "l0_flush_parallelism": 4,
+      "max_unflushed_bytes": 2147483648,
+      "compactor_options": {
+        "poll_interval": "5s",
+        "manifest_update_timeout": "300s",
+        "max_concurrent_compactions": 4,
+        "scheduler_options": {
+          "max_compaction_sources": "16"
+        },
+        "worker": {
+          "max_concurrent_compactions": 4,
+          "compactions_poll_interval": "5s",
+          "heartbeat_bytes": 5242880,
+          "heartbeat_min_interval": "5s",
+          "max_sst_size": 268435456,
+          "max_fetch_tasks": 4,
+          "bytes_to_fetch": 2097152,
+          "max_subcompactions": 8,
+          "min_filter_keys": 1000,
+          "compression_codec": null,
+          "metric_level": null
+        },
+        "metric_level": null,
+        "commit_compacted_interval": "1s",
+        "worker_heartbeat_timeout": "30s"
+      },
+      "compression_codec": null,
+      "object_store_cache_options": {
+        "root_folder": null,
+        "max_cache_size_bytes": null,
+        "part_size_bytes": 4194304,
+        "cache_puts": false,
+        "preload_disk_cache_on_startup": null,
+        "scan_interval": "3600s",
+        "max_open_file_handles": 1000
+      },
+      "garbage_collector_options": {
+        "manifest_options": {
+          "interval": "60s",
+          "min_age": "300s",
+          "dry_run": false
+        },
+        "wal_options": {
+          "interval": "60s",
+          "min_age": "300s",
+          "dry_run": false
+        },
+        "wal_fence_options": {
+          "interval": "60s",
+          "min_age": "300s",
+          "dry_run": true
+        },
+        "compacted_options": {
+          "interval": "60s",
+          "min_age": "300s",
+          "dry_run": false
+        },
+        "compactions_options": {
+          "interval": "60s",
+          "min_age": "300s",
+          "dry_run": false
+        },
+        "detach_options": {
+          "interval": "60s"
+        },
+        "metric_level": null
+      },
+      "metric_level": "Info",
+      "default_ttl": null
+    },
+    "slate_default_settings": {
+      "flush_interval": "100ms",
+      "wal_enabled": true,
+      "manifest_poll_interval": "1s",
+      "manifest_update_timeout": "300s",
+      "min_filter_keys": 1000,
+      "l0_sst_size_bytes": 67108864,
+      "max_wal_flushes_before_l0_flush": 4096,
+      "l0_max_ssts": 8,
+      "l0_max_ssts_per_key": 8,
+      "l0_flush_parallelism": 4,
+      "max_unflushed_bytes": 1073741824,
+      "compactor_options": {
+        "poll_interval": "5s",
+        "manifest_update_timeout": "300s",
+        "max_concurrent_compactions": 4,
+        "scheduler_options": {},
+        "worker": {
+          "max_concurrent_compactions": 4,
+          "compactions_poll_interval": "5s",
+          "heartbeat_bytes": 5242880,
+          "heartbeat_min_interval": "5s",
+          "max_sst_size": 268435456,
+          "max_fetch_tasks": 4,
+          "bytes_to_fetch": 2097152,
+          "max_subcompactions": 4,
+          "min_filter_keys": 1000,
+          "compression_codec": null,
+          "metric_level": null
+        },
+        "metric_level": null,
+        "commit_compacted_interval": "1s",
+        "worker_heartbeat_timeout": "30s"
+      },
+      "compression_codec": null,
+      "object_store_cache_options": {
+        "root_folder": null,
+        "max_cache_size_bytes": 17179869184,
+        "part_size_bytes": 4194304,
+        "cache_puts": false,
+        "preload_disk_cache_on_startup": null,
+        "scan_interval": "3600s",
+        "max_open_file_handles": 1000
+      },
+      "garbage_collector_options": {
+        "manifest_options": {
+          "interval": "60s",
+          "min_age": "300s",
+          "dry_run": false
+        },
+        "wal_options": {
+          "interval": "60s",
+          "min_age": "300s",
+          "dry_run": false
+        },
+        "wal_fence_options": {
+          "interval": "60s",
+          "min_age": "300s",
+          "dry_run": true
+        },
+        "compacted_options": {
+          "interval": "60s",
+          "min_age": "300s",
+          "dry_run": false
+        },
+        "compactions_options": {
+          "interval": "60s",
+          "min_age": "300s",
+          "dry_run": false
+        },
+        "detach_options": {
+          "interval": "60s"
+        },
+        "metric_level": null
+      },
+      "metric_level": "Info",
+      "default_ttl": null
+    },
+    "build_profile": "release",
+    "enabled_features": [
+      "aws",
+      "foyer",
+      "wal_disable",
+      "zstd"
+    ]
+  },
+  "initial_state": {
+    "kind": "golden",
+    "checkpoint_id": "a95f9a39-9207-4917-ac4f-6d0445ed2d52",
+    "manifest_id": 395,
+    "lsm_digest_sha256": "b71509a03c02f67a91f952062edf6bf09ac0ff31ee9b5f4bca47565916eccecc"
+  },
+  "client_measurement_ns": 900001377195,
+  "durability_drain_ns": 509521436,
+  "recorded_interval_ns": 900521752916,
+  "application": {
+    "operations": {
+      "flush": {
+        "total": 1,
+        "avg_per_second": 0.0011104673449162969,
+        "p001_per_second": 0.0,
+        "p01_per_second": 0.0,
+        "p50_per_second": 0.0,
+        "p99_per_second": 0.0,
+        "p999_per_second": 0.0,
+        "min_per_second": 0.0,
+        "max_per_second": 0.0
+      },
+      "transaction.commit": {
+        "total": 24326755,
+        "avg_per_second": 27014.067035279248,
+        "p001_per_second": 24037.86702460135,
+        "p01_per_second": 25006.981182222673,
+        "p50_per_second": 27072.975271348772,
+        "p99_per_second": 28747.590278169297,
+        "p999_per_second": 29179.387727266814,
+        "min_per_second": 24018.417501410215,
+        "max_per_second": 29663.388053782408
+      },
+      "transaction.conflict": {
+        "total": 6724011,
+        "avg_per_second": 7466.794642357974,
+        "p001_per_second": 6376.951053741678,
+        "p01_per_second": 6646.700051751309,
+        "p50_per_second": 7494.697828903982,
+        "p99_per_second": 7982.378476493084,
+        "p999_per_second": 8200.424669550923,
+        "min_per_second": 6319.5277986463125,
+        "max_per_second": 8305.425261137063
+      },
+      "transaction.get": {
+        "total": 155253830,
+        "avg_per_second": 172404.30838818612,
+        "p001_per_second": 153681.25765271936,
+        "p01_per_second": 159079.46886076624,
+        "p50_per_second": 172817.98362714556,
+        "p99_per_second": 183375.41432637177,
+        "p999_per_second": 187431.0585636756,
+        "min_per_second": 153167.03697423596,
+        "max_per_second": 189317.06278107569
+      },
+      "transaction.put": {
+        "total": 155253830,
+        "avg_per_second": 172404.30838818612,
+        "p001_per_second": 153679.25686822174,
+        "p01_per_second": 159074.4685316996,
+        "p50_per_second": 172812.63448691103,
+        "p99_per_second": 183373.41511772052,
+        "p999_per_second": 187429.06038605951,
+        "min_per_second": 153164.03736519002,
+        "max_per_second": 189318.0631988712
+      }
+    },
+    "throughput": {
+      "transaction.get": {
+        "total_bytes": 65206608600,
+        "avg_bytes_per_second": 72409809.52303816,
+        "p001_bytes_per_second": 64546128.21414213,
+        "p01_bytes_per_second": 66813376.92152183,
+        "p50_bytes_per_second": 72583553.12340114,
+        "p99_bytes_per_second": 77017674.01707613,
+        "p999_bytes_per_second": 78721044.59674375,
+        "min_bytes_per_second": 64330155.52917911,
+        "max_bytes_per_second": 79513166.3680518
+      },
+      "transaction.put": {
+        "total_bytes": 65206608600,
+        "avg_bytes_per_second": 72409809.52303816,
+        "p001_bytes_per_second": 64545287.884653136,
+        "p01_bytes_per_second": 66811276.78331383,
+        "p50_bytes_per_second": 72581306.48450263,
+        "p99_bytes_per_second": 77016834.34944262,
+        "p999_bytes_per_second": 78720205.362145,
+        "min_bytes_per_second": 64328895.693379804,
+        "max_bytes_per_second": 79513586.54352589
+      }
+    },
+    "latency": {
+      "durable": {
+        "count": 24326755,
+        "avg_ns": 451487456.8574411,
+        "p001_ns": 181247000,
+        "p01_ns": 215167000,
+        "p50_ns": 408831000,
+        "p99_ns": 1267711000,
+        "p999_ns": 2449407000,
+        "min_ns": 140288000,
+        "max_ns": 3026943000
+      },
+      "flush": {
+        "count": 1,
+        "avg_ns": 509312000.0,
+        "p001_ns": 509439000,
+        "p01_ns": 509439000,
+        "p50_ns": 509439000,
+        "p99_ns": 509439000,
+        "p999_ns": 509439000,
+        "min_ns": 509184000,
+        "max_ns": 509439000
+      },
+      "transaction.commit": {
+        "count": 24326755,
+        "avg_ns": 1658603.343766975,
+        "p001_ns": 671000,
+        "p01_ns": 1321000,
+        "p50_ns": 1613000,
+        "p99_ns": 2321000,
+        "p999_ns": 3335000,
+        "min_ns": 8000,
+        "max_ns": 14999000
+      },
+      "transaction.conflict": {
+        "count": 6724011,
+        "avg_ns": 1650795.850125766,
+        "p001_ns": 1057000,
+        "p01_ns": 1328000,
+        "p50_ns": 1604000,
+        "p99_ns": 2301000,
+        "p999_ns": 3295000,
+        "min_ns": 8000,
+        "max_ns": 13479000
+      },
+      "transaction.get": {
+        "count": 155253830,
+        "avg_ns": 34645.54399076653,
+        "p001_ns": 15000,
+        "p01_ns": 17000,
+        "p50_ns": 30000,
+        "p99_ns": 87000,
+        "p999_ns": 143000,
+        "min_ns": 9000,
+        "max_ns": 11271000
+      },
+      "transaction.put": {
+        "count": 155253830,
+        "avg_ns": 1249.9181759316298,
+        "p001_ns": 1000,
+        "p01_ns": 1000,
+        "p50_ns": 1000,
+        "p99_ns": 5000,
+        "p999_ns": 18000,
+        "min_ns": 1000,
+        "max_ns": 8783000
+      }
+    }
+  },
+  "object_store": {
+    "requests": {
+      "DELETE": {
+        "total": 6128,
+        "avg_per_second": 6.804943889647067,
+        "p001_per_second": 0.0,
+        "p01_per_second": 0.0,
+        "p50_per_second": 0.0,
+        "p99_per_second": 31.995972730904302,
+        "p999_per_second": 33.0000654721299,
+        "min_per_second": 0.0,
+        "max_per_second": 34.00479858715263
+      },
+      "GET": {
+        "total": 42789,
+        "avg_per_second": 47.51578722162343,
+        "p001_per_second": 3.997510378518831,
+        "p01_per_second": 4.000196897691699,
+        "p50_per_second": 16.993421659547952,
+        "p99_per_second": 324.7257116600521,
+        "p999_per_second": 410.9464392958344,
+        "min_per_second": 3.996803216899011,
+        "max_per_second": 438.1111544953405
+      },
+      "HEAD": {
+        "total": 252,
+        "avg_per_second": 0.2798377709189068,
+        "p001_per_second": 0.0,
+        "p01_per_second": 0.0,
+        "p50_per_second": 0.0,
+        "p99_per_second": 3.999461656463193,
+        "p999_per_second": 5.997549557187222,
+        "min_per_second": 0.0,
+        "max_per_second": 6.002928744893631
+      },
+      "LIST": {
+        "total": 4733,
+        "avg_per_second": 5.255841943488833,
+        "p001_per_second": 1.9980424997805823,
+        "p01_per_second": 1.9984016084495055,
+        "p50_per_second": 4.002379502666685,
+        "p99_per_second": 13.99330083316583,
+        "p999_per_second": 14.996748524958807,
+        "min_per_second": 0.9994743524506616,
+        "max_per_second": 16.005585549217038
+      },
+      "POST": {
+        "total": 1633,
+        "avg_per_second": 1.8133931742483127,
+        "p001_per_second": 0.9967724617334044,
+        "p01_per_second": 0.9992478062213888,
+        "p50_per_second": 1.9997111637192235,
+        "p99_per_second": 2.001991617296736,
+        "p999_per_second": 3.001365996699248,
+        "min_per_second": 0.0,
+        "max_per_second": 3.0019367355081537
+      },
+      "PUT": {
+        "total": 10319,
+        "avg_per_second": 11.458912532191269,
+        "p001_per_second": 3.998592203647086,
+        "p01_per_second": 4.001714962959381,
+        "p50_per_second": 9.997683766618,
+        "p99_per_second": 27.007686171422897,
+        "p999_per_second": 29.019701301095104,
+        "min_per_second": 3.00203219567454,
+        "max_per_second": 31.0172665368494
+      }
+    },
+    "throughput": {
+      "DELETE": {
+        "total_bytes": 2756458,
+        "avg_bytes_per_second": 3060.9565966332857,
+        "p001_bytes_per_second": 0.0,
+        "p01_bytes_per_second": 0.0,
+        "p50_bytes_per_second": 0.0,
+        "p99_bytes_per_second": 14351.161738739487,
+        "p999_bytes_per_second": 15015.029789819102,
+        "min_bytes_per_second": 0.0,
+        "max_bytes_per_second": 15472.183357154445
+      },
+      "GET": {
+        "total_bytes": 26060120418,
+        "avg_bytes_per_second": 28938912.72877544,
+        "p001_bytes_per_second": 103554.89376586767,
+        "p01_bytes_per_second": 104193.61266942987,
+        "p50_bytes_per_second": 317428.7504665505,
+        "p99_bytes_per_second": 322879830.9057072,
+        "p999_bytes_per_second": 393441531.1979197,
+        "min_bytes_per_second": 28676.370938487555,
+        "max_bytes_per_second": 474664769.8275947
+      },
+      "LIST": {
+        "total_bytes": 1202138225,
+        "avg_bytes_per_second": 1334935.24293814,
+        "p001_bytes_per_second": 415468.35775708617,
+        "p01_bytes_per_second": 444308.5761088558,
+        "p50_bytes_per_second": 1061653.273940574,
+        "p99_bytes_per_second": 3667282.290358,
+        "p999_bytes_per_second": 4340182.996244219,
+        "min_bytes_per_second": 298845.29300964734,
+        "max_bytes_per_second": 4505778.404018542
+      },
+      "POST": {
+        "total_bytes": 1273575,
+        "avg_bytes_per_second": 1414.2634488017727,
+        "p001_bytes_per_second": 514.5864716217806,
+        "p01_bytes_per_second": 514.8615089472927,
+        "p50_bytes_per_second": 1539.5870165599167,
+        "p99_bytes_per_second": 1884.287208709213,
+        "p999_bytes_per_second": 2255.4421231571637,
+        "min_bytes_per_second": 514.5824369357241,
+        "max_bytes_per_second": 3168.18095529199
+      },
+      "PUT": {
+        "total_bytes": 77776780789,
+        "avg_bytes_per_second": 86368575.25889768,
+        "p001_bytes_per_second": 45472059.279193975,
+        "p01_bytes_per_second": 50533461.53259783,
+        "p50_bytes_per_second": 85715674.37501109,
+        "p99_bytes_per_second": 133488475.8295761,
+        "p999_bytes_per_second": 162622634.4000858,
+        "min_bytes_per_second": 36167079.794925034,
+        "max_bytes_per_second": 192581787.05591163
+      }
+    }
+  },
+  "process": {
+    "cpu_cores": {
+      "avg": 8.287693551296663,
+      "p001": 6.901155395507812,
+      "p01": 7.023886108398438,
+      "p50": 8.108456420898438,
+      "p99": 10.943543701171874,
+      "p999": 11.190750732421876,
+      "min": 6.757634887695312,
+      "max": 11.387012939453124
+    },
+    "rss_bytes": {
+      "avg": 13661089905.77778,
+      "p001": 10334208000.0,
+      "p01": 10665914368.0,
+      "p50": 13754626048.0,
+      "p99": 15296020480.0,
+      "p999": 15341363200.0,
+      "min": 10246291456.0,
+      "max": 15380381696.0
+    }
+  },
+  "machine": {
+    "cpu_percent": {
+      "avg": 50.88115937974718,
+      "p001": 41.92083358764648,
+      "p01": 42.85714340209961,
+      "p50": 49.77434158325195,
+      "p99": 67.11538696289062,
+      "p999": 69.6210708618164,
+      "min": 40.54581069946289,
+      "max": 69.80519104003906
+    },
+    "memory_used_bytes": {
+      "avg": 14958613412.977776,
+      "p001": 11605622784.0,
+      "p01": 12028137472.0,
+      "p50": 15038455808.0,
+      "p99": 16620412928.0,
+      "p999": 16652775424.0,
+      "min": 11557376000.0,
+      "max": 16676495360.0
+    },
+    "network_receive_bytes_per_second": {
+      "avg": 31218655.933990207,
+      "p001": 674874.3392851587,
+      "p01": 701403.0371423096,
+      "p50": 2054164.0546581277,
+      "p99": 332026192.528777,
+      "p999": 401776202.8238359,
+      "min": 657977.3736452434,
+      "max": 489014189.85958153
+    },
+    "network_send_bytes_per_second": {
+      "avg": 88844729.74139652,
+      "p001": 48293090.824281625,
+      "p01": 53269049.91271032,
+      "p50": 88090722.45140499,
+      "p99": 136994735.2452901,
+      "p999": 150342620.67327088,
+      "min": 47884654.93519618,
+      "max": 159957707.65139112
+    },
+    "disk_read_bytes_per_second": {
+      "avg": 2093.560573238763,
+      "p001": 0.0,
+      "p01": 0.0,
+      "p50": 0.0,
+      "p99": 81899.85108053702,
+      "p999": 262146.3808134306,
+      "min": 0.0,
+      "max": 479229.2923544982
+    },
+    "disk_write_bytes_per_second": {
+      "avg": 20589.965669137535,
+      "p001": 0.0,
+      "p01": 0.0,
+      "p50": 0.0,
+      "p99": 192547.09652201855,
+      "p999": 1458306.6467758715,
+      "min": 0.0,
+      "max": 2444417.7391031617
+    },
+    "disk_read_operations_per_second": {
+      "avg": 0.15000113842471072,
+      "p001": 0.0,
+      "p01": 0.0,
+      "p50": 0.0,
+      "p99": 0.9997958586821868,
+      "p999": 3.0000272462474507,
+      "min": 0.0,
+      "max": 116.9993389537349
+    },
+    "disk_write_operations_per_second": {
+      "avg": 0.5822772392043066,
+      "p001": 0.0,
+      "p01": 0.0,
+      "p50": 0.0,
+      "p99": 11.015789261221787,
+      "p999": 27.007686171422897,
+      "min": 0.0,
+      "max": 37.02177724598585
+    }
+  },
+  "series": {
+    "file": "series.json",
+    "sha256": "980b9426dd90bdfdc5684f0c3630544f757b942ed2620938b5eda732aa11d47e"
+  }
+}
