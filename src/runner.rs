@@ -572,6 +572,7 @@ fn ensure_same_object_store(golden: &Environment, current: &Environment) -> Resu
 
 fn bulk_load_config(config: &ResolvedConfig) -> Result<ResolvedConfig> {
     let mut config = config.clone();
+    config.settings.wal_enabled = false;
     config.settings.compactor_options = None;
     config.settings.l0_max_ssts = u32::MAX as usize;
     config.settings.l0_max_ssts_per_key = u32::MAX as usize;
