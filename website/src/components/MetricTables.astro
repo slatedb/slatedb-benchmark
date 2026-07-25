@@ -105,6 +105,9 @@ const applicationLatency = ordered(result.application.latency).map(([label, valu
   label,
   values: latencyValues(value),
   chart: latencyChart(label),
+  help: label === 'durable'
+    ? 'Time from when a write returns until SlateDB first reports its sequence durable.'
+    : undefined,
 }));
 const monthSeconds = S3_STANDARD_REQUEST_PRICING.monthDays * 86_400;
 const objectRequests = ordered(result.object_store.requests, objectStoreOrder).map(([label, value]) => {

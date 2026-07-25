@@ -48,7 +48,8 @@ export function initializeMetricCharts() {
         const panel = detail?.querySelector<HTMLElement>('[data-chart-panel]');
         if (!button || !detail || !panel) return;
 
-        row.addEventListener('click', () => {
+        row.addEventListener('click', (event) => {
+          if (event.target instanceof Element && event.target.closest('[data-metric-help]')) return;
           if (button.getAttribute('aria-expanded') === 'true') {
             closeRow(row, button, detail, panel, destroyers, closeTimers);
             return;

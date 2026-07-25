@@ -6,9 +6,13 @@ HTML. Preparation pages are outside this feature.
 
 ## Interaction
 
-Put a button in the row header and let clicks anywhere in the row activate it.
-The button supports Enter and Space and uses `aria-expanded` and
-`aria-controls`.
+Put a button in the row header and let clicks anywhere except inline help
+controls activate it. The button supports Enter and Space and uses
+`aria-expanded` and `aria-controls`.
+
+The `durable` latency row includes a tooltip explaining that it measures from
+write return until SlateDB reports the sequence durable. The tooltip opens on
+hover, focus, or tap without opening the chart.
 
 The chart belongs in a second `<tr>` whose only cell spans the table. Opening
 another row in the same table closes the first. Clicking the open row closes

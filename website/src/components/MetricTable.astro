@@ -2,6 +2,7 @@
 interface Row {
   label: string;
   values: string[];
+  help?: string;
   chart?: {
     kind: 'time' | 'latency';
     source: string;
@@ -47,22 +48,46 @@ const {
         <tbody>
           {rows.map((row, index) => {
             const panelId = `${idPrefix}-${index}-chart`;
+            const helpId = `${idPrefix}-${index}-help`;
+            const label = codeLabels ? <code>{row.label}</code> : row.label;
             return (
               <Fragment>
                 <tr class:list={{ 'chart-trigger-row': row.chart }} data-chart-row={row.chart ? '' : undefined}>
                   <th scope="row">
-                    {row.chart ? (
-                      <button
-                        type="button"
-                        class="chart-row-button"
-                        aria-expanded="false"
-                        aria-controls={panelId}
-                        data-chart={JSON.stringify({ ...row.chart, label: row.label })}
-                      >
-                        <span>{codeLabels ? <code>{row.label}</code> : row.label}</span>
+                    {row.chart || row.help ? (
+                      <div class:list={{ 'metric-row-controls': true, 'chart-row-controls': row.chart }}>
+                        {row.chart ? (
+                          <button
+                            type="button"
+                            class="chart-row-button"
+                            aria-expanded="false"
+                            aria-controls={panelId}
+                            data-chart={JSON.stringify({ ...row.chart, label: row.label })}
+                          >
+                            {label}
+                          </button>
+                        ) : label}
+                        {row.help && (
+                          <span class="metric-help">
+                            <button
+                              type="button"
+                              class="metric-help-trigger"
+                              aria-label={`About ${row.label} latency`}
+                              aria-describedby={helpId}
+                              data-metric-help
+                            >
+                              i
+                            </button>
+                            <span class="metric-help-tooltip" id={helpId} role="tooltip">
+                              {row.help}
+                            </span>
+                          </span>
+                        )}
+                        {row.chart && (
                         <span class="chart-row-icon" aria-hidden="true">›</span>
-                      </button>
-                    ) : codeLabels ? <code>{row.label}</code> : row.label}
+                        )}
+                      </div>
+                    ) : label}
                   </th>
                   {row.values.map((value) => <td>{value}</td>)}
                 </tr>
@@ -85,3 +110,13 @@ const {
     <p class="empty-table">No calls were recorded.</p>
   )}
 </section>
+
+<script>
+  document.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return;
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && active.matches('[data-metric-help]')) {
+      active.blur();
+    }
+  });
+</script>
