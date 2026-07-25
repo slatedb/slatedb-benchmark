@@ -55,6 +55,7 @@ export type BenchmarkRun = {
   id: string;
   startedAt: string;
   finishedAt: string;
+  runnerCommit: string;
   patches: AppliedPatch[];
 };
 
@@ -159,6 +160,7 @@ async function loadRuns(): Promise<StoredRun[]> {
         id: manifest.run_id,
         startedAt: manifest.started_at,
         finishedAt: manifest.finished_at,
+        runnerCommit: manifest.source.runner_commit,
         patches: manifest.patches,
       },
     };

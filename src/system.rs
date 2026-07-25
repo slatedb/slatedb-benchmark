@@ -511,6 +511,7 @@ struct ResourceWindow {
     process_cpu_cores: f64,
     process_rss_bytes: f64,
     machine_cpu_percent: f64,
+    machine_memory_used_bytes: f64,
     network_receive_bytes_per_second: f64,
     network_send_bytes_per_second: f64,
     disk_read_bytes_per_second: f64,
@@ -688,7 +689,7 @@ impl SampledMeasurement {
         };
         MachineStatistics {
             cpu_percent: values(|window| window.machine_cpu_percent),
-            rss_bytes: values(|window| window.process_rss_bytes),
+            memory_used_bytes: values(|window| window.machine_memory_used_bytes),
             network_receive_bytes_per_second: values(|window| {
                 window.network_receive_bytes_per_second
             }),
@@ -876,10 +877,10 @@ impl SampledMeasurement {
                     .iter()
                     .map(|window| window.machine_cpu_percent)
                     .collect(),
-                rss_bytes: self
+                memory_used_bytes: self
                     .resources
                     .iter()
-                    .map(|window| window.process_rss_bytes)
+                    .map(|window| window.machine_memory_used_bytes)
                     .collect(),
                 network_receive_bytes_per_second: self
                     .resources
@@ -1201,6 +1202,7 @@ struct HostSnapshot {
     process_cpu_cores: f64,
     process_rss_bytes: u64,
     machine_cpu_percent: f64,
+    machine_memory_used_bytes: u64,
     network_received: u64,
     network_sent: u64,
     disk_read_bytes: u64,
@@ -1218,6 +1220,7 @@ impl HostSnapshot {
             process_cpu_cores: self.process_cpu_cores,
             process_rss_bytes: self.process_rss_bytes as f64,
             machine_cpu_percent: self.machine_cpu_percent,
+            machine_memory_used_bytes: self.machine_memory_used_bytes as f64,
             network_receive_bytes_per_second: self
                 .network_received
                 .saturating_sub(previous.network_received)
@@ -1267,6 +1270,7 @@ impl HostSampler {
 
     fn snapshot(&mut self) -> HostSnapshot {
         self.system.refresh_cpu_usage();
+        self.system.refresh_memory();
         self.system.refresh_processes_specifics(
             ProcessesToUpdate::Some(&[self.pid]),
             true,
@@ -1293,6 +1297,7 @@ impl HostSampler {
             process_cpu_cores,
             process_rss_bytes,
             machine_cpu_percent: self.system.global_cpu_usage() as f64,
+            machine_memory_used_bytes: self.system.used_memory(),
             network_received,
             network_sent,
             disk_read_bytes: disk.0,
@@ -1354,7 +1359,7 @@ mod tests {
     use super::{
         format_slate_metrics, sample_until_stopped, sample_until_stopped_with_rate_control,
         summarize_values, verify_environment, ApplicationRegistry, BenchmarkMetricsRecorder,
-        RateWindowControl, SlateMetricsReporter,
+        HostSnapshot, RateWindowControl, SlateMetricsReporter,
     };
     use crate::instrumented_store::{HttpMethod, StoreMetrics};
     use crate::model::Environment;
@@ -1362,6 +1367,24 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
     use tokio::sync::{oneshot, watch};
+
+    #[test]
+    fn host_window_keeps_process_and_machine_memory_separate() {
+        let current = HostSnapshot {
+            process_rss_bytes: 10,
+            machine_memory_used_bytes: 20,
+            ..HostSnapshot::default()
+        };
+
+        let window = current.window(
+            &HostSnapshot::default(),
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+        );
+
+        assert_eq!(window.process_rss_bytes, 10.0);
+        assert_eq!(window.machine_memory_used_bytes, 20.0);
+    }
 
     #[test]
     fn published_environment_accepts_s3_and_tigris() {

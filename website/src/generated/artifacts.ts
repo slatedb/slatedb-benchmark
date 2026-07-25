@@ -38,7 +38,7 @@ export type ObjectStoreMetrics = { requests: { [key in string]: RateSummary }, t
 
 export type ProcessStatistics = { cpu_cores: DistributionSummary, rss_bytes: DistributionSummary, };
 
-export type MachineStatistics = { cpu_percent: DistributionSummary, rss_bytes: DistributionSummary, network_receive_bytes_per_second: DistributionSummary, network_send_bytes_per_second: DistributionSummary, disk_read_bytes_per_second: DistributionSummary, disk_write_bytes_per_second: DistributionSummary, disk_read_operations_per_second: DistributionSummary, disk_write_operations_per_second: DistributionSummary, };
+export type MachineStatistics = { cpu_percent: DistributionSummary, memory_used_bytes: DistributionSummary, network_receive_bytes_per_second: DistributionSummary, network_send_bytes_per_second: DistributionSummary, disk_read_bytes_per_second: DistributionSummary, disk_write_bytes_per_second: DistributionSummary, disk_read_operations_per_second: DistributionSummary, disk_write_operations_per_second: DistributionSummary, };
 
 export type SeriesReference = { file: string, sha256: string, };
 
@@ -52,7 +52,7 @@ export type ObjectStoreSeries = { requests_per_second: { [key in string]: Array<
 
 export type ProcessSeries = { cpu_cores: Array<number>, rss_bytes: Array<number>, };
 
-export type MachineSeries = { cpu_percent: Array<number>, rss_bytes: Array<number>, network_receive_bytes_per_second: Array<number>, network_send_bytes_per_second: Array<number>, disk_read_bytes_per_second: Array<number>, disk_write_bytes_per_second: Array<number>, disk_read_operations_per_second: Array<number>, disk_write_operations_per_second: Array<number>, };
+export type MachineSeries = { cpu_percent: Array<number>, memory_used_bytes: Array<number>, network_receive_bytes_per_second: Array<number>, network_send_bytes_per_second: Array<number>, disk_read_bytes_per_second: Array<number>, disk_write_bytes_per_second: Array<number>, disk_read_operations_per_second: Array<number>, disk_write_operations_per_second: Array<number>, };
 
 export type WorkloadSeries = { rate_elapsed_ns: Array<number>, rate_duration_ns: Array<number>, latency_elapsed_ns: Array<number>, latency_duration_ns: Array<number>, resource_elapsed_ns: Array<number>, resource_duration_ns: Array<number>, application: ApplicationSeries, object_store: ObjectStoreSeries, process: ProcessSeries, machine: MachineSeries, };
 

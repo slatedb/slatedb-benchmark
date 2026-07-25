@@ -30,7 +30,7 @@ summary table remains intact.
 | Process CPU utilization | Elapsed seconds | CPU cores |
 | Process RSS | Elapsed seconds | GiB |
 | Machine CPU | Elapsed seconds | CPU (%) |
-| Machine RSS | Elapsed seconds | GiB |
+| Machine memory used | Elapsed seconds | GiB |
 | Machine network receive/send | Elapsed seconds | MiB/s |
 | Machine disk read/write | Elapsed seconds | MiB/s |
 | Machine disk read/write operations | Elapsed seconds | Operations/s |

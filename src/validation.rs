@@ -363,9 +363,9 @@ pub fn validate_workload_series(result: &WorkloadResult, series: &WorkloadSeries
             &result.machine.cpu_percent,
         ),
         (
-            "machine RSS",
-            series.machine.rss_bytes.as_slice(),
-            &result.machine.rss_bytes,
+            "machine memory used",
+            series.machine.memory_used_bytes.as_slice(),
+            &result.machine.memory_used_bytes,
         ),
         (
             "network receive",
@@ -693,7 +693,7 @@ fn validate_recorded_metrics(
     validate_distribution(&process.cpu_cores)?;
     validate_distribution(&process.rss_bytes)?;
     validate_distribution(&machine.cpu_percent)?;
-    validate_distribution(&machine.rss_bytes)?;
+    validate_distribution(&machine.memory_used_bytes)?;
     validate_distribution(&machine.network_receive_bytes_per_second)?;
     validate_distribution(&machine.network_send_bytes_per_second)?;
     validate_distribution(&machine.disk_read_bytes_per_second)?;

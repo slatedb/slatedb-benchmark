@@ -194,7 +194,7 @@ pub struct ProcessStatistics {
 #[serde(deny_unknown_fields)]
 pub struct MachineStatistics {
     pub cpu_percent: DistributionSummary,
-    pub rss_bytes: DistributionSummary,
+    pub memory_used_bytes: DistributionSummary,
     pub network_receive_bytes_per_second: DistributionSummary,
     pub network_send_bytes_per_second: DistributionSummary,
     pub disk_read_bytes_per_second: DistributionSummary,
@@ -255,7 +255,7 @@ pub struct ProcessSeries {
 #[serde(deny_unknown_fields)]
 pub struct MachineSeries {
     pub cpu_percent: Vec<f64>,
-    pub rss_bytes: Vec<f64>,
+    pub memory_used_bytes: Vec<f64>,
     pub network_receive_bytes_per_second: Vec<f64>,
     pub network_send_bytes_per_second: Vec<f64>,
     pub disk_read_bytes_per_second: Vec<f64>,

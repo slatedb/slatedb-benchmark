@@ -22,9 +22,9 @@ settings within a preparation phase or workload.
 The suite uses the SlateDB release defaults unless a preparation phase or
 workload says otherwise. It configures these caches:
 
-- 4 GiB block cache
-- 512 MiB metadata/index cache
-- 40 GiB local object-store cache
+- 8 GiB block cache
+- 4 GiB metadata/index cache
+- no local object-store cache
 
 ## Dataset
 
@@ -70,8 +70,7 @@ limit.
 The measured steady-state workloads clone the golden checkpoint and do not
 inherit another workload's writes.
 
-Each clone starts with an empty local object-store cache. Warmup may fill it.
-PUT caching and startup preloading stay disabled.
+Each clone starts with empty block and metadata caches. Warmup may fill them.
 
 `sustained-ingest` starts with an empty database. It does not use the golden
 checkpoint.
@@ -265,14 +264,14 @@ calculates every column from complete one-second samples.
 
 ### Machine statistics
 
-CPU, network, and disk statistics cover the whole runner. RSS covers the
-benchmark process, including SlateDB and its embedded compactor. The runner
-calculates each column from complete one-second samples.
+CPU, memory, network, and disk statistics cover the whole runner. Memory used
+is total host memory consumption. The runner calculates each column from
+complete one-second samples.
 
 | Metric | avg | p0.1 | p1 | p50 | p99 | p99.9 | min | max |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | CPU (%) | 46.2 | 21.0 | 26.2 | 45.8 | 74.4 | 88.7 | 18.4 | 91.2 |
-| RSS (GiB) | 7.1 | 5.9 | 6.1 | 7.2 | 7.8 | 7.8 | 5.8 | 7.9 |
+| Memory used (GiB) | 7.1 | 5.9 | 6.1 | 7.2 | 7.8 | 7.8 | 5.8 | 7.9 |
 | Network receive (MiB/s) | 46.4 | 18.4 | 24.1 | 45.9 | 70.5 | 82.1 | 16.2 | 86.7 |
 | Network send (MiB/s) | 21.5 | 8.2 | 10.4 | 21.2 | 34.6 | 41.0 | 7.1 | 43.8 |
 | Disk read (MiB/s) | 14.9 | 3.1 | 5.2 | 14.2 | 27.1 | 34.8 | 2.4 | 37.2 |

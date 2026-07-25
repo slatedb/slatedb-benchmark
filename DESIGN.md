@@ -27,8 +27,8 @@ SlateDB instance, client tasks, recorders, and local caches. GitHub runs each
 workload on a separate WarpBuild machine. Only worker samples enter task
 results.
 
-Each worker creates new block, metadata, and local object-store caches. Golden
-workloads open separate shallow clones of the golden checkpoint. The
+Each worker creates new block and metadata caches. Golden workloads open
+separate shallow clones of the golden checkpoint. The
 `sustained-ingest` initial state and all client behavior come from
 [`BENCHMARKS.md`](BENCHMARKS.md).
 
