@@ -1,3 +1,5 @@
+//! Preparation and workload execution against a configured object store.
+
 use crate::config::{self, BenchmarkScale, ResolvedConfig, Task};
 use crate::database_size::live_database_size_bytes;
 use crate::model::{
@@ -39,15 +41,28 @@ use uuid::Uuid;
 
 const SETTINGS_PATH: &str = "config/settings.toml";
 #[derive(Debug, Clone)]
+/// Inputs shared by preparation phases and workload execution.
 pub struct ExecutionArgs {
+    /// Preparation phase or workload to execute.
     pub task: Task,
+    /// Golden dataset identifier.
     pub golden: String,
+    /// Run identifier, required for workloads and absent for preparation.
     pub session: Option<String>,
+    /// Fraction applied to catalog defaults.
     pub scale: BenchmarkScale,
+    /// Directory for the local artifact copy and failure diagnostics.
     pub output: PathBuf,
+    /// Required quiet period for the compaction preparation phase.
     pub compaction_quiet: Option<Duration>,
 }
 
+/// Executes one preparation phase or workload and writes its artifacts.
+///
+/// Object-store locations and credentials are resolved from the environment.
+/// Successful preparation is idempotent when a compatible golden manifest
+/// already exists. A failed task leaves partial remote data in place and writes
+/// `failure.json` locally for diagnosis.
 pub async fn execute(args: ExecutionArgs) -> Result<()> {
     validate_name(&args.golden, "golden")?;
     if args.task.is_preparation() {
@@ -86,6 +101,10 @@ pub async fn execute(args: ExecutionArgs) -> Result<()> {
     result
 }
 
+/// Deletes database objects for every workload in a benchmark session.
+///
+/// Published result and completion objects are outside the database prefixes
+/// and are therefore preserved.
 pub async fn cleanup_session(session: &str) -> Result<()> {
     validate_name(session, "session")?;
     let context = ObjectStoreContext::load()?;

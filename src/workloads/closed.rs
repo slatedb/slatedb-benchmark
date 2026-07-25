@@ -1,3 +1,5 @@
+//! Closed-loop workload clients and golden-dataset population.
+
 use super::durability::{DurabilitySender, DurabilityTracker};
 use super::stats::{record_error, record_success, WorkerStats};
 use super::util::{key_for_id, missing_key_for_id, KeySelector, ValueGenerator};
@@ -73,6 +75,11 @@ fn configured_key_selector(config: &ResolvedConfig) -> Result<KeySelector> {
     }
 }
 
+/// Runs closed-loop clients for one warmup or measurement phase.
+///
+/// Each client submits its next operation only after the previous operation
+/// completes. Passing no registry or durability tracker disables measurement,
+/// which is how warmup uses the same operation path.
 pub async fn run_phase(
     db: Arc<Db>,
     config: &ResolvedConfig,
@@ -406,9 +413,11 @@ fn configured_transaction_operations(config: &TaskConfig, rng: &mut StdRng) -> V
     operations
 }
 
+/// Number of records generated in each bulk-load write batch.
 pub(crate) const DATASET_BATCH_RECORDS: u64 = 1_024;
 const DATASET_BATCH_QUEUE_DEPTH: usize = 16;
 
+/// Metric sinks used while generating the golden dataset.
 pub struct DatasetLoadMetrics {
     store: Arc<StoreMetrics>,
     slate: Arc<BenchmarkMetricsRecorder>,
@@ -416,6 +425,8 @@ pub struct DatasetLoadMetrics {
 }
 
 impl DatasetLoadMetrics {
+    /// Groups the object-store, SlateDB, and application metric recorders used
+    /// by bulk load.
     pub fn new(
         store: Arc<StoreMetrics>,
         slate: Arc<BenchmarkMetricsRecorder>,
@@ -435,6 +446,10 @@ struct DatasetBatch {
     batch: WriteBatch,
 }
 
+/// Generates and writes every record in the configured dataset.
+///
+/// A bounded channel separates parallel value generation from serialized
+/// database writes, limiting queued memory while keeping the writer supplied.
 pub async fn populate_dataset(
     db: Arc<Db>,
     config: &ResolvedConfig,

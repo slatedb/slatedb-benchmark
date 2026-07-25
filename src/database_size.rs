@@ -1,3 +1,5 @@
+//! Calculation of live logical database size from manifest SST views.
+
 use slatedb::manifest::SsTableView;
 use slatedb::VersionedManifest;
 use std::collections::HashSet;

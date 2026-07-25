@@ -1,3 +1,5 @@
+//! Assembly of validated workload outputs into a publishable run directory.
+
 use crate::config::Task;
 use crate::model::{
     AppliedPatch, GoldenManifest, RunManifest, SourceIdentity, WorkloadResult, WorkloadSeries,
@@ -13,14 +15,23 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// Inputs used to assemble a complete benchmark run bundle.
 pub struct BundleArgs {
+    /// Directory containing `golden.json` and per-workload result directories.
     pub input: PathBuf,
+    /// Root under which the versioned run directory will be created.
     pub output: PathBuf,
+    /// Identifier of the golden dataset used by the run.
     pub golden: String,
+    /// RFC 3339 timestamp captured when the run began.
     pub started_at: String,
+    /// Directory containing SlateDB patches applied to the run.
     pub patches: PathBuf,
 }
 
+/// Validates the supplied artifacts and writes a self-contained run bundle.
+///
+/// The returned path is `<output>/<slatedb-version>/<session>`.
 pub fn bundle(args: BundleArgs) -> Result<PathBuf> {
     validate_identifier(&args.golden, "golden ID")?;
     let golden_path = args.input.join("golden.json");
@@ -234,6 +245,7 @@ fn read_patches(directory: &Path) -> Result<Vec<AppliedPatch>> {
         .collect()
 }
 
+/// Computes the lowercase SHA-256 digest of a file.
 pub fn sha256_file(path: &Path) -> Result<String> {
     let contents = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
     Ok(format!("{:x}", Sha256::digest(contents)))

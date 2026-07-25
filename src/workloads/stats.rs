@@ -1,21 +1,33 @@
+//! Lightweight correctness counters collected independently of published metrics.
+
 use super::durability::DurabilitySender;
 use crate::system::ApplicationRecorder;
 use slatedb::WriteHandle;
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Default)]
+/// Per-client counters used to validate workload behavior after a phase.
 pub struct WorkerStats {
+    /// API failures or unexpected missing values.
     pub errors: u64,
+    /// Reads that returned values.
     pub read_hits: u64,
+    /// Reads that returned no value.
     pub read_misses: u64,
+    /// Writes accepted for durability tracking.
     pub writes: u64,
+    /// Greatest sequence returned by an accepted write.
     pub last_write_sequence: Option<u64>,
+    /// Transactions that reached commit.
     pub transaction_attempts: u64,
+    /// Transactions committed successfully.
     pub transaction_commits: u64,
+    /// Transactions rejected due to an expected conflict.
     pub transaction_conflicts: u64,
 }
 
 impl WorkerStats {
+    /// Saturating-merges another client's counters into this aggregate.
     pub fn merge(&mut self, other: &Self) {
         self.errors = self.errors.saturating_add(other.errors);
         self.read_hits = self.read_hits.saturating_add(other.read_hits);
@@ -36,6 +48,7 @@ impl WorkerStats {
             .saturating_add(other.transaction_conflicts);
     }
 
+    /// Records an accepted write and forwards it to durability tracking.
     pub fn record_write(
         &mut self,
         handle: &WriteHandle,
@@ -54,6 +67,7 @@ impl WorkerStats {
     }
 }
 
+/// Records a successful application operation when measurement is enabled.
 pub fn record_success(
     recorder: Option<&ApplicationRecorder>,
     api: &str,
@@ -65,6 +79,7 @@ pub fn record_success(
     }
 }
 
+/// Records an application error and increments the correctness error count.
 pub fn record_error(
     stats: &mut WorkerStats,
     recorder: Option<&ApplicationRecorder>,

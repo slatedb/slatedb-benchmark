@@ -1,30 +1,39 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "GoldenManifest",
+  "description": "Manifest for the compacted dataset shared by golden-backed workloads.",
   "type": "object",
   "properties": {
     "status": {
+      "description": "Completion status; valid manifests use `ok`.",
       "type": "string"
     },
     "golden_id": {
+      "description": "Stable golden-dataset identifier.",
       "type": "string"
     },
     "timestamp": {
+      "description": "RFC 3339 completion timestamp.",
       "type": "string"
     },
     "source": {
+      "description": "Source revisions used to build the dataset.",
       "$ref": "#/$defs/SourceIdentity"
     },
     "environment": {
+      "description": "Environment in which preparation ran.",
       "$ref": "#/$defs/Environment"
     },
     "configuration": {
+      "description": "Effective compaction-phase configuration.",
       "$ref": "#/$defs/ResultConfiguration"
     },
     "checkpoint": {
+      "description": "Detached checkpoint cloned by workloads.",
       "$ref": "#/$defs/CheckpointReference"
     },
     "dataset": {
+      "description": "Prepared dataset size and record shape.",
       "$ref": "#/$defs/GoldenDatasetMetadata"
     }
   },
@@ -41,21 +50,27 @@
   ],
   "$defs": {
     "SourceIdentity": {
+      "description": "Source revisions that make a benchmark artifact reproducible.",
       "type": "object",
       "properties": {
         "slate_version": {
+          "description": "SlateDB version label used to group published results.",
           "type": "string"
         },
         "slate_commit": {
+          "description": "Exact SlateDB Git commit compiled into the runner.",
           "type": "string"
         },
         "runner_version": {
+          "description": "Version of the benchmark runner crate.",
           "type": "string"
         },
         "runner_commit": {
+          "description": "Exact benchmark-runner Git commit.",
           "type": "string"
         },
         "lockfile_sha256": {
+          "description": "SHA-256 digest of the runner's `Cargo.lock`.",
           "type": "string"
         }
       },
@@ -69,43 +84,55 @@
       ]
     },
     "Environment": {
+      "description": "Hardware, operating system, and object-store context for a benchmark.",
       "type": "object",
       "properties": {
         "runner_type": {
+          "description": "CI runner label or `local`.",
           "type": "string"
         },
         "hostname": {
+          "description": "Hostname reported by the operating system.",
           "type": "string"
         },
         "cpu_model": {
+          "description": "CPU model string.",
           "type": "string"
         },
         "cpu_cores": {
+          "description": "Number of logical CPU cores visible to the process.",
           "type": "integer",
           "format": "uint",
           "minimum": 0
         },
         "ram_bytes": {
+          "description": "Total host memory in bytes.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0
         },
         "local_disk": {
+          "description": "Names and mount points of visible local disks.",
           "type": "string"
         },
         "os": {
+          "description": "Operating system name and version.",
           "type": "string"
         },
         "kernel": {
+          "description": "Kernel version.",
           "type": "string"
         },
         "object_store": {
+          "description": "Object-store provider name.",
           "type": "string"
         },
         "endpoint": {
+          "description": "Configured object-store endpoint or provider default.",
           "type": "string"
         },
         "region": {
+          "description": "Object-store region.",
           "type": "string"
         }
       },
@@ -125,27 +152,38 @@
       ]
     },
     "ResultConfiguration": {
+      "description": "Published configuration for one preparation phase or workload.",
       "type": "object",
       "properties": {
         "scale": {
+          "description": "Decimal scale factor applied to catalog defaults.",
           "type": "number",
           "format": "double"
         },
         "dataset": {
+          "description": "Dataset shape used by the task.",
           "$ref": "#/$defs/DatasetConfig"
         },
         "caches": {
+          "description": "Benchmark-managed cache capacities.",
           "$ref": "#/$defs/CacheConfig"
         },
         "task": {
+          "description": "Workload behavior and duration.",
           "$ref": "#/$defs/TaskConfig"
         },
-        "slate_settings": true,
-        "slate_default_settings": true,
+        "slate_settings": {
+          "description": "Effective SlateDB settings serialized as JSON."
+        },
+        "slate_default_settings": {
+          "description": "SlateDB defaults used to identify explicit overrides."
+        },
         "build_profile": {
+          "description": "Rust build profile used for the runner.",
           "type": "string"
         },
         "enabled_features": {
+          "description": "SlateDB Cargo features enabled in the runner.",
           "type": "array",
           "items": {
             "type": "string"
@@ -164,24 +202,29 @@
       ]
     },
     "DatasetConfig": {
+      "description": "Shape and logical size of records used by a benchmark task.",
       "type": "object",
       "properties": {
         "record_count": {
+          "description": "Number of records in the key-selection domain.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0
         },
         "key_bytes": {
+          "description": "Encoded key size in bytes.",
           "type": "integer",
           "format": "uint",
           "minimum": 0
         },
         "value_bytes": {
+          "description": "Generated value size in bytes.",
           "type": "integer",
           "format": "uint",
           "minimum": 0
         },
         "value_compression_ratio": {
+          "description": "Target ratio of uncompressed to compressed value bytes.",
           "type": "number",
           "format": "double"
         }
@@ -195,14 +238,17 @@
       ]
     },
     "CacheConfig": {
+      "description": "In-memory cache capacities used by the benchmark runner.",
       "type": "object",
       "properties": {
         "block_bytes": {
+          "description": "Block-cache capacity in bytes.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0
         },
         "metadata_bytes": {
+          "description": "Metadata-cache capacity in bytes.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0
@@ -215,33 +261,41 @@
       ]
     },
     "TaskConfig": {
+      "description": "Runtime shape of one preparation phase or workload.",
       "type": "object",
       "properties": {
         "task": {
+          "description": "Catalog task represented by this configuration.",
           "$ref": "#/$defs/Task"
         },
         "clients": {
+          "description": "Number of concurrent closed-loop clients.",
           "type": "integer",
           "format": "uint",
           "minimum": 0
         },
         "warmup_ms": {
+          "description": "Warmup duration in milliseconds.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0
         },
         "measurement_ms": {
+          "description": "Measured client duration in milliseconds.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0
         },
         "initial_state": {
+          "description": "Initial database state: `empty`, `golden`, or `none`.",
           "type": "string"
         },
         "key_selection": {
+          "description": "Key-selection strategy used by workload operations.",
           "type": "string"
         },
         "operation_mix": {
+          "description": "Operation name to probability map; active workloads sum to one.",
           "type": "object",
           "additionalProperties": {
             "type": "number",
@@ -249,6 +303,7 @@
           }
         },
         "scan_limit": {
+          "description": "Maximum number of records returned by each scan.",
           "type": [
             "integer",
             "null"
@@ -257,6 +312,7 @@
           "minimum": 0
         },
         "transaction_hot_keys": {
+          "description": "Number of keys in the transaction contention hot set.",
           "type": [
             "integer",
             "null"
@@ -265,6 +321,7 @@
           "minimum": 0
         },
         "transaction_reads": {
+          "description": "Reads performed by each transaction attempt.",
           "type": [
             "integer",
             "null"
@@ -273,6 +330,7 @@
           "minimum": 0
         },
         "transaction_updates": {
+          "description": "Updates performed by each transaction attempt.",
           "type": [
             "integer",
             "null"
@@ -293,40 +351,94 @@
       ]
     },
     "Task": {
-      "type": "string",
-      "enum": [
-        "bulk-load",
-        "compaction",
-        "idle",
-        "point-read-uniform",
-        "point-read-skewed",
-        "point-read-missing",
-        "read-heavy",
-        "balanced",
-        "update-heavy",
-        "range-scan",
-        "sustained-ingest",
-        "transaction-contention"
+      "description": "A preparation phase or workload from the benchmark catalog.",
+      "oneOf": [
+        {
+          "description": "The `bulk-load` benchmark task.",
+          "type": "string",
+          "const": "bulk-load"
+        },
+        {
+          "description": "The `compaction` benchmark task.",
+          "type": "string",
+          "const": "compaction"
+        },
+        {
+          "description": "The `idle` benchmark task.",
+          "type": "string",
+          "const": "idle"
+        },
+        {
+          "description": "The `point-read-uniform` benchmark task.",
+          "type": "string",
+          "const": "point-read-uniform"
+        },
+        {
+          "description": "The `point-read-skewed` benchmark task.",
+          "type": "string",
+          "const": "point-read-skewed"
+        },
+        {
+          "description": "The `point-read-missing` benchmark task.",
+          "type": "string",
+          "const": "point-read-missing"
+        },
+        {
+          "description": "The `read-heavy` benchmark task.",
+          "type": "string",
+          "const": "read-heavy"
+        },
+        {
+          "description": "The `balanced` benchmark task.",
+          "type": "string",
+          "const": "balanced"
+        },
+        {
+          "description": "The `update-heavy` benchmark task.",
+          "type": "string",
+          "const": "update-heavy"
+        },
+        {
+          "description": "The `range-scan` benchmark task.",
+          "type": "string",
+          "const": "range-scan"
+        },
+        {
+          "description": "The `sustained-ingest` benchmark task.",
+          "type": "string",
+          "const": "sustained-ingest"
+        },
+        {
+          "description": "The `transaction-contention` benchmark task.",
+          "type": "string",
+          "const": "transaction-contention"
+        }
       ]
     },
     "CheckpointReference": {
+      "description": "Immutable checkpoint used as a golden workload starting point.",
       "type": "object",
       "properties": {
         "database_path": {
+          "description": "Object-store path of the checkpointed database.",
           "type": "string"
         },
         "checkpoint_id": {
+          "description": "UUID of the detached SlateDB checkpoint.",
           "type": "string"
         },
         "manifest_id": {
+          "description": "Manifest ID captured by the checkpoint.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0
         },
         "lsm_digest_sha256": {
+          "description": "SHA-256 digest of the checkpoint's logical LSM state.",
           "type": "string"
         },
         "live_sst_bytes": {
+          "description": "Compressed bytes in physical SSTs referenced by the checkpoint.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0
@@ -342,29 +454,35 @@
       ]
     },
     "GoldenDatasetMetadata": {
+      "description": "Size and record-shape metadata for a prepared golden dataset.",
       "type": "object",
       "properties": {
         "record_count": {
+          "description": "Number of records loaded.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0
         },
         "key_bytes": {
+          "description": "Encoded key size in bytes.",
           "type": "integer",
           "format": "uint",
           "minimum": 0
         },
         "value_bytes": {
+          "description": "Generated value size in bytes.",
           "type": "integer",
           "format": "uint",
           "minimum": 0
         },
         "logical_bytes": {
+          "description": "Total logical bytes loaded before compression.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0
         },
         "live_sst_bytes": {
+          "description": "Compressed bytes in live physical SSTs.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0

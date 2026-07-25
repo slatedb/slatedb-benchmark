@@ -1,3 +1,5 @@
+//! Workload execution, metric recording, and durability reconciliation.
+
 mod closed;
 mod durability;
 mod stats;
@@ -19,12 +21,21 @@ use tokio::sync::{oneshot, watch};
 pub use closed::{populate_dataset, DatasetLoadMetrics};
 use stats::WorkerStats;
 
+/// Measurements and phase durations produced by one workload.
 pub struct WorkloadExecution {
+    /// Application, object-store, process, and host samples.
     pub measurement: SampledMeasurement,
+    /// Wall-clock time during which measured clients ran.
     pub client_measurement: Duration,
+    /// Time from stopping clients through final flush and durability coverage.
     pub durability_drain: Duration,
 }
 
+/// Runs warmup, measured clients, final flush, and durability drain.
+///
+/// Rate windows stop with the clients, while latency and resource sampling
+/// continues through the drain so accepted writes retain end-to-end durability
+/// measurements without contaminating application throughput.
 pub async fn execute(
     db: Arc<Db>,
     config: &ResolvedConfig,

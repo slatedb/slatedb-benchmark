@@ -1,3 +1,5 @@
+//! Semantic validation beyond the generated artifact schemas.
+
 use crate::config::{Task, TaskConfig};
 use crate::model::{
     ApplicationMetrics, DistributionSummary, Environment, GoldenManifest, LatencySummary,
@@ -7,6 +9,7 @@ use crate::model::{
 use anyhow::{bail, ensure, Result};
 use std::collections::BTreeSet;
 
+/// Validates the structure and semantics of a golden-dataset manifest.
 pub fn validate_golden_manifest(result: &GoldenManifest) -> Result<()> {
     ensure!(result.status == "ok", "golden status must be ok");
     let task = result.configuration.task.task;
@@ -62,6 +65,7 @@ pub fn validate_golden_manifest(result: &GoldenManifest) -> Result<()> {
     Ok(())
 }
 
+/// Validates the structure, configuration, and summary metrics of a workload result.
 pub fn validate_workload_result(result: &WorkloadResult) -> Result<()> {
     ensure!(result.status == "ok", "workload status must be ok");
     ensure!(
@@ -119,6 +123,10 @@ pub fn validate_workload_result(result: &WorkloadResult) -> Result<()> {
     Ok(())
 }
 
+/// Validates a workload time series against its summarized result.
+///
+/// This checks aligned timelines, finite values, histogram counts, and that
+/// recomputed distributions match the values in `result.json`.
 pub fn validate_workload_series(result: &WorkloadResult, series: &WorkloadSeries) -> Result<()> {
     validate_timeline("rate", &series.rate_elapsed_ns, &series.rate_duration_ns)?;
     validate_timeline(
@@ -404,6 +412,7 @@ pub fn validate_workload_series(result: &WorkloadResult, series: &WorkloadSeries
     Ok(())
 }
 
+/// Validates a bundled-run manifest and its internal configuration invariants.
 pub fn validate_run_manifest(result: &RunManifest) -> Result<()> {
     ensure!(result.status == "ok", "run status must be ok");
     validate_identifier(&result.run_id, "run ID")?;
@@ -445,6 +454,10 @@ pub fn validate_run_manifest(result: &RunManifest) -> Result<()> {
     Ok(())
 }
 
+/// Validates an identifier used as an object-store or filesystem path component.
+///
+/// Identifiers must be non-empty and contain only ASCII alphanumerics, `.`,
+/// `_`, and `-`.
 pub fn validate_identifier(value: &str, kind: &str) -> Result<()> {
     ensure!(!value.is_empty(), "{kind} is empty");
     ensure!(value.len() <= 128, "{kind} is too long");

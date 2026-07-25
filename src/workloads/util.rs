@@ -1,3 +1,5 @@
+//! Deterministic key layout, value generation, and workload key selection.
+
 use bytes::Bytes;
 use rand::distr::Distribution;
 use rand::{Rng, RngCore};
@@ -8,6 +10,10 @@ const FNV_OFFSET_BASIS_64: u64 = 0xcbf2_9ce4_8422_2325;
 const FNV_PRIME_64: u64 = 1_099_511_628_211;
 const VALUE_CORPUS_BYTES: usize = 1_048_576;
 
+/// Encodes an integer as a fixed-width benchmark key.
+///
+/// Up to eight leading bytes contain the big-endian ID; remaining bytes are
+/// ASCII `0` padding.
 pub fn key_for_id(id: u64, size: usize) -> Bytes {
     let mut key = vec![b'0'; size];
     let bytes_to_fill = size.min(8);
@@ -15,6 +21,7 @@ pub fn key_for_id(id: u64, size: usize) -> Bytes {
     Bytes::from(key)
 }
 
+/// Returns a key outside the populated key format for missing-read workloads.
 pub fn missing_key_for_id(id: u64, size: usize) -> Bytes {
     let mut key = key_for_id(id, size).to_vec();
     if let Some(last) = key.last_mut() {
@@ -23,12 +30,14 @@ pub fn missing_key_for_id(id: u64, size: usize) -> Bytes {
     Bytes::from(key)
 }
 
+/// Reuses slices of a random corpus to generate low-compressibility values.
 pub struct ValueGenerator {
     corpus: Option<Bytes>,
     position: usize,
 }
 
 impl ValueGenerator {
+    /// Creates a generator that initializes its corpus on first use.
     pub fn new() -> Self {
         Self {
             corpus: None,
@@ -36,6 +45,10 @@ impl ValueGenerator {
         }
     }
 
+    /// Returns a value of exactly `size` bytes.
+    ///
+    /// Values share immutable backing storage until a requested size requires a
+    /// larger corpus.
     pub fn generate(&mut self, size: usize, rng: &mut impl RngCore) -> Bytes {
         if size == 0 {
             return Bytes::new();
@@ -54,16 +67,29 @@ impl ValueGenerator {
     }
 }
 
+/// Key-selection distribution used by point and transaction workloads.
 pub enum KeySelector {
-    Uniform { record_count: u64 },
-    ScrambledZipfian { record_count: u64, zipf: Zipf<f64> },
+    /// Uniform selection over the configured record domain.
+    Uniform {
+        /// Number of keys in the domain.
+        record_count: u64,
+    },
+    /// Zipfian ranks scrambled through FNV hashing to distribute hot keys.
+    ScrambledZipfian {
+        /// Number of keys in the domain.
+        record_count: u64,
+        /// Rank distribution with the benchmark's fixed exponent.
+        zipf: Zipf<f64>,
+    },
 }
 
 impl KeySelector {
+    /// Creates a uniform selector over `0..record_count`.
     pub fn uniform(record_count: u64) -> Self {
         Self::Uniform { record_count }
     }
 
+    /// Creates a scrambled Zipfian selector with exponent 0.99.
     pub fn zipfian(record_count: u64) -> Self {
         let record_count = record_count.max(1);
         Self::ScrambledZipfian {
@@ -73,6 +99,7 @@ impl KeySelector {
         }
     }
 
+    /// Samples one key ID from the configured domain.
     pub fn sample(&self, rng: &mut impl Rng) -> u64 {
         match self {
             Self::Uniform { record_count } => {

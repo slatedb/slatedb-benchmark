@@ -1,3 +1,5 @@
+//! Object-store construction, instrumentation, and prefix cleanup.
+
 use crate::instrumented_http::InstrumentedHttpConnector;
 use crate::instrumented_store::{InstrumentedStore, StoreMetrics};
 use anyhow::{bail, Context, Result};
@@ -9,17 +11,27 @@ use object_store::ObjectStore;
 use std::env;
 use std::sync::Arc;
 
+/// Object stores and location metadata used during one runner invocation.
+///
+/// Workload data flows through `instrumented`, while runner control-plane
+/// reads and writes use `control` so they do not contaminate workload metrics.
 pub struct ObjectStoreContext {
+    /// Store used by SlateDB and included in published object-store metrics.
     pub instrumented: Arc<InstrumentedStore>,
     /// A store with no benchmark metrics, used for runner control-plane operations.
     pub control: Arc<dyn ObjectStore>,
+    /// Root prefix under which golden datasets and sessions are stored.
     pub root: Path,
+    /// Normalized provider name.
     pub provider: String,
+    /// Configured endpoint description.
     pub endpoint: String,
+    /// Configured object-store region.
     pub region: String,
 }
 
 impl ObjectStoreContext {
+    /// Builds object stores from benchmark and AWS environment variables.
     pub fn load() -> Result<Self> {
         let provider = env::var("CLOUD_PROVIDER")
             .unwrap_or_else(|_| "s3".to_string())
@@ -103,6 +115,10 @@ fn control_store_builder(builder: AmazonS3Builder, provider: &str) -> AmazonS3Bu
     }
 }
 
+/// Deletes every object below `prefix`.
+///
+/// Tigris contexts disable bulk deletion when constructing the control store,
+/// so this stream transparently falls back to individual delete requests.
 pub async fn delete_prefix(store: Arc<dyn ObjectStore>, prefix: &Path) -> Result<()> {
     let locations: BoxStream<'static, object_store::Result<Path>> = store
         .list(Some(prefix))

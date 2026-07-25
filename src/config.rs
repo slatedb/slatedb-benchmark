@@ -1,3 +1,5 @@
+//! Workload catalog and layered benchmark configuration resolution.
+
 use anyhow::{ensure, Context, Result};
 use clap::ValueEnum;
 use schemars::JsonSchema;
@@ -24,15 +26,23 @@ const MIN_METADATA_CACHE_BYTES: u64 = 2 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(transparent)]
+/// Fraction used to shrink benchmark data and durations for local execution.
+///
+/// Valid factors are greater than zero and at most one. Scaling preserves
+/// minimum cache sizes and durations so small runs still exercise real code
+/// paths.
 pub struct BenchmarkScale(f64);
 
 impl BenchmarkScale {
+    /// An unscaled, publishable benchmark run.
     pub const FULL: Self = Self(1.0);
 
+    /// Returns the validated decimal scale factor.
     pub fn factor(self) -> f64 {
         self.0
     }
 
+    /// Returns whether this value represents a full-scale run.
     pub fn is_full(self) -> bool {
         self.0.to_bits() == Self::FULL.0.to_bits()
     }
@@ -109,8 +119,12 @@ macro_rules! define_tasks {
         #[repr(usize)]
         #[serde(rename_all = "kebab-case")]
         #[clap(rename_all = "kebab-case")]
+        #[doc = "A preparation phase or workload from the benchmark catalog."]
         pub enum Task {
-            $($variant),+
+            $(
+                #[doc = concat!("The `", $name, "` benchmark task.")]
+                $variant
+            ),+
         }
 
         const TASK_CATALOG: &[TaskDefinition] = &[
@@ -137,6 +151,9 @@ macro_rules! define_tasks {
 }
 
 impl Task {
+    /// Iterates over executable workloads in catalog order.
+    ///
+    /// Preparation phases are excluded.
     pub fn workloads() -> impl Iterator<Item = Self> {
         TASK_CATALOG
             .iter()
@@ -144,18 +161,22 @@ impl Task {
             .map(|definition| definition.task)
     }
 
+    /// Returns whether this task creates or compacts a golden dataset.
     pub fn is_preparation(self) -> bool {
         self.definition().preparation
     }
 
+    /// Returns whether this task starts from the golden checkpoint.
     pub fn uses_golden(self) -> bool {
         self.definition().initial_state == "golden"
     }
 
+    /// Returns whether this task may modify the database.
     pub fn may_write(self) -> bool {
         self.definition().may_write
     }
 
+    /// Returns the stable kebab-case artifact and CLI name.
     pub fn as_str(self) -> &'static str {
         self.definition().name
     }
@@ -383,14 +404,20 @@ define_tasks! {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
+/// Shape and logical size of records used by a benchmark task.
 pub struct DatasetConfig {
+    /// Number of records in the key-selection domain.
     pub record_count: u64,
+    /// Encoded key size in bytes.
     pub key_bytes: usize,
+    /// Generated value size in bytes.
     pub value_bytes: usize,
+    /// Target ratio of uncompressed to compressed value bytes.
     pub value_compression_ratio: f64,
 }
 
 impl DatasetConfig {
+    /// Returns the total logical bytes represented by the configured records.
     pub fn logical_bytes(&self) -> u64 {
         self.record_count.saturating_mul(
             u64::try_from(self.key_bytes.saturating_add(self.value_bytes)).unwrap_or(u64::MAX),
@@ -400,28 +427,44 @@ impl DatasetConfig {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
+/// In-memory cache capacities used by the benchmark runner.
 pub struct CacheConfig {
+    /// Block-cache capacity in bytes.
     pub block_bytes: u64,
+    /// Metadata-cache capacity in bytes.
     pub metadata_bytes: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(deny_unknown_fields)]
+/// Runtime shape of one preparation phase or workload.
 pub struct TaskConfig {
+    /// Catalog task represented by this configuration.
     pub task: Task,
+    /// Number of concurrent closed-loop clients.
     pub clients: usize,
+    /// Warmup duration in milliseconds.
     pub warmup_ms: u64,
+    /// Measured client duration in milliseconds.
     pub measurement_ms: u64,
+    /// Initial database state: `empty`, `golden`, or `none`.
     pub initial_state: String,
+    /// Key-selection strategy used by workload operations.
     pub key_selection: String,
+    /// Operation name to probability map; active workloads sum to one.
     pub operation_mix: BTreeMap<String, f64>,
+    /// Maximum number of records returned by each scan.
     pub scan_limit: Option<usize>,
+    /// Number of keys in the transaction contention hot set.
     pub transaction_hot_keys: Option<u64>,
+    /// Reads performed by each transaction attempt.
     pub transaction_reads: Option<usize>,
+    /// Updates performed by each transaction attempt.
     pub transaction_updates: Option<usize>,
 }
 
 impl TaskConfig {
+    /// Checks catalog invariants before a task is executed or published.
     pub(crate) fn validate(&self) -> Result<()> {
         let active = !self.task.is_preparation() && self.task != Task::Idle;
         ensure!(
@@ -522,18 +565,34 @@ impl TaskConfig {
 }
 
 #[derive(Debug, Clone)]
+/// Fully resolved settings used to open SlateDB and execute one task.
 pub struct ResolvedConfig {
+    /// Decimal scale factor applied to the catalog defaults.
     pub scale: f64,
+    /// Resolved dataset shape.
     pub dataset: DatasetConfig,
+    /// Resolved benchmark cache capacities.
     pub caches: CacheConfig,
+    /// Resolved task behavior.
     pub task: TaskConfig,
+    /// Serialized effective SlateDB settings published with the result.
     pub slate_settings: serde_json::Value,
+    /// Serialized SlateDB defaults used to highlight overrides in the website.
     pub slate_default_settings: serde_json::Value,
+    /// Rust build profile, normally `debug` or `release`.
     pub build_profile: String,
+    /// SlateDB Cargo features enabled in this runner build.
     pub enabled_features: Vec<String>,
+    /// Typed effective settings passed to `Db::open`.
     pub settings: Settings,
 }
 
+/// Resolves catalog defaults, scale, and SlateDB settings for one task.
+///
+/// A task-specific `settings.<task>.toml` is a complete replacement for the
+/// shared settings file. If neither file exists, SlateDB defaults are used.
+/// Local object-store cache paths and capacities are cleared because the
+/// benchmark runner configures only its explicit in-memory caches.
 pub fn load(task: Task, scale: BenchmarkScale, settings_path: &Path) -> Result<ResolvedConfig> {
     let mut settings = match settings_path_for_task(task, settings_path)? {
         Some(settings_path) => Settings::from_file(&settings_path).with_context(|| {

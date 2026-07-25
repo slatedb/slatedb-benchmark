@@ -1,3 +1,5 @@
+//! HTTP connector instrumentation for physical object-store attempts.
+
 use crate::instrumented_store::{HttpMethod, StoreMetrics};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -20,12 +22,17 @@ use std::time::Duration;
 use tokio::task::JoinSet;
 
 #[derive(Debug)]
+/// Builds HTTP clients that record physical object-store attempts and bytes.
 pub(crate) struct InstrumentedHttpConnector {
     metrics: Arc<StoreMetrics>,
     target_authority: Option<String>,
 }
 
 impl InstrumentedHttpConnector {
+    /// Creates a connector scoped to the configured object-store authority.
+    ///
+    /// Requests to metadata services and unrelated hosts are deliberately
+    /// excluded from benchmark object-store metrics.
     pub(crate) fn new(metrics: Arc<StoreMetrics>, target_endpoint: Option<&str>) -> Self {
         Self {
             metrics,

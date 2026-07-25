@@ -1,3 +1,5 @@
+//! Publication of a validated run bundle into the website data archive.
+
 use crate::bundle::sha256_file;
 use crate::model::RunManifest;
 use crate::validation::{validate_identifier, validate_run_manifest};
@@ -7,11 +9,18 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// Inputs for publishing one validated benchmark run.
 pub struct PublishArgs {
+    /// Directory containing exactly one versioned run bundle.
     pub bundle: PathBuf,
+    /// Git checkout into which the run should be copied and committed.
     pub checkout: PathBuf,
 }
 
+/// Publishes a full-scale run to a benchmark website checkout.
+///
+/// Publication verifies every artifact digest, commits the copied result
+/// directory, and retries rebasing and pushing if `main` advances concurrently.
 pub fn publish(args: PublishArgs) -> Result<()> {
     let manifest_path = find_manifest(&args.bundle)?;
     let manifest: RunManifest = serde_json::from_reader(

@@ -1,3 +1,5 @@
+//! Metric recording, sampling, aggregation, and host-environment inspection.
+
 use crate::histogram::HistogramSet;
 use crate::instrumented_store::{StoreMetrics, StoreSnapshot};
 use crate::model::{
@@ -26,6 +28,7 @@ tokio::task_local! {
     static BACKPRESSURE_MEASUREMENT: RefCell<BackpressureMeasurement>;
 }
 
+/// Converts a duration to nanoseconds, saturating values larger than `u64`.
 pub(crate) fn duration_ns(duration: Duration) -> u64 {
     u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX)
 }
@@ -55,17 +58,24 @@ impl BackpressureMeasurement {
     }
 }
 
+/// SlateDB metrics recorder used by benchmark runs.
+///
+/// The recorder delegates storage to SlateDB's default recorder and wraps the
+/// backpressure metrics so [`measure_backpressure`] can attribute blocked time
+/// to the operation currently running on a task.
 pub struct BenchmarkMetricsRecorder {
     inner: DefaultMetricsRecorder,
 }
 
 impl BenchmarkMetricsRecorder {
+    /// Creates an empty recorder.
     pub fn new() -> Self {
         Self {
             inner: DefaultMetricsRecorder::new(),
         }
     }
 
+    /// Returns a point-in-time copy of every recorded SlateDB metric.
     pub fn snapshot(&self) -> Metrics {
         self.inner.snapshot()
     }
@@ -77,12 +87,17 @@ impl Default for BenchmarkMetricsRecorder {
     }
 }
 
+/// Background logger for periodic SlateDB metric snapshots.
+///
+/// Set `SLATEDB_BENCH_METRICS_LOG_INTERVAL` to a number of seconds, or to zero
+/// to disable the reporter.
 pub struct SlateMetricsReporter {
     stop: Option<oneshot::Sender<()>>,
     task: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl SlateMetricsReporter {
+    /// Starts reporting snapshots at the configured interval.
     pub fn start(recorder: Arc<BenchmarkMetricsRecorder>) -> Self {
         Self::start_with_interval(recorder, slate_metrics_log_interval())
     }
@@ -105,6 +120,7 @@ impl SlateMetricsReporter {
         }
     }
 
+    /// Stops the reporter and waits for its final snapshot.
     pub async fn stop(mut self) {
         self.signal_stop();
         if let Some(task) = self.task.take() {
@@ -352,6 +368,11 @@ impl MetricsRecorder for BenchmarkMetricsRecorder {
     }
 }
 
+/// Runs a future and returns the time it spent under SlateDB write backpressure.
+///
+/// Backpressure begins when SlateDB increments its backpressure counter and
+/// ends when the total in-memory size gauge is updated. The association is
+/// task-local, so concurrent client operations are measured independently.
 pub async fn measure_backpressure<F>(future: F) -> (F::Output, Duration)
 where
     F: Future,
@@ -369,10 +390,14 @@ where
         .await
 }
 
+/// Application-operation counters accumulated during one sampling window.
 #[derive(Debug, Clone, Default)]
 pub struct OperationDelta {
+    /// Number of attempted calls.
     pub calls: u64,
+    /// Logical payload bytes processed by successful calls.
     pub logical_bytes: u64,
+    /// Number of failed calls.
     pub errors: u64,
 }
 
@@ -384,10 +409,14 @@ impl OperationDelta {
     }
 }
 
+/// Application rates captured for one sampling window.
 #[derive(Debug, Clone, Default)]
 pub struct ApplicationWindow {
+    /// Time from measurement start to the end of this window.
     pub elapsed: Duration,
+    /// Width of this sampling window.
     pub duration: Duration,
+    /// Per-API operation deltas collected in the window.
     pub operations: BTreeMap<String, OperationDelta>,
 }
 
@@ -427,20 +456,30 @@ struct ApplicationShard {
     spare: Option<ApplicationDelta>,
 }
 
+/// Per-client handle for recording application operations and latency.
+///
+/// Each client receives its own shard from [`ApplicationRegistry`], keeping
+/// contention off the hot path except while that shard is sampled.
 #[derive(Debug, Clone)]
 pub struct ApplicationRecorder {
     inner: Arc<Mutex<ApplicationShard>>,
 }
 
 impl ApplicationRecorder {
+    /// Records a successful API call and its logical payload size.
     pub fn record_success(&self, api: &str, latency: Duration, logical_bytes: u64) {
         self.record(api, latency, logical_bytes, false);
     }
 
+    /// Records a failed API call.
     pub fn record_error(&self, api: &str, latency: Duration) {
         self.record(api, latency, 0, true);
     }
 
+    /// Records latency without incrementing operation or error counters.
+    ///
+    /// Durability tracking uses this for latency that completes after the
+    /// original write call has returned.
     pub fn record_latency(&self, api: &str, latency: Duration) {
         self.inner
             .lock()
@@ -463,12 +502,17 @@ impl ApplicationRecorder {
     }
 }
 
+/// Registry of application metric shards created for workload clients.
+///
+/// Sampling swaps each shard's active buffer with a reusable spare before
+/// merging it, minimizing the time client operations spend under a lock.
 #[derive(Debug, Default)]
 pub struct ApplicationRegistry {
     shards: Mutex<Vec<Arc<Mutex<ApplicationShard>>>>,
 }
 
 impl ApplicationRegistry {
+    /// Allocates and registers an independent recorder shard.
     pub fn recorder(&self) -> ApplicationRecorder {
         let inner = Arc::new(Mutex::new(ApplicationShard::default()));
         self.shards
@@ -526,6 +570,11 @@ struct StoreWindow {
     delta: StoreSnapshot,
 }
 
+/// Aggregated result of one sampled measurement interval.
+///
+/// The value retains totals, rate windows, latency histograms, object-store
+/// counters, and host samples so callers can build both summary and time-series
+/// artifacts from the same measurement.
 pub struct SampledMeasurement {
     elapsed: Duration,
     application_total: ApplicationDelta,
@@ -537,12 +586,17 @@ pub struct SampledMeasurement {
     resources: Vec<ResourceWindow>,
 }
 
+/// Shared boundary that controls whether the sampler still emits rate windows.
+///
+/// Workloads stop rate capture with their clients but continue latency and
+/// resource sampling through the durability drain.
 #[derive(Debug)]
 pub(crate) struct RateWindowControl {
     active: Mutex<bool>,
 }
 
 impl RateWindowControl {
+    /// Creates a control with rate-window capture enabled.
     pub(crate) fn new() -> Self {
         Self {
             active: Mutex::new(true),
@@ -556,10 +610,12 @@ impl RateWindowControl {
 }
 
 impl SampledMeasurement {
+    /// Returns total wall-clock measurement time, including any drain phase.
     pub fn elapsed(&self) -> Duration {
         self.elapsed
     }
 
+    /// Returns the total number of calls recorded for an API name.
     pub fn operation_total(&self, name: &str) -> u64 {
         self.application_total
             .operations
@@ -567,6 +623,7 @@ impl SampledMeasurement {
             .map_or(0, |operation| operation.calls)
     }
 
+    /// Returns the total number of application-level errors.
     pub fn application_errors(&self) -> u64 {
         self.application_total
             .operations
@@ -575,10 +632,12 @@ impl SampledMeasurement {
             .sum()
     }
 
+    /// Returns failed physical object-store attempts across all HTTP methods.
     pub fn object_store_attempt_errors(&self) -> u64 {
         self.store_end.difference(&self.store_start).errors()
     }
 
+    /// Builds application operation, throughput, and latency summaries.
     pub fn application(&self) -> ApplicationMetrics {
         let elapsed = self.elapsed();
         let mut operations = BTreeMap::new();
@@ -627,6 +686,7 @@ impl SampledMeasurement {
         }
     }
 
+    /// Builds physical object-store request and body-throughput summaries.
     pub fn object_store(&self) -> ObjectStoreMetrics {
         let elapsed = self.elapsed();
         let total = self.store_end.difference(&self.store_start);
@@ -666,6 +726,7 @@ impl SampledMeasurement {
         }
     }
 
+    /// Builds process CPU and resident-memory summaries.
     pub fn process(&self) -> ProcessStatistics {
         ProcessStatistics {
             cpu_cores: summarize_values(
@@ -683,6 +744,7 @@ impl SampledMeasurement {
         }
     }
 
+    /// Builds host CPU, memory, network, and disk summaries.
     pub fn machine(&self) -> MachineStatistics {
         let values = |select: fn(&ResourceWindow) -> f64| {
             summarize_values(self.resources.iter().map(select).collect())
@@ -705,6 +767,7 @@ impl SampledMeasurement {
         }
     }
 
+    /// Builds the complete time-series artifact for this measurement.
     pub fn series(&self) -> WorkloadSeries {
         let rate_elapsed_ns = self
             .application_windows
@@ -917,6 +980,10 @@ impl SampledMeasurement {
     }
 }
 
+/// Samples metrics once per second until `stop` becomes true.
+///
+/// When supplied, `ready` is signaled after the sampler captures its baselines,
+/// allowing callers to exclude startup activity from the measurement.
 pub async fn sample_until_stopped(
     registry: Arc<ApplicationRegistry>,
     store_metrics: Arc<StoreMetrics>,
@@ -933,6 +1000,11 @@ pub async fn sample_until_stopped(
     .await
 }
 
+/// Samples metrics while allowing rate capture to end before other sampling.
+///
+/// [`RateWindowControl::finish`] provides a synchronized boundary: application
+/// rates and object-store rates stop there, while latency and host-resource
+/// windows continue until `stop` becomes true.
 pub(crate) async fn sample_until_stopped_with_rate_control(
     registry: Arc<ApplicationRegistry>,
     store_metrics: Arc<StoreMetrics>,
@@ -1038,6 +1110,10 @@ pub(crate) async fn sample_until_stopped_with_rate_control(
     })
 }
 
+/// Measures one fallible asynchronous operation from a clean sampler baseline.
+///
+/// The sampler is always stopped and joined before an operation error is
+/// returned, preserving diagnostic measurements for the attempted operation.
 pub async fn measure_until_complete<T, F>(
     registry: Arc<ApplicationRegistry>,
     store_metrics: Arc<StoreMetrics>,
@@ -1119,6 +1195,7 @@ fn summarize_values(mut values: Vec<f64>) -> DistributionSummary {
     }
 }
 
+/// Captures machine and object-store identity for a published result.
 pub fn inspect_environment(provider: &str, endpoint: &str, region: &str) -> Environment {
     let mut system = System::new_all();
     system.refresh_all();
@@ -1307,6 +1384,7 @@ fn is_physical_disk(name: &str) -> bool {
     true
 }
 
+/// Sums counter values with `name` across all metric label sets.
 pub fn counter_value(metrics: &Metrics, name: &str) -> u64 {
     metrics
         .by_name(name)

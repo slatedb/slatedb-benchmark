@@ -1,3 +1,5 @@
+//! End-to-end latency tracking from write acceptance to durable sequence.
+
 use crate::system::{ApplicationRecorder, ApplicationRegistry};
 use anyhow::{Context, Result};
 use slatedb::Db;
@@ -10,6 +12,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::{JoinHandle, JoinSet};
 
 #[derive(Debug)]
+/// Per-client handle for reporting accepted asynchronous writes.
 pub struct DurabilitySender {
     tx: mpsc::UnboundedSender<AcceptedWrite>,
 }
@@ -28,8 +31,11 @@ struct FrontierObservation {
 
 type FrontierHistory = Arc<RwLock<Vec<FrontierObservation>>>;
 
+/// Aggregate result returned after every accepted write becomes durable.
 pub struct DurabilityResult {
+    /// Number of writes for which durability latency was recorded.
     pub count: u64,
+    /// Last durable sequence observed before shutdown.
     pub final_durable_sequence: u64,
 }
 
@@ -39,6 +45,11 @@ struct DurabilityShardResult {
     latencies: Vec<Duration>,
 }
 
+/// Coordinates durable-frontier observation and per-client latency tracking.
+///
+/// Frontier observations retain their timestamps so a delayed client report is
+/// matched to the first observation that covered its sequence, not a later
+/// notification.
 pub struct DurabilityTracker {
     history: FrontierHistory,
     frontier: watch::Receiver<u64>,
@@ -49,6 +60,7 @@ pub struct DurabilityTracker {
 }
 
 impl DurabilityTracker {
+    /// Starts observing the database's durable sequence.
     pub fn start(db: Arc<Db>, registry: Arc<ApplicationRegistry>) -> Self {
         let status = db.subscribe();
         let initial = FrontierObservation {
@@ -74,6 +86,7 @@ impl DurabilityTracker {
         }
     }
 
+    /// Creates a sender and tracking shard for one workload client.
     pub fn sender(&mut self) -> DurabilitySender {
         let (tx, rx) = mpsc::unbounded_channel();
         self.shards.spawn(track_shard(
@@ -85,6 +98,7 @@ impl DurabilityTracker {
         DurabilitySender { tx }
     }
 
+    /// Drains all client reports and returns aggregate durability coverage.
     pub async fn finish(mut self) -> Result<DurabilityResult> {
         let mut count = 0_u64;
         while let Some(result) = self.shards.join_next().await {
@@ -104,6 +118,7 @@ impl DurabilityTracker {
         })
     }
 
+    /// Stops all tracking tasks without waiting for durability coverage.
     pub fn abort(mut self) {
         self.shards.abort_all();
         if let Some(stop) = self.observer_stop.take() {
@@ -114,6 +129,7 @@ impl DurabilityTracker {
 }
 
 impl DurabilitySender {
+    /// Reports when SlateDB accepted a write with the supplied sequence.
     pub fn accepted(&self, sequence: u64, returned_at: Instant) {
         let _ = self.tx.send(AcceptedWrite {
             sequence,

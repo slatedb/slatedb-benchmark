@@ -1,69 +1,88 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "WorkloadResult",
+  "description": "Summarized result and provenance for one benchmark workload.",
   "type": "object",
   "properties": {
     "status": {
+      "description": "Completion status; valid results use `ok`.",
       "type": "string"
     },
     "task": {
+      "description": "Workload represented by this artifact.",
       "$ref": "#/$defs/Task"
     },
     "golden_id": {
+      "description": "Golden dataset identifier supplied to the run.",
       "type": "string"
     },
     "session": {
+      "description": "Run identifier shared by sibling workloads.",
       "type": "string"
     },
     "timestamp": {
+      "description": "RFC 3339 completion timestamp.",
       "type": "string"
     },
     "actions_log_url": {
+      "description": "GitHub Actions job log URL, when available.",
       "type": [
         "string",
         "null"
       ]
     },
     "source": {
+      "description": "Source revisions used to build the runner.",
       "$ref": "#/$defs/SourceIdentity"
     },
     "environment": {
+      "description": "Execution environment.",
       "$ref": "#/$defs/Environment"
     },
     "configuration": {
+      "description": "Effective workload and SlateDB configuration.",
       "$ref": "#/$defs/ResultConfiguration"
     },
     "initial_state": {
+      "description": "Database state observed before warmup and measurement.",
       "$ref": "#/$defs/InitialState"
     },
     "client_measurement_ns": {
+      "description": "Wall-clock time spent running measured clients.",
       "type": "integer",
       "format": "uint64",
       "minimum": 0
     },
     "durability_drain_ns": {
+      "description": "Time after clients stopped until all accepted writes became durable.",
       "type": "integer",
       "format": "uint64",
       "minimum": 0
     },
     "recorded_interval_ns": {
+      "description": "Total interval covered by summary metrics.",
       "type": "integer",
       "format": "uint64",
       "minimum": 0
     },
     "application": {
+      "description": "Application-level summary metrics.",
       "$ref": "#/$defs/ApplicationMetrics"
     },
     "object_store": {
+      "description": "Physical object-store summary metrics.",
       "$ref": "#/$defs/ObjectStoreMetrics"
     },
     "process": {
+      "description": "Process summary metrics.",
       "$ref": "#/$defs/ProcessStatistics"
     },
     "machine": {
+      "description": "Host summary metrics.",
       "$ref": "#/$defs/MachineStatistics"
     },
     "series": {
+      "description": "Reference to the workload time-series sidecar.",
       "$ref": "#/$defs/SeriesReference"
     }
   },
@@ -89,38 +108,92 @@
   ],
   "$defs": {
     "Task": {
-      "type": "string",
-      "enum": [
-        "bulk-load",
-        "compaction",
-        "idle",
-        "point-read-uniform",
-        "point-read-skewed",
-        "point-read-missing",
-        "read-heavy",
-        "balanced",
-        "update-heavy",
-        "range-scan",
-        "sustained-ingest",
-        "transaction-contention"
+      "description": "A preparation phase or workload from the benchmark catalog.",
+      "oneOf": [
+        {
+          "description": "The `bulk-load` benchmark task.",
+          "type": "string",
+          "const": "bulk-load"
+        },
+        {
+          "description": "The `compaction` benchmark task.",
+          "type": "string",
+          "const": "compaction"
+        },
+        {
+          "description": "The `idle` benchmark task.",
+          "type": "string",
+          "const": "idle"
+        },
+        {
+          "description": "The `point-read-uniform` benchmark task.",
+          "type": "string",
+          "const": "point-read-uniform"
+        },
+        {
+          "description": "The `point-read-skewed` benchmark task.",
+          "type": "string",
+          "const": "point-read-skewed"
+        },
+        {
+          "description": "The `point-read-missing` benchmark task.",
+          "type": "string",
+          "const": "point-read-missing"
+        },
+        {
+          "description": "The `read-heavy` benchmark task.",
+          "type": "string",
+          "const": "read-heavy"
+        },
+        {
+          "description": "The `balanced` benchmark task.",
+          "type": "string",
+          "const": "balanced"
+        },
+        {
+          "description": "The `update-heavy` benchmark task.",
+          "type": "string",
+          "const": "update-heavy"
+        },
+        {
+          "description": "The `range-scan` benchmark task.",
+          "type": "string",
+          "const": "range-scan"
+        },
+        {
+          "description": "The `sustained-ingest` benchmark task.",
+          "type": "string",
+          "const": "sustained-ingest"
+        },
+        {
+          "description": "The `transaction-contention` benchmark task.",
+          "type": "string",
+          "const": "transaction-contention"
+        }
       ]
     },
     "SourceIdentity": {
+      "description": "Source revisions that make a benchmark artifact reproducible.",
       "type": "object",
       "properties": {
         "slate_version": {
+          "description": "SlateDB version label used to group published results.",
           "type": "string"
         },
         "slate_commit": {
+          "description": "Exact SlateDB Git commit compiled into the runner.",
           "type": "string"
         },
         "runner_version": {
+          "description": "Version of the benchmark runner crate.",
           "type": "string"
         },
         "runner_commit": {
+          "description": "Exact benchmark-runner Git commit.",
           "type": "string"
         },
         "lockfile_sha256": {
+          "description": "SHA-256 digest of the runner's `Cargo.lock`.",
           "type": "string"
         }
       },
@@ -134,43 +207,55 @@
       ]
     },
     "Environment": {
+      "description": "Hardware, operating system, and object-store context for a benchmark.",
       "type": "object",
       "properties": {
         "runner_type": {
+          "description": "CI runner label or `local`.",
           "type": "string"
         },
         "hostname": {
+          "description": "Hostname reported by the operating system.",
           "type": "string"
         },
         "cpu_model": {
+          "description": "CPU model string.",
           "type": "string"
         },
         "cpu_cores": {
+          "description": "Number of logical CPU cores visible to the process.",
           "type": "integer",
           "format": "uint",
           "minimum": 0
         },
         "ram_bytes": {
+          "description": "Total host memory in bytes.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0
         },
         "local_disk": {
+          "description": "Names and mount points of visible local disks.",
           "type": "string"
         },
         "os": {
+          "description": "Operating system name and version.",
           "type": "string"
         },
         "kernel": {
+          "description": "Kernel version.",
           "type": "string"
         },
         "object_store": {
+          "description": "Object-store provider name.",
           "type": "string"
         },
         "endpoint": {
+          "description": "Configured object-store endpoint or provider default.",
           "type": "string"
         },
         "region": {
+          "description": "Object-store region.",
           "type": "string"
         }
       },
@@ -190,27 +275,38 @@
       ]
     },
     "ResultConfiguration": {
+      "description": "Published configuration for one preparation phase or workload.",
       "type": "object",
       "properties": {
         "scale": {
+          "description": "Decimal scale factor applied to catalog defaults.",
           "type": "number",
           "format": "double"
         },
         "dataset": {
+          "description": "Dataset shape used by the task.",
           "$ref": "#/$defs/DatasetConfig"
         },
         "caches": {
+          "description": "Benchmark-managed cache capacities.",
           "$ref": "#/$defs/CacheConfig"
         },
         "task": {
+          "description": "Workload behavior and duration.",
           "$ref": "#/$defs/TaskConfig"
         },
-        "slate_settings": true,
-        "slate_default_settings": true,
+        "slate_settings": {
+          "description": "Effective SlateDB settings serialized as JSON."
+        },
+        "slate_default_settings": {
+          "description": "SlateDB defaults used to identify explicit overrides."
+        },
         "build_profile": {
+          "description": "Rust build profile used for the runner.",
           "type": "string"
         },
         "enabled_features": {
+          "description": "SlateDB Cargo features enabled in the runner.",
           "type": "array",
           "items": {
             "type": "string"
@@ -229,24 +325,29 @@
       ]
     },
     "DatasetConfig": {
+      "description": "Shape and logical size of records used by a benchmark task.",
       "type": "object",
       "properties": {
         "record_count": {
+          "description": "Number of records in the key-selection domain.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0
         },
         "key_bytes": {
+          "description": "Encoded key size in bytes.",
           "type": "integer",
           "format": "uint",
           "minimum": 0
         },
         "value_bytes": {
+          "description": "Generated value size in bytes.",
           "type": "integer",
           "format": "uint",
           "minimum": 0
         },
         "value_compression_ratio": {
+          "description": "Target ratio of uncompressed to compressed value bytes.",
           "type": "number",
           "format": "double"
         }
@@ -260,14 +361,17 @@
       ]
     },
     "CacheConfig": {
+      "description": "In-memory cache capacities used by the benchmark runner.",
       "type": "object",
       "properties": {
         "block_bytes": {
+          "description": "Block-cache capacity in bytes.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0
         },
         "metadata_bytes": {
+          "description": "Metadata-cache capacity in bytes.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0
@@ -280,33 +384,41 @@
       ]
     },
     "TaskConfig": {
+      "description": "Runtime shape of one preparation phase or workload.",
       "type": "object",
       "properties": {
         "task": {
+          "description": "Catalog task represented by this configuration.",
           "$ref": "#/$defs/Task"
         },
         "clients": {
+          "description": "Number of concurrent closed-loop clients.",
           "type": "integer",
           "format": "uint",
           "minimum": 0
         },
         "warmup_ms": {
+          "description": "Warmup duration in milliseconds.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0
         },
         "measurement_ms": {
+          "description": "Measured client duration in milliseconds.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0
         },
         "initial_state": {
+          "description": "Initial database state: `empty`, `golden`, or `none`.",
           "type": "string"
         },
         "key_selection": {
+          "description": "Key-selection strategy used by workload operations.",
           "type": "string"
         },
         "operation_mix": {
+          "description": "Operation name to probability map; active workloads sum to one.",
           "type": "object",
           "additionalProperties": {
             "type": "number",
@@ -314,6 +426,7 @@
           }
         },
         "scan_limit": {
+          "description": "Maximum number of records returned by each scan.",
           "type": [
             "integer",
             "null"
@@ -322,6 +435,7 @@
           "minimum": 0
         },
         "transaction_hot_keys": {
+          "description": "Number of keys in the transaction contention hot set.",
           "type": [
             "integer",
             "null"
@@ -330,6 +444,7 @@
           "minimum": 0
         },
         "transaction_reads": {
+          "description": "Reads performed by each transaction attempt.",
           "type": [
             "integer",
             "null"
@@ -338,6 +453,7 @@
           "minimum": 0
         },
         "transaction_updates": {
+          "description": "Updates performed by each transaction attempt.",
           "type": [
             "integer",
             "null"
@@ -358,18 +474,22 @@
       ]
     },
     "InitialState": {
+      "description": "Database state observed immediately before a workload starts.",
       "type": "object",
       "properties": {
         "kind": {
+          "description": "State kind, either `golden` or `empty`.",
           "type": "string"
         },
         "checkpoint_id": {
+          "description": "Golden checkpoint UUID, absent for an empty database.",
           "type": [
             "string",
             "null"
           ]
         },
         "manifest_id": {
+          "description": "Golden manifest ID, absent for an empty database.",
           "type": [
             "integer",
             "null"
@@ -378,6 +498,7 @@
           "minimum": 0
         },
         "lsm_digest_sha256": {
+          "description": "SHA-256 digest of the initial logical LSM state.",
           "type": "string"
         }
       },
@@ -388,21 +509,25 @@
       ]
     },
     "ApplicationMetrics": {
+      "description": "Application-level operation, throughput, and latency summaries.",
       "type": "object",
       "properties": {
         "operations": {
+          "description": "Operation name to call-rate summary.",
           "type": "object",
           "additionalProperties": {
             "$ref": "#/$defs/RateSummary"
           }
         },
         "throughput": {
+          "description": "Operation name to logical-byte throughput summary.",
           "type": "object",
           "additionalProperties": {
             "$ref": "#/$defs/ThroughputSummary"
           }
         },
         "latency": {
+          "description": "Operation name to end-to-end latency summary.",
           "type": "object",
           "additionalProperties": {
             "$ref": "#/$defs/LatencySummary"
@@ -417,42 +542,52 @@
       ]
     },
     "RateSummary": {
+      "description": "Total and per-window distribution for an operation count.",
       "type": "object",
       "properties": {
         "total": {
+          "description": "Calls recorded over the full measurement interval.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0
         },
         "avg_per_second": {
+          "description": "Full-interval average calls per second.",
           "type": "number",
           "format": "double"
         },
         "p001_per_second": {
+          "description": "0.1st percentile of complete per-second windows.",
           "type": "number",
           "format": "double"
         },
         "p01_per_second": {
+          "description": "1st percentile of complete per-second windows.",
           "type": "number",
           "format": "double"
         },
         "p50_per_second": {
+          "description": "Median of complete per-second windows.",
           "type": "number",
           "format": "double"
         },
         "p99_per_second": {
+          "description": "99th percentile of complete per-second windows.",
           "type": "number",
           "format": "double"
         },
         "p999_per_second": {
+          "description": "99.9th percentile of complete per-second windows.",
           "type": "number",
           "format": "double"
         },
         "min_per_second": {
+          "description": "Minimum complete-window rate.",
           "type": "number",
           "format": "double"
         },
         "max_per_second": {
+          "description": "Maximum complete-window rate.",
           "type": "number",
           "format": "double"
         }
@@ -471,42 +606,52 @@
       ]
     },
     "ThroughputSummary": {
+      "description": "Total and per-window distribution for byte throughput.",
       "type": "object",
       "properties": {
         "total_bytes": {
+          "description": "Logical or physical bytes recorded over the full interval.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0
         },
         "avg_bytes_per_second": {
+          "description": "Full-interval average bytes per second.",
           "type": "number",
           "format": "double"
         },
         "p001_bytes_per_second": {
+          "description": "0.1st percentile of complete-window bytes per second.",
           "type": "number",
           "format": "double"
         },
         "p01_bytes_per_second": {
+          "description": "1st percentile of complete-window bytes per second.",
           "type": "number",
           "format": "double"
         },
         "p50_bytes_per_second": {
+          "description": "Median complete-window bytes per second.",
           "type": "number",
           "format": "double"
         },
         "p99_bytes_per_second": {
+          "description": "99th percentile of complete-window bytes per second.",
           "type": "number",
           "format": "double"
         },
         "p999_bytes_per_second": {
+          "description": "99.9th percentile of complete-window bytes per second.",
           "type": "number",
           "format": "double"
         },
         "min_bytes_per_second": {
+          "description": "Minimum complete-window bytes per second.",
           "type": "number",
           "format": "double"
         },
         "max_bytes_per_second": {
+          "description": "Maximum complete-window bytes per second.",
           "type": "number",
           "format": "double"
         }
@@ -525,48 +670,58 @@
       ]
     },
     "LatencySummary": {
+      "description": "HDR-histogram summary of operation latency in nanoseconds.",
       "type": "object",
       "properties": {
         "count": {
+          "description": "Number of latency observations.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0
         },
         "avg_ns": {
+          "description": "Arithmetic mean latency in nanoseconds.",
           "type": "number",
           "format": "double"
         },
         "p001_ns": {
+          "description": "0.1st-percentile latency in nanoseconds.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0
         },
         "p01_ns": {
+          "description": "1st-percentile latency in nanoseconds.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0
         },
         "p50_ns": {
+          "description": "Median latency in nanoseconds.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0
         },
         "p99_ns": {
+          "description": "99th-percentile latency in nanoseconds.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0
         },
         "p999_ns": {
+          "description": "99.9th-percentile latency in nanoseconds.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0
         },
         "min_ns": {
+          "description": "Minimum observed latency in nanoseconds.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0
         },
         "max_ns": {
+          "description": "Maximum observed latency in nanoseconds.",
           "type": "integer",
           "format": "uint64",
           "minimum": 0
@@ -586,15 +741,18 @@
       ]
     },
     "ObjectStoreMetrics": {
+      "description": "Physical object-store request and body-byte summaries.",
       "type": "object",
       "properties": {
         "requests": {
+          "description": "HTTP method to request-rate summary.",
           "type": "object",
           "additionalProperties": {
             "$ref": "#/$defs/RateSummary"
           }
         },
         "throughput": {
+          "description": "HTTP method to response and request body throughput summary.",
           "type": "object",
           "additionalProperties": {
             "$ref": "#/$defs/ThroughputSummary"
@@ -608,12 +766,15 @@
       ]
     },
     "ProcessStatistics": {
+      "description": "Distribution of process-level resource samples.",
       "type": "object",
       "properties": {
         "cpu_cores": {
+          "description": "CPU cores consumed by the benchmark process.",
           "$ref": "#/$defs/DistributionSummary"
         },
         "rss_bytes": {
+          "description": "Resident set size in bytes.",
           "$ref": "#/$defs/DistributionSummary"
         }
       },
@@ -624,37 +785,46 @@
       ]
     },
     "DistributionSummary": {
+      "description": "Distribution summary for sampled floating-point measurements.",
       "type": "object",
       "properties": {
         "avg": {
+          "description": "Arithmetic mean.",
           "type": "number",
           "format": "double"
         },
         "p001": {
+          "description": "0.1st percentile.",
           "type": "number",
           "format": "double"
         },
         "p01": {
+          "description": "1st percentile.",
           "type": "number",
           "format": "double"
         },
         "p50": {
+          "description": "Median.",
           "type": "number",
           "format": "double"
         },
         "p99": {
+          "description": "99th percentile.",
           "type": "number",
           "format": "double"
         },
         "p999": {
+          "description": "99.9th percentile.",
           "type": "number",
           "format": "double"
         },
         "min": {
+          "description": "Minimum sample.",
           "type": "number",
           "format": "double"
         },
         "max": {
+          "description": "Maximum sample.",
           "type": "number",
           "format": "double"
         }
@@ -672,30 +842,39 @@
       ]
     },
     "MachineStatistics": {
+      "description": "Distribution of host-level resource and I/O samples.",
       "type": "object",
       "properties": {
         "cpu_percent": {
+          "description": "Host CPU utilization as a percentage.",
           "$ref": "#/$defs/DistributionSummary"
         },
         "memory_used_bytes": {
+          "description": "Host memory in use, in bytes.",
           "$ref": "#/$defs/DistributionSummary"
         },
         "network_receive_bytes_per_second": {
+          "description": "Network bytes received per second.",
           "$ref": "#/$defs/DistributionSummary"
         },
         "network_send_bytes_per_second": {
+          "description": "Network bytes sent per second.",
           "$ref": "#/$defs/DistributionSummary"
         },
         "disk_read_bytes_per_second": {
+          "description": "Physical disk bytes read per second.",
           "$ref": "#/$defs/DistributionSummary"
         },
         "disk_write_bytes_per_second": {
+          "description": "Physical disk bytes written per second.",
           "$ref": "#/$defs/DistributionSummary"
         },
         "disk_read_operations_per_second": {
+          "description": "Physical disk read operations per second.",
           "$ref": "#/$defs/DistributionSummary"
         },
         "disk_write_operations_per_second": {
+          "description": "Physical disk write operations per second.",
           "$ref": "#/$defs/DistributionSummary"
         }
       },
@@ -712,12 +891,15 @@
       ]
     },
     "SeriesReference": {
+      "description": "Content-addressed reference to a workload sidecar.",
       "type": "object",
       "properties": {
         "file": {
+          "description": "Sidecar filename relative to `result.json`.",
           "type": "string"
         },
         "sha256": {
+          "description": "Lowercase SHA-256 digest of the sidecar bytes.",
           "type": "string"
         }
       },

@@ -4,63 +4,783 @@ export type JsonValue = null | boolean | number | string | JsonValue[] | { [key:
 
 export type Task = "bulk-load" | "compaction" | "idle" | "point-read-uniform" | "point-read-skewed" | "point-read-missing" | "read-heavy" | "balanced" | "update-heavy" | "range-scan" | "sustained-ingest" | "transaction-contention";
 
-export type DatasetConfig = { record_count: number, key_bytes: number, value_bytes: number, value_compression_ratio: number, };
+export type DatasetConfig = {
+/**
+ * Number of records in the key-selection domain.
+ */
+record_count: number,
+/**
+ * Encoded key size in bytes.
+ */
+key_bytes: number,
+/**
+ * Generated value size in bytes.
+ */
+value_bytes: number,
+/**
+ * Target ratio of uncompressed to compressed value bytes.
+ */
+value_compression_ratio: number, };
 
-export type CacheConfig = { block_bytes: number, metadata_bytes: number, };
+export type CacheConfig = {
+/**
+ * Block-cache capacity in bytes.
+ */
+block_bytes: number,
+/**
+ * Metadata-cache capacity in bytes.
+ */
+metadata_bytes: number, };
 
-export type TaskConfig = { task: Task, clients: number, warmup_ms: number, measurement_ms: number, initial_state: string, key_selection: string, operation_mix: { [key in string]: number }, scan_limit: number | null, transaction_hot_keys: number | null, transaction_reads: number | null, transaction_updates: number | null, };
+export type TaskConfig = {
+/**
+ * Catalog task represented by this configuration.
+ */
+task: Task,
+/**
+ * Number of concurrent closed-loop clients.
+ */
+clients: number,
+/**
+ * Warmup duration in milliseconds.
+ */
+warmup_ms: number,
+/**
+ * Measured client duration in milliseconds.
+ */
+measurement_ms: number,
+/**
+ * Initial database state: `empty`, `golden`, or `none`.
+ */
+initial_state: string,
+/**
+ * Key-selection strategy used by workload operations.
+ */
+key_selection: string,
+/**
+ * Operation name to probability map; active workloads sum to one.
+ */
+operation_mix: { [key in string]: number },
+/**
+ * Maximum number of records returned by each scan.
+ */
+scan_limit: number | null,
+/**
+ * Number of keys in the transaction contention hot set.
+ */
+transaction_hot_keys: number | null,
+/**
+ * Reads performed by each transaction attempt.
+ */
+transaction_reads: number | null,
+/**
+ * Updates performed by each transaction attempt.
+ */
+transaction_updates: number | null, };
 
-export type SourceIdentity = { slate_version: string, slate_commit: string, runner_version: string, runner_commit: string, lockfile_sha256: string, };
+export type SourceIdentity = {
+/**
+ * SlateDB version label used to group published results.
+ */
+slate_version: string,
+/**
+ * Exact SlateDB Git commit compiled into the runner.
+ */
+slate_commit: string,
+/**
+ * Version of the benchmark runner crate.
+ */
+runner_version: string,
+/**
+ * Exact benchmark-runner Git commit.
+ */
+runner_commit: string,
+/**
+ * SHA-256 digest of the runner's `Cargo.lock`.
+ */
+lockfile_sha256: string, };
 
-export type Environment = { runner_type: string, hostname: string, cpu_model: string, cpu_cores: number, ram_bytes: number, local_disk: string, os: string, kernel: string, object_store: string, endpoint: string, region: string, };
+export type Environment = {
+/**
+ * CI runner label or `local`.
+ */
+runner_type: string,
+/**
+ * Hostname reported by the operating system.
+ */
+hostname: string,
+/**
+ * CPU model string.
+ */
+cpu_model: string,
+/**
+ * Number of logical CPU cores visible to the process.
+ */
+cpu_cores: number,
+/**
+ * Total host memory in bytes.
+ */
+ram_bytes: number,
+/**
+ * Names and mount points of visible local disks.
+ */
+local_disk: string,
+/**
+ * Operating system name and version.
+ */
+os: string,
+/**
+ * Kernel version.
+ */
+kernel: string,
+/**
+ * Object-store provider name.
+ */
+object_store: string,
+/**
+ * Configured object-store endpoint or provider default.
+ */
+endpoint: string,
+/**
+ * Object-store region.
+ */
+region: string, };
 
-export type CheckpointReference = { database_path: string, checkpoint_id: string, manifest_id: number, lsm_digest_sha256: string, live_sst_bytes: number, };
+export type CheckpointReference = {
+/**
+ * Object-store path of the checkpointed database.
+ */
+database_path: string,
+/**
+ * UUID of the detached SlateDB checkpoint.
+ */
+checkpoint_id: string,
+/**
+ * Manifest ID captured by the checkpoint.
+ */
+manifest_id: number,
+/**
+ * SHA-256 digest of the checkpoint's logical LSM state.
+ */
+lsm_digest_sha256: string,
+/**
+ * Compressed bytes in physical SSTs referenced by the checkpoint.
+ */
+live_sst_bytes: number, };
 
-export type GoldenDatasetMetadata = { record_count: number, key_bytes: number, value_bytes: number, logical_bytes: number, live_sst_bytes: number, };
+export type GoldenDatasetMetadata = {
+/**
+ * Number of records loaded.
+ */
+record_count: number,
+/**
+ * Encoded key size in bytes.
+ */
+key_bytes: number,
+/**
+ * Generated value size in bytes.
+ */
+value_bytes: number,
+/**
+ * Total logical bytes loaded before compression.
+ */
+logical_bytes: number,
+/**
+ * Compressed bytes in live physical SSTs.
+ */
+live_sst_bytes: number, };
 
-export type ResultConfiguration = { scale: number, dataset: DatasetConfig, caches: CacheConfig, task: TaskConfig, slate_settings: JsonValue, slate_default_settings?: JsonValue | null, build_profile: string, enabled_features: Array<string>, };
+export type ResultConfiguration = {
+/**
+ * Decimal scale factor applied to catalog defaults.
+ */
+scale: number,
+/**
+ * Dataset shape used by the task.
+ */
+dataset: DatasetConfig,
+/**
+ * Benchmark-managed cache capacities.
+ */
+caches: CacheConfig,
+/**
+ * Workload behavior and duration.
+ */
+task: TaskConfig,
+/**
+ * Effective SlateDB settings serialized as JSON.
+ */
+slate_settings: JsonValue,
+/**
+ * SlateDB defaults used to identify explicit overrides.
+ */
+slate_default_settings?: JsonValue | null,
+/**
+ * Rust build profile used for the runner.
+ */
+build_profile: string,
+/**
+ * SlateDB Cargo features enabled in the runner.
+ */
+enabled_features: Array<string>, };
 
-export type GoldenManifest = { status: string, golden_id: string, timestamp: string, source: SourceIdentity, environment: Environment, configuration: ResultConfiguration, checkpoint: CheckpointReference, dataset: GoldenDatasetMetadata, };
+export type GoldenManifest = {
+/**
+ * Completion status; valid manifests use `ok`.
+ */
+status: string,
+/**
+ * Stable golden-dataset identifier.
+ */
+golden_id: string,
+/**
+ * RFC 3339 completion timestamp.
+ */
+timestamp: string,
+/**
+ * Source revisions used to build the dataset.
+ */
+source: SourceIdentity,
+/**
+ * Environment in which preparation ran.
+ */
+environment: Environment,
+/**
+ * Effective compaction-phase configuration.
+ */
+configuration: ResultConfiguration,
+/**
+ * Detached checkpoint cloned by workloads.
+ */
+checkpoint: CheckpointReference,
+/**
+ * Prepared dataset size and record shape.
+ */
+dataset: GoldenDatasetMetadata, };
 
-export type InitialState = { kind: string, checkpoint_id: string | null, manifest_id: number | null, lsm_digest_sha256: string, };
+export type InitialState = {
+/**
+ * State kind, either `golden` or `empty`.
+ */
+kind: string,
+/**
+ * Golden checkpoint UUID, absent for an empty database.
+ */
+checkpoint_id: string | null,
+/**
+ * Golden manifest ID, absent for an empty database.
+ */
+manifest_id: number | null,
+/**
+ * SHA-256 digest of the initial logical LSM state.
+ */
+lsm_digest_sha256: string, };
 
-export type RateSummary = { total: number, avg_per_second: number, p001_per_second: number, p01_per_second: number, p50_per_second: number, p99_per_second: number, p999_per_second: number, min_per_second: number, max_per_second: number, };
+export type RateSummary = {
+/**
+ * Calls recorded over the full measurement interval.
+ */
+total: number,
+/**
+ * Full-interval average calls per second.
+ */
+avg_per_second: number,
+/**
+ * 0.1st percentile of complete per-second windows.
+ */
+p001_per_second: number,
+/**
+ * 1st percentile of complete per-second windows.
+ */
+p01_per_second: number,
+/**
+ * Median of complete per-second windows.
+ */
+p50_per_second: number,
+/**
+ * 99th percentile of complete per-second windows.
+ */
+p99_per_second: number,
+/**
+ * 99.9th percentile of complete per-second windows.
+ */
+p999_per_second: number,
+/**
+ * Minimum complete-window rate.
+ */
+min_per_second: number,
+/**
+ * Maximum complete-window rate.
+ */
+max_per_second: number, };
 
-export type ThroughputSummary = { total_bytes: number, avg_bytes_per_second: number, p001_bytes_per_second: number, p01_bytes_per_second: number, p50_bytes_per_second: number, p99_bytes_per_second: number, p999_bytes_per_second: number, min_bytes_per_second: number, max_bytes_per_second: number, };
+export type ThroughputSummary = {
+/**
+ * Logical or physical bytes recorded over the full interval.
+ */
+total_bytes: number,
+/**
+ * Full-interval average bytes per second.
+ */
+avg_bytes_per_second: number,
+/**
+ * 0.1st percentile of complete-window bytes per second.
+ */
+p001_bytes_per_second: number,
+/**
+ * 1st percentile of complete-window bytes per second.
+ */
+p01_bytes_per_second: number,
+/**
+ * Median complete-window bytes per second.
+ */
+p50_bytes_per_second: number,
+/**
+ * 99th percentile of complete-window bytes per second.
+ */
+p99_bytes_per_second: number,
+/**
+ * 99.9th percentile of complete-window bytes per second.
+ */
+p999_bytes_per_second: number,
+/**
+ * Minimum complete-window bytes per second.
+ */
+min_bytes_per_second: number,
+/**
+ * Maximum complete-window bytes per second.
+ */
+max_bytes_per_second: number, };
 
-export type LatencySummary = { count: number, avg_ns: number, p001_ns: number, p01_ns: number, p50_ns: number, p99_ns: number, p999_ns: number, min_ns: number, max_ns: number, };
+export type LatencySummary = {
+/**
+ * Number of latency observations.
+ */
+count: number,
+/**
+ * Arithmetic mean latency in nanoseconds.
+ */
+avg_ns: number,
+/**
+ * 0.1st-percentile latency in nanoseconds.
+ */
+p001_ns: number,
+/**
+ * 1st-percentile latency in nanoseconds.
+ */
+p01_ns: number,
+/**
+ * Median latency in nanoseconds.
+ */
+p50_ns: number,
+/**
+ * 99th-percentile latency in nanoseconds.
+ */
+p99_ns: number,
+/**
+ * 99.9th-percentile latency in nanoseconds.
+ */
+p999_ns: number,
+/**
+ * Minimum observed latency in nanoseconds.
+ */
+min_ns: number,
+/**
+ * Maximum observed latency in nanoseconds.
+ */
+max_ns: number, };
 
-export type DistributionSummary = { avg: number, p001: number, p01: number, p50: number, p99: number, p999: number, min: number, max: number, };
+export type DistributionSummary = {
+/**
+ * Arithmetic mean.
+ */
+avg: number,
+/**
+ * 0.1st percentile.
+ */
+p001: number,
+/**
+ * 1st percentile.
+ */
+p01: number,
+/**
+ * Median.
+ */
+p50: number,
+/**
+ * 99th percentile.
+ */
+p99: number,
+/**
+ * 99.9th percentile.
+ */
+p999: number,
+/**
+ * Minimum sample.
+ */
+min: number,
+/**
+ * Maximum sample.
+ */
+max: number, };
 
-export type ApplicationMetrics = { operations: { [key in string]: RateSummary }, throughput: { [key in string]: ThroughputSummary }, latency: { [key in string]: LatencySummary }, };
+export type ApplicationMetrics = {
+/**
+ * Operation name to call-rate summary.
+ */
+operations: { [key in string]: RateSummary },
+/**
+ * Operation name to logical-byte throughput summary.
+ */
+throughput: { [key in string]: ThroughputSummary },
+/**
+ * Operation name to end-to-end latency summary.
+ */
+latency: { [key in string]: LatencySummary }, };
 
-export type ObjectStoreMetrics = { requests: { [key in string]: RateSummary }, throughput: { [key in string]: ThroughputSummary }, };
+export type ObjectStoreMetrics = {
+/**
+ * HTTP method to request-rate summary.
+ */
+requests: { [key in string]: RateSummary },
+/**
+ * HTTP method to response and request body throughput summary.
+ */
+throughput: { [key in string]: ThroughputSummary }, };
 
-export type ProcessStatistics = { cpu_cores: DistributionSummary, rss_bytes: DistributionSummary, };
+export type ProcessStatistics = {
+/**
+ * CPU cores consumed by the benchmark process.
+ */
+cpu_cores: DistributionSummary,
+/**
+ * Resident set size in bytes.
+ */
+rss_bytes: DistributionSummary, };
 
-export type MachineStatistics = { cpu_percent: DistributionSummary, memory_used_bytes: DistributionSummary, network_receive_bytes_per_second: DistributionSummary, network_send_bytes_per_second: DistributionSummary, disk_read_bytes_per_second: DistributionSummary, disk_write_bytes_per_second: DistributionSummary, disk_read_operations_per_second: DistributionSummary, disk_write_operations_per_second: DistributionSummary, };
+export type MachineStatistics = {
+/**
+ * Host CPU utilization as a percentage.
+ */
+cpu_percent: DistributionSummary,
+/**
+ * Host memory in use, in bytes.
+ */
+memory_used_bytes: DistributionSummary,
+/**
+ * Network bytes received per second.
+ */
+network_receive_bytes_per_second: DistributionSummary,
+/**
+ * Network bytes sent per second.
+ */
+network_send_bytes_per_second: DistributionSummary,
+/**
+ * Physical disk bytes read per second.
+ */
+disk_read_bytes_per_second: DistributionSummary,
+/**
+ * Physical disk bytes written per second.
+ */
+disk_write_bytes_per_second: DistributionSummary,
+/**
+ * Physical disk read operations per second.
+ */
+disk_read_operations_per_second: DistributionSummary,
+/**
+ * Physical disk write operations per second.
+ */
+disk_write_operations_per_second: DistributionSummary, };
 
-export type SeriesReference = { file: string, sha256: string, };
+export type SeriesReference = {
+/**
+ * Sidecar filename relative to `result.json`.
+ */
+file: string,
+/**
+ * Lowercase SHA-256 digest of the sidecar bytes.
+ */
+sha256: string, };
 
-export type HistogramSeries = { upper_bound_ns: Array<number>, counts: Array<number>, };
+export type HistogramSeries = {
+/**
+ * Inclusive bucket upper bounds in nanoseconds.
+ */
+upper_bound_ns: Array<number>,
+/**
+ * Observation counts corresponding to `upper_bound_ns`.
+ */
+counts: Array<number>, };
 
-export type LatencyTimeSeries = { avg: Array<number | null>, p001: Array<number | null>, p01: Array<number | null>, p50: Array<number | null>, p99: Array<number | null>, p999: Array<number | null>, };
+export type LatencyTimeSeries = {
+/**
+ * Mean latency per window in nanoseconds.
+ */
+avg: Array<number | null>,
+/**
+ * 0.1st-percentile latency per window in nanoseconds.
+ */
+p001: Array<number | null>,
+/**
+ * 1st-percentile latency per window in nanoseconds.
+ */
+p01: Array<number | null>,
+/**
+ * Median latency per window in nanoseconds.
+ */
+p50: Array<number | null>,
+/**
+ * 99th-percentile latency per window in nanoseconds.
+ */
+p99: Array<number | null>,
+/**
+ * 99.9th-percentile latency per window in nanoseconds.
+ */
+p999: Array<number | null>, };
 
-export type ApplicationSeries = { operations_per_second: { [key in string]: Array<number> }, bytes_per_second: { [key in string]: Array<number> }, latency_ns: { [key in string]: LatencyTimeSeries }, latency_histograms: { [key in string]: HistogramSeries }, };
+export type ApplicationSeries = {
+/**
+ * Operation name to calls per rate window.
+ */
+operations_per_second: { [key in string]: Array<number> },
+/**
+ * Operation name to logical bytes per rate window.
+ */
+bytes_per_second: { [key in string]: Array<number> },
+/**
+ * Operation name to latency values per latency window.
+ */
+latency_ns: { [key in string]: LatencyTimeSeries },
+/**
+ * Operation name to full-interval sparse latency histogram.
+ */
+latency_histograms: { [key in string]: HistogramSeries }, };
 
-export type ObjectStoreSeries = { requests_per_second: { [key in string]: Array<number> }, bytes_per_second: { [key in string]: Array<number> }, };
+export type ObjectStoreSeries = {
+/**
+ * HTTP method to requests per rate window.
+ */
+requests_per_second: { [key in string]: Array<number> },
+/**
+ * HTTP method to body bytes per rate window.
+ */
+bytes_per_second: { [key in string]: Array<number> }, };
 
-export type ProcessSeries = { cpu_cores: Array<number>, rss_bytes: Array<number>, };
+export type ProcessSeries = {
+/**
+ * CPU cores consumed in each resource window.
+ */
+cpu_cores: Array<number>,
+/**
+ * Resident set size in bytes in each resource window.
+ */
+rss_bytes: Array<number>, };
 
-export type MachineSeries = { cpu_percent: Array<number>, memory_used_bytes: Array<number>, network_receive_bytes_per_second: Array<number>, network_send_bytes_per_second: Array<number>, disk_read_bytes_per_second: Array<number>, disk_write_bytes_per_second: Array<number>, disk_read_operations_per_second: Array<number>, disk_write_operations_per_second: Array<number>, };
+export type MachineSeries = {
+/**
+ * Host CPU utilization percentage per resource window.
+ */
+cpu_percent: Array<number>,
+/**
+ * Host memory in use, in bytes, per resource window.
+ */
+memory_used_bytes: Array<number>,
+/**
+ * Network receive rate per resource window.
+ */
+network_receive_bytes_per_second: Array<number>,
+/**
+ * Network send rate per resource window.
+ */
+network_send_bytes_per_second: Array<number>,
+/**
+ * Physical disk read-byte rate per resource window.
+ */
+disk_read_bytes_per_second: Array<number>,
+/**
+ * Physical disk write-byte rate per resource window.
+ */
+disk_write_bytes_per_second: Array<number>,
+/**
+ * Physical disk read-operation rate per resource window.
+ */
+disk_read_operations_per_second: Array<number>,
+/**
+ * Physical disk write-operation rate per resource window.
+ */
+disk_write_operations_per_second: Array<number>, };
 
-export type WorkloadSeries = { rate_elapsed_ns: Array<number>, rate_duration_ns: Array<number>, latency_elapsed_ns: Array<number>, latency_duration_ns: Array<number>, resource_elapsed_ns: Array<number>, resource_duration_ns: Array<number>, application: ApplicationSeries, object_store: ObjectStoreSeries, process: ProcessSeries, machine: MachineSeries, };
+export type WorkloadSeries = {
+/**
+ * End of each operation and object-store rate window, relative to sampling start.
+ */
+rate_elapsed_ns: Array<number>,
+/**
+ * Duration represented by each rate window.
+ */
+rate_duration_ns: Array<number>,
+/**
+ * End of each application-latency window, relative to sampling start.
+ */
+latency_elapsed_ns: Array<number>,
+/**
+ * Duration represented by each latency window.
+ */
+latency_duration_ns: Array<number>,
+/**
+ * End of each process and machine window, relative to sampling start.
+ */
+resource_elapsed_ns: Array<number>,
+/**
+ * Duration represented by each resource window.
+ */
+resource_duration_ns: Array<number>,
+/**
+ * Application time-series values.
+ */
+application: ApplicationSeries,
+/**
+ * Object-store time-series values.
+ */
+object_store: ObjectStoreSeries,
+/**
+ * Process time-series values.
+ */
+process: ProcessSeries,
+/**
+ * Host time-series values.
+ */
+machine: MachineSeries, };
 
-export type WorkloadResult = { status: string, task: Task, golden_id: string, session: string, timestamp: string, actions_log_url?: string | null, source: SourceIdentity, environment: Environment, configuration: ResultConfiguration, initial_state: InitialState, client_measurement_ns: number, durability_drain_ns: number, recorded_interval_ns: number, application: ApplicationMetrics, object_store: ObjectStoreMetrics, process: ProcessStatistics, machine: MachineStatistics, series: SeriesReference, };
+export type WorkloadResult = {
+/**
+ * Completion status; valid results use `ok`.
+ */
+status: string,
+/**
+ * Workload represented by this artifact.
+ */
+task: Task,
+/**
+ * Golden dataset identifier supplied to the run.
+ */
+golden_id: string,
+/**
+ * Run identifier shared by sibling workloads.
+ */
+session: string,
+/**
+ * RFC 3339 completion timestamp.
+ */
+timestamp: string,
+/**
+ * GitHub Actions job log URL, when available.
+ */
+actions_log_url?: string | null,
+/**
+ * Source revisions used to build the runner.
+ */
+source: SourceIdentity,
+/**
+ * Execution environment.
+ */
+environment: Environment,
+/**
+ * Effective workload and SlateDB configuration.
+ */
+configuration: ResultConfiguration,
+/**
+ * Database state observed before warmup and measurement.
+ */
+initial_state: InitialState,
+/**
+ * Wall-clock time spent running measured clients.
+ */
+client_measurement_ns: number,
+/**
+ * Time after clients stopped until all accepted writes became durable.
+ */
+durability_drain_ns: number,
+/**
+ * Total interval covered by summary metrics.
+ */
+recorded_interval_ns: number,
+/**
+ * Application-level summary metrics.
+ */
+application: ApplicationMetrics,
+/**
+ * Physical object-store summary metrics.
+ */
+object_store: ObjectStoreMetrics,
+/**
+ * Process summary metrics.
+ */
+process: ProcessStatistics,
+/**
+ * Host summary metrics.
+ */
+machine: MachineStatistics,
+/**
+ * Reference to the workload time-series sidecar.
+ */
+series: SeriesReference, };
 
-export type AppliedPatch = { name: string, sha256: string, };
+export type AppliedPatch = {
+/**
+ * Patch filename, which also determines application order.
+ */
+name: string,
+/**
+ * Lowercase SHA-256 digest of the patch contents.
+ */
+sha256: string, };
 
-export type RunManifest = { status: string, run_id: string, golden_id: string, started_at: string, finished_at: string, patches: Array<AppliedPatch>, source: SourceIdentity, golden_runner_commit: string, resolved_configuration: { [key in string]: ResultConfiguration }, max_parallel: number, results: { [key in string]: string }, };
+export type RunManifest = {
+/**
+ * Completion status; valid manifests use `ok`.
+ */
+status: string,
+/**
+ * Run identifier, normally derived from the GitHub Actions run.
+ */
+run_id: string,
+/**
+ * Golden dataset identifier shared by the workloads.
+ */
+golden_id: string,
+/**
+ * RFC 3339 timestamp captured when execution began.
+ */
+started_at: string,
+/**
+ * RFC 3339 timestamp captured when bundling completed.
+ */
+finished_at: string,
+/**
+ * Ordered SlateDB patches applied to the runner.
+ */
+patches: Array<AppliedPatch>,
+/**
+ * Source identity shared by every workload.
+ */
+source: SourceIdentity,
+/**
+ * Runner commit used to build the golden checkpoint.
+ */
+golden_runner_commit: string,
+/**
+ * Task name to effective published configuration.
+ */
+resolved_configuration: { [key in string]: ResultConfiguration },
+/**
+ * Maximum workload parallelism represented by the bundle.
+ */
+max_parallel: number,
+/**
+ * Relative artifact path to lowercase SHA-256 digest.
+ */
+results: { [key in string]: string }, };
 
 export const workloadNames = [
   'idle',

@@ -1,3 +1,5 @@
+//! Object-store and HTTP request accounting used by benchmark measurements.
+
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::BoxStream;
@@ -23,6 +25,7 @@ const HTTP_METHODS: [HttpMethod; 7] = [
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Normalized HTTP method used as a metrics dimension.
 pub(crate) enum HttpMethod {
     Get = 0,
     List = 1,
@@ -34,6 +37,7 @@ pub(crate) enum HttpMethod {
 }
 
 impl HttpMethod {
+    /// Maps an HTTP method to a published object-store operation category.
     pub(crate) fn from_http(method: &http::Method) -> Self {
         match *method {
             http::Method::GET => Self::Get,
@@ -63,6 +67,7 @@ impl HttpMethod {
 }
 
 #[derive(Debug)]
+/// Lock-free cumulative counters for physical object-store HTTP traffic.
 pub struct StoreMetrics {
     requests: [AtomicU64; HTTP_METHODS.len()],
     successful_requests: [AtomicU64; HTTP_METHODS.len()],
@@ -93,19 +98,30 @@ impl Default for StoreMetrics {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// Point-in-time copy of cumulative object-store counters.
 pub struct StoreSnapshot {
+    /// Attempted requests by method.
     pub requests: BTreeMap<String, u64>,
+    /// Successful non-404 responses by method.
     pub successful_requests: BTreeMap<String, u64>,
+    /// Not-found responses by method.
     pub not_found_responses: BTreeMap<String, u64>,
+    /// All failed attempts by method.
     pub request_errors: BTreeMap<String, u64>,
+    /// HTTP 4xx responses other than not found.
     pub client_errors: BTreeMap<String, u64>,
+    /// HTTP 5xx responses.
     pub server_errors: BTreeMap<String, u64>,
+    /// Transport failures without an HTTP response.
     pub transport_errors: BTreeMap<String, u64>,
+    /// Request body bytes by method.
     pub request_bytes: BTreeMap<String, u64>,
+    /// Response body bytes by method.
     pub response_bytes: BTreeMap<String, u64>,
 }
 
 impl StoreMetrics {
+    /// Copies all current atomic counters into an immutable snapshot.
     pub fn snapshot(&self) -> StoreSnapshot {
         StoreSnapshot {
             requests: snapshot(&self.requests),
@@ -120,41 +136,50 @@ impl StoreMetrics {
         }
     }
 
+    /// Records the start of one physical HTTP request.
     pub(crate) fn record_request(&self, method: HttpMethod) {
         self.requests[method.index()].fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Adds request body bytes to the method total.
     pub(crate) fn record_request_bytes(&self, method: HttpMethod, bytes: u64) {
         self.request_bytes[method.index()].fetch_add(bytes, Ordering::Relaxed);
     }
 
+    /// Records a successful non-404 HTTP response.
     pub(crate) fn record_success(&self, method: HttpMethod) {
         self.successful_requests[method.index()].fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Records an HTTP not-found response.
     pub(crate) fn record_not_found(&self, method: HttpMethod) {
         self.not_found_responses[method.index()].fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Records an HTTP 4xx response other than not found.
     pub(crate) fn record_client_error(&self, method: HttpMethod) {
         self.record_error(method);
         self.client_errors[method.index()].fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Records an HTTP 5xx response.
     pub(crate) fn record_server_error(&self, method: HttpMethod) {
         self.record_error(method);
         self.server_errors[method.index()].fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Records a failed request that has no more specific category.
     pub(crate) fn record_other_error(&self, method: HttpMethod) {
         self.record_error(method);
     }
 
+    /// Records a transport failure without an HTTP response.
     pub(crate) fn record_transport_error(&self, method: HttpMethod) {
         self.record_error(method);
         self.transport_errors[method.index()].fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Adds response body bytes to the method total.
     pub(crate) fn record_response_bytes(&self, method: HttpMethod, bytes: u64) {
         self.response_bytes[method.index()].fetch_add(bytes, Ordering::Relaxed);
     }
@@ -165,6 +190,7 @@ impl StoreMetrics {
 }
 
 impl StoreSnapshot {
+    /// Returns saturating counter deltas since `start`.
     pub fn difference(&self, start: &Self) -> Self {
         Self {
             requests: difference(&self.requests, &start.requests),
@@ -179,6 +205,7 @@ impl StoreSnapshot {
         }
     }
 
+    /// Returns request plus response body bytes for one method.
     pub fn body_bytes(&self, method: &str) -> u64 {
         self.request_bytes
             .get(method)
@@ -187,6 +214,7 @@ impl StoreSnapshot {
             .saturating_add(self.response_bytes.get(method).copied().unwrap_or(0))
     }
 
+    /// Returns failed attempts across all methods.
     pub fn errors(&self) -> u64 {
         self.request_errors.values().copied().sum()
     }
@@ -212,16 +240,22 @@ fn difference(end: &BTreeMap<String, u64>, start: &BTreeMap<String, u64>) -> BTr
 }
 
 #[derive(Clone)]
+/// Object-store facade carrying the HTTP metrics associated with its client.
+///
+/// The underlying HTTP connector performs the actual measurement; this wrapper
+/// lets the runner retain and query the matching metrics registry.
 pub struct InstrumentedStore {
     inner: Arc<dyn ObjectStore>,
     metrics: Arc<StoreMetrics>,
 }
 
 impl InstrumentedStore {
+    /// Associates an object store with the counters populated by its connector.
     pub(crate) fn with_metrics(inner: Arc<dyn ObjectStore>, metrics: Arc<StoreMetrics>) -> Self {
         Self { inner, metrics }
     }
 
+    /// Returns the cumulative metrics registry for this store.
     pub fn metrics(&self) -> Arc<StoreMetrics> {
         Arc::clone(&self.metrics)
     }

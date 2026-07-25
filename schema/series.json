@@ -1,9 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "WorkloadSeries",
+  "description": "Time-series sidecar associated with one workload result.",
   "type": "object",
   "properties": {
     "rate_elapsed_ns": {
+      "description": "End of each operation and object-store rate window, relative to sampling start.",
       "type": "array",
       "items": {
         "type": "integer",
@@ -12,6 +14,7 @@
       }
     },
     "rate_duration_ns": {
+      "description": "Duration represented by each rate window.",
       "type": "array",
       "items": {
         "type": "integer",
@@ -20,6 +23,7 @@
       }
     },
     "latency_elapsed_ns": {
+      "description": "End of each application-latency window, relative to sampling start.",
       "type": "array",
       "items": {
         "type": "integer",
@@ -28,6 +32,7 @@
       }
     },
     "latency_duration_ns": {
+      "description": "Duration represented by each latency window.",
       "type": "array",
       "items": {
         "type": "integer",
@@ -36,6 +41,7 @@
       }
     },
     "resource_elapsed_ns": {
+      "description": "End of each process and machine window, relative to sampling start.",
       "type": "array",
       "items": {
         "type": "integer",
@@ -44,6 +50,7 @@
       }
     },
     "resource_duration_ns": {
+      "description": "Duration represented by each resource window.",
       "type": "array",
       "items": {
         "type": "integer",
@@ -52,15 +59,19 @@
       }
     },
     "application": {
+      "description": "Application time-series values.",
       "$ref": "#/$defs/ApplicationSeries"
     },
     "object_store": {
+      "description": "Object-store time-series values.",
       "$ref": "#/$defs/ObjectStoreSeries"
     },
     "process": {
+      "description": "Process time-series values.",
       "$ref": "#/$defs/ProcessSeries"
     },
     "machine": {
+      "description": "Host time-series values.",
       "$ref": "#/$defs/MachineSeries"
     }
   },
@@ -79,9 +90,11 @@
   ],
   "$defs": {
     "ApplicationSeries": {
+      "description": "Application metrics sampled over time.",
       "type": "object",
       "properties": {
         "operations_per_second": {
+          "description": "Operation name to calls per rate window.",
           "type": "object",
           "additionalProperties": {
             "type": "array",
@@ -92,6 +105,7 @@
           }
         },
         "bytes_per_second": {
+          "description": "Operation name to logical bytes per rate window.",
           "type": "object",
           "additionalProperties": {
             "type": "array",
@@ -102,12 +116,14 @@
           }
         },
         "latency_ns": {
+          "description": "Operation name to latency values per latency window.",
           "type": "object",
           "additionalProperties": {
             "$ref": "#/$defs/LatencyTimeSeries"
           }
         },
         "latency_histograms": {
+          "description": "Operation name to full-interval sparse latency histogram.",
           "type": "object",
           "additionalProperties": {
             "$ref": "#/$defs/HistogramSeries"
@@ -123,9 +139,11 @@
       ]
     },
     "LatencyTimeSeries": {
+      "description": "Per-window latency summaries for one application operation.\n\nA missing value means the operation had no observations in that window.",
       "type": "object",
       "properties": {
         "avg": {
+          "description": "Mean latency per window in nanoseconds.",
           "type": "array",
           "items": {
             "type": [
@@ -136,6 +154,7 @@
           }
         },
         "p001": {
+          "description": "0.1st-percentile latency per window in nanoseconds.",
           "type": "array",
           "items": {
             "type": [
@@ -146,6 +165,7 @@
           }
         },
         "p01": {
+          "description": "1st-percentile latency per window in nanoseconds.",
           "type": "array",
           "items": {
             "type": [
@@ -156,6 +176,7 @@
           }
         },
         "p50": {
+          "description": "Median latency per window in nanoseconds.",
           "type": "array",
           "items": {
             "type": [
@@ -166,6 +187,7 @@
           }
         },
         "p99": {
+          "description": "99th-percentile latency per window in nanoseconds.",
           "type": "array",
           "items": {
             "type": [
@@ -176,6 +198,7 @@
           }
         },
         "p999": {
+          "description": "99.9th-percentile latency per window in nanoseconds.",
           "type": "array",
           "items": {
             "type": [
@@ -197,9 +220,11 @@
       ]
     },
     "HistogramSeries": {
+      "description": "Sparse HDR-histogram buckets for one latency metric.",
       "type": "object",
       "properties": {
         "upper_bound_ns": {
+          "description": "Inclusive bucket upper bounds in nanoseconds.",
           "type": "array",
           "items": {
             "type": "integer",
@@ -208,6 +233,7 @@
           }
         },
         "counts": {
+          "description": "Observation counts corresponding to `upper_bound_ns`.",
           "type": "array",
           "items": {
             "type": "integer",
@@ -223,9 +249,11 @@
       ]
     },
     "ObjectStoreSeries": {
+      "description": "Object-store metrics sampled over time.",
       "type": "object",
       "properties": {
         "requests_per_second": {
+          "description": "HTTP method to requests per rate window.",
           "type": "object",
           "additionalProperties": {
             "type": "array",
@@ -236,6 +264,7 @@
           }
         },
         "bytes_per_second": {
+          "description": "HTTP method to body bytes per rate window.",
           "type": "object",
           "additionalProperties": {
             "type": "array",
@@ -253,9 +282,11 @@
       ]
     },
     "ProcessSeries": {
+      "description": "Process resource samples over time.",
       "type": "object",
       "properties": {
         "cpu_cores": {
+          "description": "CPU cores consumed in each resource window.",
           "type": "array",
           "items": {
             "type": "number",
@@ -263,6 +294,7 @@
           }
         },
         "rss_bytes": {
+          "description": "Resident set size in bytes in each resource window.",
           "type": "array",
           "items": {
             "type": "number",
@@ -277,9 +309,11 @@
       ]
     },
     "MachineSeries": {
+      "description": "Host resource and I/O samples over time.",
       "type": "object",
       "properties": {
         "cpu_percent": {
+          "description": "Host CPU utilization percentage per resource window.",
           "type": "array",
           "items": {
             "type": "number",
@@ -287,6 +321,7 @@
           }
         },
         "memory_used_bytes": {
+          "description": "Host memory in use, in bytes, per resource window.",
           "type": "array",
           "items": {
             "type": "number",
@@ -294,6 +329,7 @@
           }
         },
         "network_receive_bytes_per_second": {
+          "description": "Network receive rate per resource window.",
           "type": "array",
           "items": {
             "type": "number",
@@ -301,6 +337,7 @@
           }
         },
         "network_send_bytes_per_second": {
+          "description": "Network send rate per resource window.",
           "type": "array",
           "items": {
             "type": "number",
@@ -308,6 +345,7 @@
           }
         },
         "disk_read_bytes_per_second": {
+          "description": "Physical disk read-byte rate per resource window.",
           "type": "array",
           "items": {
             "type": "number",
@@ -315,6 +353,7 @@
           }
         },
         "disk_write_bytes_per_second": {
+          "description": "Physical disk write-byte rate per resource window.",
           "type": "array",
           "items": {
             "type": "number",
@@ -322,6 +361,7 @@
           }
         },
         "disk_read_operations_per_second": {
+          "description": "Physical disk read-operation rate per resource window.",
           "type": "array",
           "items": {
             "type": "number",
@@ -329,6 +369,7 @@
           }
         },
         "disk_write_operations_per_second": {
+          "description": "Physical disk write-operation rate per resource window.",
           "type": "array",
           "items": {
             "type": "number",
