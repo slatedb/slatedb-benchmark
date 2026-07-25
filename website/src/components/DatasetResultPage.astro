@@ -2,6 +2,7 @@
 import Base from '../layouts/Base.astro';
 import ResultContext from './ResultContext.astro';
 import SiteHeader from './SiteHeader.astro';
+import { formatIecBytes } from '../lib/format';
 import type { GoldenManifest, ResultRoute } from '../lib/results';
 
 interface Props {
@@ -11,16 +12,6 @@ interface Props {
 
 const { route, routes } = Astro.props;
 const result = route.result;
-const bytes = (value: number) => {
-  const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
-  let amount = value;
-  let index = 0;
-  while (amount >= 1024 && index < units.length - 1) {
-    amount /= 1024;
-    index += 1;
-  }
-  return `${amount.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${units[index]}`;
-};
 ---
 
 <Base title={`${result.golden_id} · SlateDB ${route.version}`}>
@@ -51,8 +42,8 @@ const bytes = (value: number) => {
               <tr><th scope="row">Records</th><td>{result.dataset.record_count.toLocaleString('en-US')}</td></tr>
               <tr><th scope="row">Key bytes</th><td>{result.dataset.key_bytes.toLocaleString('en-US')}</td></tr>
               <tr><th scope="row">Value bytes</th><td>{result.dataset.value_bytes.toLocaleString('en-US')}</td></tr>
-              <tr><th scope="row">Logical data</th><td>{bytes(result.dataset.logical_bytes)}</td></tr>
-              <tr><th scope="row">Live SST data</th><td>{bytes(result.dataset.live_sst_bytes)}</td></tr>
+              <tr><th scope="row">Logical data</th><td>{formatIecBytes(result.dataset.logical_bytes)}</td></tr>
+              <tr><th scope="row">Live SST data</th><td>{formatIecBytes(result.dataset.live_sst_bytes)}</td></tr>
             </tbody>
           </table>
         </div>

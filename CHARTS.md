@@ -217,7 +217,7 @@ Expose the sidecar through:
 /raw/<version>/workload/<name>/series.json
 ```
 
-Update the website result types, `rawResultFiles()`, and the static raw route.
+Update the website result types, `rawResultPaths()`, and the static raw route.
 Return `application/json` with the existing public cache policy. Never put the
 sidecar in Astro props, inline scripts, or HTML attributes.
 

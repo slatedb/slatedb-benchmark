@@ -13,8 +13,6 @@ pub struct WorkerStats {
     pub transaction_attempts: u64,
     pub transaction_commits: u64,
     pub transaction_conflicts: u64,
-    pub scan_records: u64,
-    pub scan_end_calls: u64,
 }
 
 impl WorkerStats {
@@ -36,8 +34,6 @@ impl WorkerStats {
         self.transaction_conflicts = self
             .transaction_conflicts
             .saturating_add(other.transaction_conflicts);
-        self.scan_records = self.scan_records.saturating_add(other.scan_records);
-        self.scan_end_calls = self.scan_end_calls.saturating_add(other.scan_end_calls);
     }
 
     pub fn record_write(

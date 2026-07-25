@@ -28,7 +28,7 @@ async fn main() -> Result<()> {
                 session: None,
                 scale: args.scale,
                 output: args.output,
-                compaction_quiet: Duration::from_millis(args.compaction_quiet_ms),
+                compaction_quiet: Some(Duration::from_millis(args.compaction_quiet_ms)),
             })
             .await
         }
@@ -42,7 +42,7 @@ async fn main() -> Result<()> {
                 session: Some(args.session),
                 scale: args.scale,
                 output: args.output,
-                compaction_quiet: Duration::from_secs(60),
+                compaction_quiet: None,
             })
             .await
         }

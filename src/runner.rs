@@ -45,7 +45,7 @@ pub struct ExecutionArgs {
     pub session: Option<String>,
     pub scale: BenchmarkScale,
     pub output: PathBuf,
-    pub compaction_quiet: Duration,
+    pub compaction_quiet: Option<Duration>,
 }
 
 pub async fn execute(args: ExecutionArgs) -> Result<()> {
@@ -218,6 +218,9 @@ async fn run_compaction(
     config: &ResolvedConfig,
     context: &ObjectStoreContext,
 ) -> Result<()> {
+    let compaction_quiet = args
+        .compaction_quiet
+        .context("compaction quiet period is required for compaction")?;
     let environment = inspect_environment(&context.provider, &context.endpoint, &context.region);
     let bulk_path = golden_task_root(context, &args.golden, Task::BulkLoad).join("golden.json");
     let bulk: GoldenManifest = load_required(Arc::clone(&context.control), &bulk_path).await?;
@@ -262,20 +265,20 @@ async fn run_compaction(
     let application = Arc::new(ApplicationRegistry::default());
     let admin = AdminBuilder::new(database_path.clone(), Arc::clone(&context.control)).build();
     tracing::info!(
-        quiet_ms = args.compaction_quiet.as_millis(),
+        quiet_ms = compaction_quiet.as_millis(),
         "waiting for normal compaction to settle"
     );
     let compaction = measure_until_complete(
         application,
         context.instrumented.metrics(),
-        wait_for_compactor_quiet(&admin, args.compaction_quiet),
+        wait_for_compactor_quiet(&admin, compaction_quiet),
     )
     .await;
     let closed = close_database_after(&db, compaction, "closing compaction database").await;
     metrics_reporter.stop().await;
     let ((), measurement) = closed?;
     tracing::info!(
-        quiet_ms = args.compaction_quiet.as_millis(),
+        quiet_ms = compaction_quiet.as_millis(),
         "normal compaction settled"
     );
     ensure_measurement_has_no_application_errors(&measurement)?;

@@ -11,14 +11,12 @@ import { S3_STANDARD_REQUEST_PRICING, s3RequestPricePer1000 } from '../lib/s3-pr
 
 interface Props {
   result: RecordedMetrics;
-  showEmptyApplication?: boolean;
   chartSeriesUrl?: string;
   clientMeasurementNs?: number;
 }
 
 const {
   result,
-  showEmptyApplication = true,
   chartSeriesUrl,
   clientMeasurementNs,
 } = Astro.props;
@@ -147,9 +145,9 @@ const machine = [
   data-series-url={chartSeriesUrl}
   data-client-measurement-ns={clientMeasurementNs}
 >
-  {(showEmptyApplication || applicationOperations.length > 0) && <MetricTable idPrefix="application-operations" title="Application operations" firstColumn="API" columns={rateColumns} rows={applicationOperations} />}
-  {(showEmptyApplication || applicationThroughput.length > 0) && <MetricTable idPrefix="application-throughput" title="Application throughput" firstColumn="API" columns={throughputColumns} rows={applicationThroughput} />}
-  {(showEmptyApplication || applicationLatency.length > 0) && <MetricTable idPrefix="application-latency" title="Application latency" firstColumn="API" columns={latencyColumns} rows={applicationLatency} />}
+  <MetricTable idPrefix="application-operations" title="Application operations" firstColumn="API" columns={rateColumns} rows={applicationOperations} />
+  <MetricTable idPrefix="application-throughput" title="Application throughput" firstColumn="API" columns={throughputColumns} rows={applicationThroughput} />
+  <MetricTable idPrefix="application-latency" title="Application latency" firstColumn="API" columns={latencyColumns} rows={applicationLatency} />
   <MetricTable idPrefix="object-requests" title="Object-store operations" firstColumn="Method" columns={objectRequestColumns} rows={objectRequests} />
   <MetricTable idPrefix="object-throughput" title="Object-store throughput" firstColumn="Method" columns={throughputColumns} rows={objectThroughput} />
   <MetricTable idPrefix="process" title="Process statistics" firstColumn="Metric" columns={statisticColumns} rows={process} codeLabels={false} />

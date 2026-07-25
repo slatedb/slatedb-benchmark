@@ -38,9 +38,7 @@ const {
   routes,
 } = Astro.props;
 const versions = [...new Set(
-  routes
-    .filter((route) => route.kind === 'workload' || route.kind === 'golden')
-    .map((route) => route.version),
+  routes.map((route) => route.version),
 )]
   .sort((left, right) => compareVersions(right, left));
 const versionRoutes = routes.filter((route) => route.version === version);

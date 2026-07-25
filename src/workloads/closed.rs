@@ -287,10 +287,8 @@ async fn scan(
                     .unwrap_or(u64::MAX);
                 logical_bytes = logical_bytes.saturating_add(bytes);
                 returned += 1;
-                stats.scan_records = stats.scan_records.saturating_add(1);
             }
             Ok(None) => {
-                stats.scan_end_calls = stats.scan_end_calls.saturating_add(1);
                 break;
             }
             Err(error) => {
@@ -768,7 +766,6 @@ mod tests {
         db.close().await.expect("close database");
 
         let application = measurement.application();
-        assert_eq!(stats.scan_records, 10);
         assert_eq!(application.operations["scan"].total, 1);
         assert_eq!(
             application.throughput["scan"].total_bytes,

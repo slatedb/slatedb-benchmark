@@ -71,6 +71,10 @@ const repoRoot = path.resolve(process.cwd(), '..');
 export const resultsRoot = process.env.BENCHMARK_RESULTS_ROOT
   ? path.resolve(process.env.BENCHMARK_RESULTS_ROOT)
   : path.join(repoRoot, 'results');
+let archiveFilesPromise: Promise<string[]> | undefined;
+let runsPromise: Promise<StoredRun[]> | undefined;
+let datasetResultsPromise: Promise<ResultRoute<GoldenManifest>[]> | undefined;
+let workloadResultsPromise: Promise<ResultRoute<WorkloadResult>[]> | undefined;
 
 async function walk(directory: string): Promise<string[]> {
   let entries: Dirent<string>[];
@@ -89,7 +93,17 @@ async function walk(directory: string): Promise<string[]> {
   return values.flat();
 }
 
-export async function loadDatasetResults(): Promise<ResultRoute<GoldenManifest>[]> {
+function loadArchiveFiles() {
+  archiveFilesPromise ??= walk(resultsRoot);
+  return archiveFilesPromise;
+}
+
+export function loadDatasetResults(): Promise<ResultRoute<GoldenManifest>[]> {
+  datasetResultsPromise ??= readDatasetResults();
+  return datasetResultsPromise;
+}
+
+async function readDatasetResults(): Promise<ResultRoute<GoldenManifest>[]> {
   const runs = await loadRuns();
   const routes = await Promise.all(runs
     .filter((stored) => Object.hasOwn(stored.manifest.results, 'golden.json'))
@@ -107,8 +121,9 @@ export async function loadDatasetResults(): Promise<ResultRoute<GoldenManifest>[
   return routes.sort(compareRoutes);
 }
 
-export async function loadWorkloadResults(): Promise<ResultRoute<WorkloadResult>[]> {
-  return loadTaskResults<WorkloadResult>();
+export function loadWorkloadResults(): Promise<ResultRoute<WorkloadResult>[]> {
+  workloadResultsPromise ??= loadTaskResults<WorkloadResult>();
+  return workloadResultsPromise;
 }
 
 async function loadTaskResults<T>(): Promise<ResultRoute<T>[]> {
@@ -135,8 +150,13 @@ async function loadTaskResults<T>(): Promise<ResultRoute<T>[]> {
   return routes.sort(compareRoutes);
 }
 
-async function loadRuns(): Promise<StoredRun[]> {
-  const manifests = (await walk(resultsRoot)).filter((file) => {
+function loadRuns(): Promise<StoredRun[]> {
+  runsPromise ??= readRuns();
+  return runsPromise;
+}
+
+async function readRuns(): Promise<StoredRun[]> {
+  const manifests = (await loadArchiveFiles()).filter((file) => {
     if (path.basename(file) !== 'run.json') return false;
     const relative = path.relative(resultsRoot, file).split(path.sep);
     return relative.length === 3;
@@ -195,16 +215,14 @@ function compareRunDates(left: ResultRoute<unknown>, right: ResultRoute<unknown>
     || right.run.id.localeCompare(left.run.id);
 }
 
-export async function rawResultFiles() {
-  const files = (await walk(resultsRoot)).filter((file) =>
+export async function rawResultPaths() {
+  const files = (await loadArchiveFiles()).filter((file) =>
     ['golden.json', 'result.json', 'run.json', 'series.json'].includes(path.basename(file)),
   );
-  return Promise.all(
-    files.map(async (file) => ({
-      path: path.relative(resultsRoot, file).split(path.sep).join('/'),
-      body: await fs.readFile(file),
-    })),
-  );
+  return files.map((file) => ({
+    path: path.relative(resultsRoot, file).split(path.sep).join('/'),
+    file,
+  }));
 }
 
 export function latestStable<T>(routes: ResultRoute<T>[]): ResultRoute<T> | undefined {
