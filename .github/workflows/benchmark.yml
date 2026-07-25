@@ -21,11 +21,6 @@ on:
         options:
           - s3
           - tigris
-      publish:
-        description: Publish results to website
-        required: true
-        default: true
-        type: boolean
       scale:
         description: Decimal scale factor
         required: true
@@ -110,13 +105,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GOLDEN_ID: ${{ inputs.golden_id }}
           OBJECT_STORE: ${{ inputs.object_store }}
-          PUBLISH_BENCHMARK: ${{ inputs.publish }}
         run: |
           set -euo pipefail
-          if [[ "$PUBLISH_BENCHMARK" == true && "$BENCHMARK_SCALE" != 1.0 ]]; then
-            echo "published runs require scale 1.0" >&2
-            exit 1
-          fi
           manifest=.runs/bundle/golden.json
           jq -e --arg golden "$GOLDEN_ID" \
             '.status == "ok"
@@ -313,7 +303,6 @@ jobs:
 
   publish:
     needs: bundle
-    if: inputs.publish
     runs-on: warp-ubuntu-latest-arm64-16x
     permissions:
       actions: write
@@ -366,11 +355,7 @@ jobs:
             });
 
   cleanup:
-    needs: [bundle, publish]
-    if: >-
-      always() &&
-      needs.bundle.result == 'success' &&
-      (needs.publish.result == 'success' || needs.publish.result == 'skipped')
+    needs: publish
     runs-on: warp-ubuntu-latest-arm64-16x
     environment: benchmark-${{ inputs.object_store }}
     steps:

@@ -17,7 +17,7 @@ pub struct PublishArgs {
     pub checkout: PathBuf,
 }
 
-/// Publishes a full-scale run to a benchmark website checkout.
+/// Publishes a benchmark run to a website checkout.
 ///
 /// Publication verifies every artifact digest, commits the copied result
 /// directory, and retries rebasing and pushing if `main` advances concurrently.
@@ -31,13 +31,6 @@ pub fn publish(args: PublishArgs) -> Result<()> {
     validate_run_manifest(&manifest)?;
     validate_identifier(&manifest.source.slate_version, "SlateDB version")?;
     validate_identifier(&manifest.run_id, "run ID")?;
-    ensure!(
-        manifest
-            .resolved_configuration
-            .values()
-            .all(|configuration| configuration.scale == 1.0),
-        "refusing to publish a scaled benchmark run"
-    );
     let source = manifest_path
         .parent()
         .context("run manifest has no parent")?;

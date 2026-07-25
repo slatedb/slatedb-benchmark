@@ -35,7 +35,7 @@ pub enum Command {
     Bundle(BundleCommand),
     /// Validate one benchmark artifact.
     Validate(ValidateArgs),
-    /// Publish one full-scale run bundle to the website checkout.
+    /// Publish one run bundle to the website checkout.
     Publish(PublishCommand),
     /// Generate JSON Schema and TypeScript contracts from Rust types.
     Generate(GenerateArgs),
@@ -163,7 +163,7 @@ pub struct ValidateArgs {
 }
 
 #[derive(Debug, Clone, Args)]
-/// Arguments for publishing a full-scale run bundle.
+/// Arguments for publishing a run bundle.
 pub struct PublishCommand {
     /// Directory containing exactly one versioned run bundle.
     #[arg(long)]

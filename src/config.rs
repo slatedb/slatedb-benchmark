@@ -34,7 +34,7 @@ const MIN_METADATA_CACHE_BYTES: u64 = 2 * 1024 * 1024;
 pub struct BenchmarkScale(f64);
 
 impl BenchmarkScale {
-    /// An unscaled, publishable benchmark run.
+    /// An unscaled benchmark run.
     pub const FULL: Self = Self(1.0);
 
     /// Returns the validated decimal scale factor.

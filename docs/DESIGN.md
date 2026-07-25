@@ -150,7 +150,7 @@ The single crate exposes focused subcommands:
 - `run` accepts measured workloads only.
 - `validate` applies strict Serde and semantic validation to one artifact.
 - `bundle` assembles and authenticates a versioned run.
-- `publish` verifies and commits one full-scale bundle.
+- `publish` verifies and commits one run bundle.
 - `generate` writes JSON Schema and TypeScript from Rust types.
 - `catalog` prints the workload names used by the workflow matrix.
 - `cleanup` removes one session prefix.
@@ -186,7 +186,6 @@ object store. The transfer probe has its own concurrency group.
 | --- | --- | --- |
 | `slatedb_ref` | Yes | `main` |
 | `golden_id` | Yes | `slatedb-v0.14.1-001` |
-| `publish` | Yes | `true` |
 | `scale` | Yes | `1.0` |
 
 `transfer-capacity.yml` accepts:
@@ -215,7 +214,6 @@ $ gh workflow run golden.yml \
 $ gh workflow run benchmark.yml \
     -f slatedb_ref=main \
     -f golden_id=slatedb-v0.14.1-001 \
-    -f publish=true \
     -f scale=1.0
 ```
 
@@ -245,7 +243,7 @@ ID after changing the SlateDB commit or preparation configuration.
 | `build` | Resolve the requested SlateDB ref and build the runner against it |
 | `workloads` | Run the workload matrix |
 | `bundle` | Assemble and checksum all run results |
-| `publish` | Commit results when the `publish` input is `true` |
+| `publish` | Commit results and deploy Pages |
 | `cleanup` | Delete workload database clones after outputs are collected |
 
 The workload matrix uses one WarpBuild machine per task and does not impose a
@@ -262,12 +260,8 @@ new dispatch -> new github.run_id -> run selected workloads
 rerun         -> same github.run_id -> skip completed workloads
 ```
 
-The `publish` input controls the final job:
-
-| `publish` | Scale | Result |
-| --- | --- | --- |
-| `true` | Must be `1.0` | Commit results and deploy Pages |
-| `false` | May be smaller | Validate artifacts only |
+Every successful bundle is published and deploys Pages. This includes scaled
+runs, which follow the same artifact and validation path as full-size runs.
 
 Failed runs retain their session data. Successful cleanup keeps workload
 completion markers and never deletes golden data.

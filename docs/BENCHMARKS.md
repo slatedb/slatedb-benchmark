@@ -318,8 +318,8 @@ markers, so a retry can skip completed workloads.
 The local end-to-end test runs the release suite with `--scale`; it does not
 use a separate mock catalog. Scale reduces records, durations, and cache
 capacities. It preserves operation mixes, clients, key and value sizes,
-durability, preparation and workload order, and initial state. The publisher
-rejects scaled results.
+durability, preparation and workload order, and initial state. Scaled and
+full-size runs use the same publication path.
 
 ## Out of scope
 
