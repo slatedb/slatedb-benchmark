@@ -47,7 +47,7 @@ impl ObjectStoreContext {
                             .context("building S3-compatible object store")?,
                     );
                     let control: Arc<dyn ObjectStore> = Arc::new(
-                        builder
+                        control_store_builder(builder, &provider)
                             .build()
                             .context("building S3-compatible control store")?,
                     );
@@ -95,6 +95,14 @@ fn configured_s3_endpoint(builder: &AmazonS3Builder) -> Option<String> {
         .or_else(|| builder.get_config_value(&AmazonS3ConfigKey::Endpoint))
 }
 
+fn control_store_builder(builder: AmazonS3Builder, provider: &str) -> AmazonS3Builder {
+    if provider == "tigris" {
+        builder.with_disable_bulk_delete(true)
+    } else {
+        builder
+    }
+}
+
 pub async fn delete_prefix(store: Arc<dyn ObjectStore>, prefix: &Path) -> Result<()> {
     let locations: BoxStream<'static, object_store::Result<Path>> = store
         .list(Some(prefix))
@@ -110,7 +118,7 @@ pub async fn delete_prefix(store: Arc<dyn ObjectStore>, prefix: &Path) -> Result
 
 #[cfg(test)]
 mod tests {
-    use super::configured_s3_endpoint;
+    use super::{configured_s3_endpoint, control_store_builder};
     use object_store::aws::{AmazonS3Builder, AmazonS3ConfigKey};
 
     #[test]
@@ -123,6 +131,24 @@ mod tests {
         assert_eq!(
             configured_s3_endpoint(&builder).as_deref(),
             Some("https://s3-specific.example")
+        );
+    }
+
+    #[test]
+    fn tigris_control_store_uses_single_object_deletes() {
+        let tigris = control_store_builder(AmazonS3Builder::new(), "tigris");
+        assert_eq!(
+            tigris
+                .get_config_value(&AmazonS3ConfigKey::DisableBulkDelete)
+                .as_deref(),
+            Some("true")
+        );
+
+        let s3 = control_store_builder(AmazonS3Builder::new(), "s3");
+        assert_eq!(
+            s3.get_config_value(&AmazonS3ConfigKey::DisableBulkDelete)
+                .as_deref(),
+            Some("false")
         );
     }
 }
