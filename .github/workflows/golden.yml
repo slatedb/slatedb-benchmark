@@ -226,11 +226,12 @@ jobs:
           : "${SLATEDB_BENCH_BUCKET:?SLATEDB_BENCH_BUCKET is required}"
           export SLATEDB_BENCH_PREFIX=${SLATEDB_BENCH_PREFIX:-benchmark}
           export SLATEDB_BENCH_RUNNER_TYPE=${SLATEDB_BENCH_RUNNER_TYPE:-warp-ubuntu-latest-arm64-8x}
-          export SLATEDB_BENCH_RUNNER_REGION=$(
+          SLATEDB_BENCH_RUNNER_REGION=$(
             curl --fail --location --silent --show-error --max-time 10 https://ipinfo.io/json |
               jq -r '[.city, .region, .country] | map(select(length > 0)) | join(", ")' ||
               true
           )
+          export SLATEDB_BENCH_RUNNER_REGION
           bin/slatedb-benchmark prepare \
             --phase compaction \
             --golden "$GOLDEN_ID" \
