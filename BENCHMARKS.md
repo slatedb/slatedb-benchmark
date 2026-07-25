@@ -138,7 +138,9 @@ keyspace. `read-heavy` and `balanced` use the same update behavior.
 
 Each scan starts at a uniformly selected ID and returns up to 10 records in
 ascending key order. A start position in the last nine records can return fewer
-than 10.
+than 10. One `scan` operation covers iterator creation and consumption of all
+returned records. Its latency measures that complete interval, and its logical
+throughput includes every returned key and value.
 
 ### Sustained ingest
 

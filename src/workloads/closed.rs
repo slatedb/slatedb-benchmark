@@ -265,27 +265,31 @@ async fn scan(
     stats: &mut WorkerStats,
 ) {
     let key = key_for_id(start_id, config.dataset.key_bytes);
-    let Ok(mut iterator) = db.scan(key..).await else {
-        record_error(stats, recorder, "scan", Duration::ZERO);
-        return;
+    let started = Instant::now();
+    let mut iterator = match db.scan(key..).await {
+        Ok(iterator) => iterator,
+        Err(error) => {
+            record_error(stats, recorder, "scan", started.elapsed());
+            tracing::debug!(%error, "scan failed");
+            return;
+        }
     };
     let limit = config.task.scan_limit.unwrap_or(10);
     let expected = usize::try_from(config.dataset.record_count.saturating_sub(start_id))
         .unwrap_or(usize::MAX)
         .min(limit);
     let mut returned = 0_usize;
+    let mut logical_bytes = 0_u64;
     while returned < limit {
-        let started = Instant::now();
         match iterator.next().await {
             Ok(Some(entry)) => {
                 let bytes = u64::try_from(entry.key.len().saturating_add(entry.value.len()))
                     .unwrap_or(u64::MAX);
-                record_success(recorder, "scan", started.elapsed(), bytes);
+                logical_bytes = logical_bytes.saturating_add(bytes);
                 returned += 1;
                 stats.scan_records = stats.scan_records.saturating_add(1);
             }
             Ok(None) => {
-                record_success(recorder, "scan", started.elapsed(), 0);
                 stats.scan_end_calls = stats.scan_end_calls.saturating_add(1);
                 break;
             }
@@ -305,6 +309,7 @@ async fn scan(
             "scan returned an unexpected record count"
         );
     }
+    record_success(recorder, "scan", started.elapsed(), logical_bytes);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -710,13 +715,68 @@ fn truncate(value: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        configured_key_selector, configured_operations, configured_transaction_operations,
+        configured_key_selector, configured_operations, configured_transaction_operations, scan,
         select_operation, WorkloadOperation,
     };
     use crate::config::{load, BenchmarkScale, Task};
+    use crate::instrumented_store::StoreMetrics;
+    use crate::system::{measure_until_complete, ApplicationRegistry};
+    use crate::workloads::stats::WorkerStats;
+    use crate::workloads::util::key_for_id;
     use crate::workloads::util::KeySelector;
+    use object_store::memory::InMemory;
     use rand::SeedableRng;
+    use slatedb::Db;
     use std::path::Path;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn scan_records_one_complete_operation() {
+        let config = load(
+            Task::RangeScan,
+            BenchmarkScale::FULL,
+            Path::new("config/settings.toml"),
+        )
+        .expect("range-scan config");
+        let db = Arc::new(
+            Db::open("scan-metric-test", Arc::new(InMemory::new()))
+                .await
+                .expect("open database"),
+        );
+        for id in 0..10 {
+            db.put(
+                key_for_id(id, config.dataset.key_bytes),
+                vec![0; config.dataset.value_bytes],
+            )
+            .await
+            .expect("write scan record");
+        }
+        let registry = Arc::new(ApplicationRegistry::default());
+        let recorder = registry.recorder();
+        let mut stats = WorkerStats::default();
+
+        let (_, measurement) = measure_until_complete(
+            Arc::clone(&registry),
+            Arc::new(StoreMetrics::default()),
+            async {
+                scan(&db, &config, 0, Some(&recorder), &mut stats).await;
+                Ok(())
+            },
+        )
+        .await
+        .expect("measure scan");
+        db.close().await.expect("close database");
+
+        let application = measurement.application();
+        assert_eq!(stats.scan_records, 10);
+        assert_eq!(application.operations["scan"].total, 1);
+        assert_eq!(
+            application.throughput["scan"].total_bytes,
+            10 * u64::try_from(config.dataset.key_bytes + config.dataset.value_bytes)
+                .expect("record bytes")
+        );
+        assert_eq!(application.latency["scan"].count, 1);
+    }
 
     #[test]
     fn operation_mix_drives_worker_selection() {
