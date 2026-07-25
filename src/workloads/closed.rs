@@ -385,7 +385,7 @@ async fn transaction(
             tracing::debug!("write transaction committed without a write handle");
         }
         Err(error) if error.kind() == ErrorKind::Transaction => {
-            record_success(recorder, "transaction.commit", started.elapsed(), 0);
+            record_success(recorder, "transaction.conflict", started.elapsed(), 0);
             stats.transaction_conflicts = stats.transaction_conflicts.saturating_add(1);
         }
         Err(error) => {

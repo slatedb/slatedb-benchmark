@@ -1,4 +1,4 @@
-use crate::config::Task;
+use crate::config::{Task, TaskConfig};
 use crate::model::{
     ApplicationMetrics, DistributionSummary, Environment, GoldenManifest, LatencySummary,
     MachineStatistics, ObjectStoreMetrics, ProcessStatistics, RateSummary, ResultConfiguration,
@@ -864,20 +864,22 @@ fn validate_initial_state(result: &WorkloadResult) -> Result<()> {
 }
 
 fn validate_application_rows(result: &WorkloadResult) -> Result<()> {
-    let mut expected = BTreeSet::new();
+    let mut required = BTreeSet::new();
+    let mut optional = BTreeSet::new();
     for operation in result.configuration.task.operation_mix.keys() {
         match operation.as_str() {
             "get" | "put" | "scan" => {
-                expected.insert(operation.as_str());
+                required.insert(operation.as_str());
             }
             "transaction" => {
-                expected.extend(["transaction.get", "transaction.put", "transaction.commit"]);
+                required.extend(["transaction.get", "transaction.put", "transaction.commit"]);
+                optional.insert("transaction.conflict");
             }
             _ => unreachable!("validated operation mix"),
         }
     }
     if result.task.may_write() {
-        expected.insert("flush");
+        required.insert("flush");
     }
     let actual = result
         .application
@@ -885,8 +887,9 @@ fn validate_application_rows(result: &WorkloadResult) -> Result<()> {
         .keys()
         .map(String::as_str)
         .collect::<BTreeSet<_>>();
+    let allowed = required.union(&optional).copied().collect::<BTreeSet<_>>();
     ensure!(
-        actual == expected,
+        required.is_subset(&actual) && actual.is_subset(&allowed),
         "application operation rows do not match the workload"
     );
 
@@ -896,7 +899,7 @@ fn validate_application_rows(result: &WorkloadResult) -> Result<()> {
         .keys()
         .map(String::as_str)
         .collect::<BTreeSet<_>>();
-    let mut expected_latency = expected;
+    let mut expected_latency = actual;
     if result.task.may_write() {
         expected_latency.insert("durable");
     }
@@ -921,38 +924,44 @@ fn validate_application_rows(result: &WorkloadResult) -> Result<()> {
             .operation_mix
             .contains_key("transaction")
         {
-            let commits = result.application.operations["transaction.commit"].total;
-            let reads = u64::try_from(
-                result
-                    .configuration
-                    .task
-                    .transaction_reads
-                    .expect("validated transaction read count"),
-            )
-            .unwrap_or(u64::MAX);
-            let updates = u64::try_from(
-                result
-                    .configuration
-                    .task
-                    .transaction_updates
-                    .expect("validated transaction update count"),
-            )
-            .unwrap_or(u64::MAX);
-            ensure!(
-                result.application.operations["transaction.get"].total
-                    == commits.saturating_mul(reads)
-                    && result.application.operations["transaction.put"].total
-                        == commits.saturating_mul(updates),
-                "transaction API counts do not match the configured reads and updates"
-            );
-            ensure!(
-                durable <= commits,
-                "durability count exceeds transaction commits"
-            );
+            validate_transaction_counts(&result.application, &result.configuration.task, durable)?;
         } else {
             unreachable!("validated write workload");
         }
     }
+    Ok(())
+}
+
+fn validate_transaction_counts(
+    application: &ApplicationMetrics,
+    task: &TaskConfig,
+    durable: u64,
+) -> Result<()> {
+    let commits = application.operations["transaction.commit"].total;
+    let conflicts = application
+        .operations
+        .get("transaction.conflict")
+        .map_or(0, |summary| summary.total);
+    let attempts = commits.saturating_add(conflicts);
+    let reads = u64::try_from(
+        task.transaction_reads
+            .expect("validated transaction read count"),
+    )
+    .unwrap_or(u64::MAX);
+    let updates = u64::try_from(
+        task.transaction_updates
+            .expect("validated transaction update count"),
+    )
+    .unwrap_or(u64::MAX);
+    ensure!(
+        application.operations["transaction.get"].total == attempts.saturating_mul(reads)
+            && application.operations["transaction.put"].total == attempts.saturating_mul(updates),
+        "transaction API counts do not match the configured attempts, reads, and updates"
+    );
+    ensure!(
+        durable == commits,
+        "durability count does not match transaction commits"
+    );
     Ok(())
 }
 
@@ -1101,8 +1110,10 @@ fn validate_nonnegative<const N: usize>(values: [f64; N]) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{validate_actions_log_url, validate_distribution};
-    use crate::model::DistributionSummary;
+    use super::{validate_actions_log_url, validate_distribution, validate_transaction_counts};
+    use crate::config::{load, BenchmarkScale, Task};
+    use crate::model::{ApplicationMetrics, DistributionSummary, RateSummary};
+    use std::path::Path;
 
     #[test]
     fn rejects_non_finite_published_values() {
@@ -1123,5 +1134,34 @@ mod tests {
             "https://example.com/slatedb/slatedb-benchmark/actions/runs/1/job/2"
         )
         .is_err());
+    }
+
+    #[test]
+    fn transaction_counts_include_conflicts_as_attempts() {
+        let config = load(
+            Task::TransactionContention,
+            BenchmarkScale::FULL,
+            Path::new("config/settings.toml"),
+        )
+        .expect("transaction config");
+        let mut application = ApplicationMetrics::default();
+        for (operation, total) in [
+            ("transaction.commit", 7),
+            ("transaction.conflict", 3),
+            ("transaction.get", 50),
+            ("transaction.put", 50),
+        ] {
+            application.operations.insert(
+                operation.to_string(),
+                RateSummary {
+                    total,
+                    ..Default::default()
+                },
+            );
+        }
+
+        validate_transaction_counts(&application, &config.task, 7)
+            .expect("conflicts count as attempts but not durable commits");
+        assert!(validate_transaction_counts(&application, &config.task, 10).is_err());
     }
 }

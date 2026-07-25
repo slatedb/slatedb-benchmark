@@ -153,7 +153,9 @@ durability record.
 Each client runs serializable snapshot transactions against 10,000 existing
 records. A transaction shuffles five reads and five updates, then commits. The
 API tables retain the names `transaction.get`, `transaction.put`, and
-`transaction.commit`.
+`transaction.commit`. Expected commit conflicts are recorded separately as
+`transaction.conflict`, so the conflict rate is conflicts divided by commits
+plus conflicts.
 
 ## Metrics
 
@@ -186,8 +188,8 @@ fetched after page load.
 
 Each row identifies a SlateDB API call such as `get`, `put`, `delete`, `scan`,
 `write`, or `flush`. Transaction calls retain the names `transaction.get`,
-`transaction.put`, and `transaction.commit`. All columns except `total` use
-calls per second.
+`transaction.put`, `transaction.commit`, and `transaction.conflict`. All
+columns except `total` use calls per second.
 
 | API | total | avg/s | p0.1/s | p1/s | p50/s | p99/s | p99.9/s | min/s | max/s |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
