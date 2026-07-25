@@ -271,9 +271,10 @@ completion markers and never deletes golden data.
 This standalone diagnostic workflow uses MinIO Warp to measure 4 MiB PUT and
 GET throughput at concurrency 64, then 4 KiB PUT, GET, and LIST latency at
 concurrency 1. It also records host and network diagnostics, including a TCP
-traceroute and MTR packet-loss report. The workflow uploads its results and
-per-request data as a GitHub artifact. Benchmark runs do not invoke, bundle, or
-publish this data.
+traceroute and MTR packet-loss report. Raw Warp data remains in the GitHub
+artifact. The workflow publishes only the summarized throughput, request
+latency, TTFB, runner location, and object-store location used by the website.
+Benchmark runs do not invoke or bundle this data.
 
 ### Credentials
 
@@ -282,7 +283,7 @@ publish this data.
 | `build` | Read | None |
 | Preparation jobs | Read | Read and write |
 | `validate-golden` | Read | Read |
-| Standalone transfer capacity | Read | Read and write |
+| Standalone transfer capacity | Write | Read and write |
 | `workloads` | Read | Read and write |
 | `bundle` | Read | None |
 | `publish` | Write | None |
@@ -307,6 +308,10 @@ results/<version>/
       <name>/
         result.json
         series.json
+results/transfer-capacity/
+  <provider>/
+    <run-id>/
+      result.json
 ```
 
 The run ID is the benchmark session, such as `github-123456`. Publishing a run
@@ -323,6 +328,11 @@ The website generates immutable
 `/<version>/workload/<name>/` routes show the newest run. The Recorded selector
 lists run start times in the browser's local timezone, and the Patches section
 links each patch to the benchmark commit that applied it.
+
+Transfer-capacity results use
+`/transfer-capacity/<provider>/run/<run-id>/` routes. The shorter provider route
+shows its newest result. Object-store names in benchmark context link to these
+pages.
 
 The worker reads each result through strict Serde models and runs one semantic
 validation pass. Rust types are the artifact contract. `slatedb-benchmark generate`
@@ -342,9 +352,10 @@ Tests cover each behavior at the lowest useful layer:
 
 1. Rust unit tests cover workload decisions, metric aggregation, durability,
    retries, settings precedence, and semantic validation.
-2. Contract tests serialize one representative golden, result, series, and run
-   artifact and validate each against its generated schema. They also fail when
-   checked-in schemas or TypeScript declarations are stale.
+2. Contract tests serialize one representative golden, result, series, run,
+   and transfer-capacity artifact and validate each against its generated
+   schema. They also fail when checked-in schemas or TypeScript declarations
+   are stale.
 3. `tests/e2e/local.sh` runs both preparation phases and a short balanced
    workload against a local object store, bundles the output, and builds the
    website from that bundle.

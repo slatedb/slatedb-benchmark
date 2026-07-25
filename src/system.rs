@@ -1215,6 +1215,7 @@ pub fn inspect_environment(provider: &str, endpoint: &str, region: &str) -> Envi
     Environment {
         runner_type: std::env::var("SLATEDB_BENCH_RUNNER_TYPE")
             .unwrap_or_else(|_| "local".to_string()),
+        runner_region: std::env::var("SLATEDB_BENCH_RUNNER_REGION").unwrap_or_default(),
         hostname: hostname::get()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|_| "unknown".to_string()),

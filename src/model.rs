@@ -41,6 +41,9 @@ impl SourceIdentity {
 pub struct Environment {
     /// CI runner label or `local`.
     pub runner_type: String,
+    /// Geographic location of the runner's public egress, when known.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub runner_region: String,
     /// Hostname reported by the operating system.
     pub hostname: String,
     /// CPU model string.
@@ -518,4 +521,100 @@ pub struct RunManifest {
     pub max_parallel: usize,
     /// Relative artifact path to lowercase SHA-256 digest.
     pub results: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(deny_unknown_fields)]
+/// Tool identity recorded with a transfer-capacity probe.
+pub struct TransferTool {
+    /// Executable used to run the probe.
+    pub name: String,
+    /// Executable version.
+    pub version: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(deny_unknown_fields)]
+/// Aggregate throughput recorded for one transfer-capacity operation.
+pub struct TransferThroughput {
+    /// Object body bytes transferred per second.
+    pub bytes_per_second: f64,
+    /// Requests completed per second.
+    pub operations_per_second: f64,
+    /// Objects transferred or listed per second.
+    pub objects_per_second: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(deny_unknown_fields)]
+/// Request-latency distribution in milliseconds.
+pub struct TransferLatencySummary {
+    /// Arithmetic mean.
+    pub average: f64,
+    /// Median.
+    pub p50: f64,
+    /// 90th percentile.
+    pub p90: f64,
+    /// 99th percentile.
+    pub p99: f64,
+    /// Fastest request.
+    pub min: f64,
+    /// Slowest request.
+    pub max: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(deny_unknown_fields)]
+/// One operation measured by the transfer-capacity probe.
+pub struct TransferBenchmark {
+    /// Stable benchmark name, such as `large-get`.
+    pub name: String,
+    /// Object-store operation.
+    pub operation: String,
+    /// Object size used by the operation.
+    pub object_size_bytes: u64,
+    /// Number of concurrent Warp clients.
+    pub concurrency: usize,
+    /// Requested measurement duration.
+    pub duration_seconds: u64,
+    /// Aggregate throughput.
+    pub throughput: TransferThroughput,
+    /// End-to-end request latency.
+    pub request_latency_ms: TransferLatencySummary,
+    /// Time to first byte, when the operation returns a response body.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ttfb_ms: Option<TransferLatencySummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(deny_unknown_fields)]
+/// Published result of an independent object-store transfer-capacity probe.
+pub struct TransferCapacityResult {
+    /// Contract version.
+    pub version: u32,
+    /// Completion status; valid results use `ok`.
+    pub status: String,
+    /// GitHub Actions run identifier.
+    pub run_id: String,
+    /// RFC 3339 completion timestamp.
+    pub timestamp: String,
+    /// GitHub Actions job log URL, when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actions_log_url: Option<String>,
+    /// Fraction applied to probe duration.
+    pub scale: f64,
+    /// CI runner label.
+    pub runner_type: String,
+    /// Geographic location of the runner's public egress, when known.
+    pub runner_region: String,
+    /// Object-store provider.
+    pub object_store: String,
+    /// Configured object-store endpoint.
+    pub endpoint: String,
+    /// Object-store region.
+    pub region: String,
+    /// Probe tool identity.
+    pub tool: TransferTool,
+    /// Operation measurements.
+    pub benchmarks: Vec<TransferBenchmark>,
 }

@@ -14,6 +14,8 @@ import type {
   RunManifest,
   SourceIdentity,
   ThroughputSummary,
+  TransferBenchmark,
+  TransferCapacityResult,
   WorkloadResult,
   WorkloadSeries,
 } from "../generated/artifacts";
@@ -31,6 +33,8 @@ export type {
   RunManifest,
   SourceIdentity,
   ThroughputSummary,
+  TransferBenchmark,
+  TransferCapacityResult,
   WorkloadResult,
   WorkloadSeries,
 };
@@ -59,6 +63,16 @@ export type BenchmarkRun = {
   patches: AppliedPatch[];
 };
 
+export type TransferCapacityRoute = {
+  provider: string;
+  rawBase: string;
+  run: {
+    id: string;
+    recordedAt: string;
+  };
+  result: TransferCapacityResult;
+};
+
 type StoredRun = {
   version: string;
   run: BenchmarkRun;
@@ -75,6 +89,7 @@ let archiveFilesPromise: Promise<string[]> | undefined;
 let runsPromise: Promise<StoredRun[]> | undefined;
 let datasetResultsPromise: Promise<ResultRoute<GoldenManifest>[]> | undefined;
 let workloadResultsPromise: Promise<ResultRoute<WorkloadResult>[]> | undefined;
+let transferCapacityResultsPromise: Promise<TransferCapacityRoute[]> | undefined;
 
 async function walk(directory: string): Promise<string[]> {
   let entries: Dirent<string>[];
@@ -124,6 +139,47 @@ async function readDatasetResults(): Promise<ResultRoute<GoldenManifest>[]> {
 export function loadWorkloadResults(): Promise<ResultRoute<WorkloadResult>[]> {
   workloadResultsPromise ??= loadTaskResults<WorkloadResult>();
   return workloadResultsPromise;
+}
+
+export function loadTransferCapacityResults(): Promise<TransferCapacityRoute[]> {
+  transferCapacityResultsPromise ??= readTransferCapacityResults();
+  return transferCapacityResultsPromise;
+}
+
+async function readTransferCapacityResults(): Promise<TransferCapacityRoute[]> {
+  const files = (await loadArchiveFiles()).filter((file) => {
+    if (path.basename(file) !== 'result.json') return false;
+    const relative = path.relative(resultsRoot, file).split(path.sep);
+    return relative.length === 4 && relative[0] === 'transfer-capacity';
+  });
+  const routes = await Promise.all(files.map(async (file) => {
+    const relative = path.relative(resultsRoot, file).split(path.sep);
+    const provider = relative[1];
+    const nestedRunId = relative[2];
+    const result = JSON.parse(
+      await fs.readFile(file, 'utf8'),
+    ) as TransferCapacityResult;
+    if (result.object_store !== provider) {
+      throw new Error(`${file} object_store does not match its directory`);
+    }
+    if (result.run_id !== nestedRunId) {
+      throw new Error(`${file} run_id does not match its directory`);
+    }
+    return {
+      provider,
+      rawBase: path.relative(resultsRoot, path.dirname(file)).split(path.sep).join('/'),
+      run: {
+        id: result.run_id,
+        recordedAt: result.timestamp,
+      },
+      result,
+    };
+  }));
+  return routes.sort((left, right) =>
+    left.provider.localeCompare(right.provider)
+    || Date.parse(right.run.recordedAt) - Date.parse(left.run.recordedAt)
+    || right.run.id.localeCompare(left.run.id)
+  );
 }
 
 async function loadTaskResults<T>(): Promise<ResultRoute<T>[]> {
@@ -249,6 +305,12 @@ export function datasetHref(version: string, runId?: string) {
   return runId
     ? `/${version}/run/${runId}/dataset/`
     : `/${version}/dataset/`;
+}
+
+export function transferCapacityHref(provider: string, runId?: string) {
+  return runId
+    ? `/transfer-capacity/${provider}/run/${runId}/`
+    : `/transfer-capacity/${provider}/`;
 }
 
 function compareRoutes(left: ResultRoute<unknown>, right: ResultRoute<unknown>) {

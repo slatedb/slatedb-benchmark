@@ -106,6 +106,10 @@ export type Environment = {
  */
 runner_type: string,
 /**
+ * Geographic location of the runner's public egress, when known.
+ */
+runner_region?: string,
+/**
  * Hostname reported by the operating system.
  */
 hostname: string,
@@ -782,6 +786,144 @@ max_parallel: number,
  */
 results: { [key in string]: string }, };
 
+export type TransferTool = {
+/**
+ * Executable used to run the probe.
+ */
+name: string,
+/**
+ * Executable version.
+ */
+version: string, };
+
+export type TransferThroughput = {
+/**
+ * Object body bytes transferred per second.
+ */
+bytes_per_second: number,
+/**
+ * Requests completed per second.
+ */
+operations_per_second: number,
+/**
+ * Objects transferred or listed per second.
+ */
+objects_per_second: number, };
+
+export type TransferLatencySummary = {
+/**
+ * Arithmetic mean.
+ */
+average: number,
+/**
+ * Median.
+ */
+p50: number,
+/**
+ * 90th percentile.
+ */
+p90: number,
+/**
+ * 99th percentile.
+ */
+p99: number,
+/**
+ * Fastest request.
+ */
+min: number,
+/**
+ * Slowest request.
+ */
+max: number, };
+
+export type TransferBenchmark = {
+/**
+ * Stable benchmark name, such as `large-get`.
+ */
+name: string,
+/**
+ * Object-store operation.
+ */
+operation: string,
+/**
+ * Object size used by the operation.
+ */
+object_size_bytes: number,
+/**
+ * Number of concurrent Warp clients.
+ */
+concurrency: number,
+/**
+ * Requested measurement duration.
+ */
+duration_seconds: number,
+/**
+ * Aggregate throughput.
+ */
+throughput: TransferThroughput,
+/**
+ * End-to-end request latency.
+ */
+request_latency_ms: TransferLatencySummary,
+/**
+ * Time to first byte, when the operation returns a response body.
+ */
+ttfb_ms?: TransferLatencySummary | null, };
+
+export type TransferCapacityResult = {
+/**
+ * Contract version.
+ */
+version: number,
+/**
+ * Completion status; valid results use `ok`.
+ */
+status: string,
+/**
+ * GitHub Actions run identifier.
+ */
+run_id: string,
+/**
+ * RFC 3339 completion timestamp.
+ */
+timestamp: string,
+/**
+ * GitHub Actions job log URL, when available.
+ */
+actions_log_url?: string | null,
+/**
+ * Fraction applied to probe duration.
+ */
+scale: number,
+/**
+ * CI runner label.
+ */
+runner_type: string,
+/**
+ * Geographic location of the runner's public egress, when known.
+ */
+runner_region: string,
+/**
+ * Object-store provider.
+ */
+object_store: string,
+/**
+ * Configured object-store endpoint.
+ */
+endpoint: string,
+/**
+ * Object-store region.
+ */
+region: string,
+/**
+ * Probe tool identity.
+ */
+tool: TransferTool,
+/**
+ * Operation measurements.
+ */
+benchmarks: Array<TransferBenchmark>, };
+
 export const workloadNames = [
   'idle',
   'point-read-uniform',
@@ -799,5 +941,6 @@ export const schemaNames = [
   'golden',
   'result',
   'run',
-  'series'
+  'series',
+  'transfer-capacity'
 ] as const;

@@ -1,0 +1,239 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TransferCapacityResult",
+  "description": "Published result of an independent object-store transfer-capacity probe.",
+  "type": "object",
+  "properties": {
+    "version": {
+      "description": "Contract version.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "status": {
+      "description": "Completion status; valid results use `ok`.",
+      "type": "string"
+    },
+    "run_id": {
+      "description": "GitHub Actions run identifier.",
+      "type": "string"
+    },
+    "timestamp": {
+      "description": "RFC 3339 completion timestamp.",
+      "type": "string"
+    },
+    "actions_log_url": {
+      "description": "GitHub Actions job log URL, when available.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "scale": {
+      "description": "Fraction applied to probe duration.",
+      "type": "number",
+      "format": "double"
+    },
+    "runner_type": {
+      "description": "CI runner label.",
+      "type": "string"
+    },
+    "runner_region": {
+      "description": "Geographic location of the runner's public egress, when known.",
+      "type": "string"
+    },
+    "object_store": {
+      "description": "Object-store provider.",
+      "type": "string"
+    },
+    "endpoint": {
+      "description": "Configured object-store endpoint.",
+      "type": "string"
+    },
+    "region": {
+      "description": "Object-store region.",
+      "type": "string"
+    },
+    "tool": {
+      "description": "Probe tool identity.",
+      "$ref": "#/$defs/TransferTool"
+    },
+    "benchmarks": {
+      "description": "Operation measurements.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/TransferBenchmark"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "status",
+    "run_id",
+    "timestamp",
+    "scale",
+    "runner_type",
+    "runner_region",
+    "object_store",
+    "endpoint",
+    "region",
+    "tool",
+    "benchmarks"
+  ],
+  "$defs": {
+    "TransferTool": {
+      "description": "Tool identity recorded with a transfer-capacity probe.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "Executable used to run the probe.",
+          "type": "string"
+        },
+        "version": {
+          "description": "Executable version.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version"
+      ]
+    },
+    "TransferBenchmark": {
+      "description": "One operation measured by the transfer-capacity probe.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "Stable benchmark name, such as `large-get`.",
+          "type": "string"
+        },
+        "operation": {
+          "description": "Object-store operation.",
+          "type": "string"
+        },
+        "object_size_bytes": {
+          "description": "Object size used by the operation.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "concurrency": {
+          "description": "Number of concurrent Warp clients.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "duration_seconds": {
+          "description": "Requested measurement duration.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "throughput": {
+          "description": "Aggregate throughput.",
+          "$ref": "#/$defs/TransferThroughput"
+        },
+        "request_latency_ms": {
+          "description": "End-to-end request latency.",
+          "$ref": "#/$defs/TransferLatencySummary"
+        },
+        "ttfb_ms": {
+          "description": "Time to first byte, when the operation returns a response body.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TransferLatencySummary"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "operation",
+        "object_size_bytes",
+        "concurrency",
+        "duration_seconds",
+        "throughput",
+        "request_latency_ms"
+      ]
+    },
+    "TransferThroughput": {
+      "description": "Aggregate throughput recorded for one transfer-capacity operation.",
+      "type": "object",
+      "properties": {
+        "bytes_per_second": {
+          "description": "Object body bytes transferred per second.",
+          "type": "number",
+          "format": "double"
+        },
+        "operations_per_second": {
+          "description": "Requests completed per second.",
+          "type": "number",
+          "format": "double"
+        },
+        "objects_per_second": {
+          "description": "Objects transferred or listed per second.",
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "bytes_per_second",
+        "operations_per_second",
+        "objects_per_second"
+      ]
+    },
+    "TransferLatencySummary": {
+      "description": "Request-latency distribution in milliseconds.",
+      "type": "object",
+      "properties": {
+        "average": {
+          "description": "Arithmetic mean.",
+          "type": "number",
+          "format": "double"
+        },
+        "p50": {
+          "description": "Median.",
+          "type": "number",
+          "format": "double"
+        },
+        "p90": {
+          "description": "90th percentile.",
+          "type": "number",
+          "format": "double"
+        },
+        "p99": {
+          "description": "99th percentile.",
+          "type": "number",
+          "format": "double"
+        },
+        "min": {
+          "description": "Fastest request.",
+          "type": "number",
+          "format": "double"
+        },
+        "max": {
+          "description": "Slowest request.",
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "average",
+        "p50",
+        "p90",
+        "p99",
+        "min",
+        "max"
+      ]
+    }
+  },
+  "$id": "https://benchmark.slatedb.io/schema/transfer-capacity.json"
+}

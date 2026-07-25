@@ -1,0 +1,16 @@
+---
+import TransferCapacityPage from '../../../../components/TransferCapacityPage.astro';
+import { loadTransferCapacityResults } from '../../../../lib/results';
+
+export async function getStaticPaths() {
+  const routes = await loadTransferCapacityResults();
+  return routes.map((route) => ({
+    params: { provider: route.provider, run: route.run.id },
+    props: { route, routes },
+  }));
+}
+
+const { route, routes } = Astro.props;
+---
+
+<TransferCapacityPage route={route} routes={routes} />

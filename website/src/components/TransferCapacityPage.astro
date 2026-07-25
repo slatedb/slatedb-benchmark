@@ -1,0 +1,229 @@
+---
+import Base from '../layouts/Base.astro';
+import SiteHeader from './SiteHeader.astro';
+import {
+  transferCapacityHref,
+  type TransferBenchmark,
+  type TransferCapacityRoute,
+} from '../lib/results';
+import { formatIecBytes } from '../lib/format';
+
+interface Props {
+  route: TransferCapacityRoute;
+  routes: TransferCapacityRoute[];
+}
+
+const { route, routes } = Astro.props;
+const result = route.result;
+const providerLabel = (provider: string) =>
+  provider === 's3' ? 'Amazon S3' : provider === 'tigris' ? 'Tigris' : provider;
+const providers = [...new Set(routes.map((candidate) => candidate.provider))]
+  .sort()
+  .map((provider) => ({
+    provider,
+    route: routes.find((candidate) => candidate.provider === provider)!,
+  }));
+const recordedRoutes = routes
+  .filter((candidate) => candidate.provider === route.provider)
+  .sort((left, right) =>
+    Date.parse(right.run.recordedAt) - Date.parse(left.run.recordedAt)
+    || right.run.id.localeCompare(left.run.id)
+  );
+const large = result.benchmarks.filter((benchmark) => benchmark.name.startsWith('large-'));
+const small = result.benchmarks.filter((benchmark) => benchmark.name.startsWith('small-'));
+const number = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 });
+const rate = new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 });
+const latency = (value: number | undefined) =>
+  value === undefined ? '—' : `${number.format(value)} ms`;
+const bodyRate = (benchmark: TransferBenchmark) =>
+  benchmark.operation === 'LIST'
+    ? '—'
+    : `${number.format(benchmark.throughput.bytes_per_second / 1024 ** 2)} MiB/s`;
+const objectSize = (benchmark: TransferBenchmark) =>
+  benchmark.operation === 'LIST' ? '—' : formatIecBytes(benchmark.object_size_bytes);
+const rawResult = `/raw/${route.rawBase}/result.json`;
+---
+
+<Base
+  title={`${providerLabel(route.provider)} transfer capacity · SlateDB`}
+  description={`Independent object-store transfer-capacity measurements for ${providerLabel(route.provider)}`}
+>
+  <SiteHeader />
+  <main class="result-shell">
+    <aside class="result-context transfer-context" aria-label="Transfer-capacity context">
+      <div class="context-block">
+        <label class="context-label" for="transfer-provider">Object store</label>
+        <select class="route-select" id="transfer-provider" data-route-select>
+          {providers.map((option) => (
+            <option
+              value={transferCapacityHref(option.provider)}
+              selected={option.provider === route.provider}
+            >
+              {providerLabel(option.provider)}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div class="context-block">
+        <label class="context-label" for="transfer-recorded">Recorded</label>
+        <select class="route-select" id="transfer-recorded" data-route-select>
+          {recordedRoutes.map((candidate) => (
+            <option
+              value={transferCapacityHref(candidate.provider, candidate.run.id)}
+              selected={candidate.run.id === route.run.id}
+              data-local-timestamp={candidate.run.recordedAt}
+            >
+              {new Date(candidate.run.recordedAt).toLocaleString('en-US', {
+                timeZone: 'UTC',
+                timeZoneName: 'short',
+              })}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <dl class="metadata-list">
+        <div>
+          <dt>Object region</dt>
+          <dd>{result.region}</dd>
+        </div>
+        <div>
+          <dt>Runner region</dt>
+          <dd>{result.runner_region}</dd>
+        </div>
+        <div>
+          <dt>Machine</dt>
+          <dd>{result.runner_type}</dd>
+        </div>
+        <div>
+          <dt>Endpoint</dt>
+          <dd>{result.endpoint}</dd>
+        </div>
+      </dl>
+
+      <div class="context-links">
+        <a href={rawResult}>Raw result</a>
+        {result.actions_log_url && (
+          <a href={result.actions_log_url} target="_blank" rel="noreferrer">
+            Actions log ↗
+          </a>
+        )}
+      </div>
+    </aside>
+
+    <article class="result-content">
+      <header class="page-heading">
+        <p class="eyebrow">Transfer capacity</p>
+        <h1>{providerLabel(route.provider)}</h1>
+        <p class="workload-description">
+          Independent Warp measurements from the benchmark runner. These numbers describe the
+          object-store path, not SlateDB application throughput.
+        </p>
+        <dl class="heading-metadata">
+          <div><dt>Tool</dt><dd>{result.tool.name} {result.tool.version}</dd></div>
+          <div><dt>Scale</dt><dd>{result.scale}</dd></div>
+          <div><dt>Large object</dt><dd>{formatIecBytes(large[0]?.object_size_bytes ?? 0)}</dd></div>
+          <div><dt>Small object</dt><dd>{formatIecBytes(small[0]?.object_size_bytes ?? 0)}</dd></div>
+        </dl>
+      </header>
+
+      {[
+        { title: 'Large objects', rows: large },
+        { title: 'Small objects', rows: small },
+      ].map((section) => (
+        <section class="metric-section transfer-section">
+          <div class="section-heading">
+            <h2>{section.title}</h2>
+          </div>
+          <div class="table-scroll">
+            <table class="transfer-table">
+              <thead>
+                <tr>
+                  <th scope="col">Operation</th>
+                  <th scope="col">Object</th>
+                  <th scope="col">Clients</th>
+                  <th scope="col">Body rate</th>
+                  <th scope="col">Requests/s</th>
+                  <th scope="col">p50</th>
+                  <th scope="col">p90</th>
+                  <th scope="col">p99</th>
+                  <th scope="col">TTFB p50</th>
+                  <th scope="col">TTFB p99</th>
+                </tr>
+              </thead>
+              <tbody>
+                {section.rows.map((benchmark) => (
+                  <tr>
+                    <th scope="row"><code>{benchmark.operation}</code></th>
+                    <td>{objectSize(benchmark)}</td>
+                    <td>{benchmark.concurrency}</td>
+                    <td>{bodyRate(benchmark)}</td>
+                    <td>{rate.format(benchmark.throughput.operations_per_second)}</td>
+                    <td>{latency(benchmark.request_latency_ms.p50)}</td>
+                    <td>{latency(benchmark.request_latency_ms.p90)}</td>
+                    <td>{latency(benchmark.request_latency_ms.p99)}</td>
+                    <td>{latency(benchmark.ttfb_ms?.p50)}</td>
+                    <td>{latency(benchmark.ttfb_ms?.p99)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      ))}
+    </article>
+  </main>
+</Base>
+
+<script>
+  document.querySelectorAll<HTMLOptionElement>('[data-local-timestamp]').forEach((option) => {
+    const date = new Date(option.dataset.localTimestamp ?? '');
+    if (!Number.isNaN(date.getTime())) {
+      option.textContent = date.toLocaleString('en-US', { timeZoneName: 'short' });
+    }
+  });
+
+  document.querySelectorAll<HTMLSelectElement>('[data-route-select]').forEach((select) => {
+    select.addEventListener('change', () => {
+      if (select.value) window.location.assign(select.value);
+    });
+  });
+</script>
+
+<style>
+  .transfer-table {
+    min-width: 900px;
+  }
+
+  .transfer-table tbody th {
+    color: var(--ink-2);
+    font-weight: 600;
+  }
+
+  .transfer-section:last-child {
+    border-bottom-color: var(--ink-1);
+  }
+
+  @media (max-width: 900px) {
+    .transfer-context {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .transfer-context .metadata-list,
+    .transfer-context .context-links {
+      grid-column: 1 / -1;
+    }
+  }
+
+  @media (max-width: 560px) {
+    .transfer-context {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .transfer-context .metadata-list,
+    .transfer-context .context-links {
+      grid-column: auto;
+    }
+  }
+</style>

@@ -3,6 +3,7 @@ import {
   compareVersions,
   datasetHref,
   routeHref,
+  transferCapacityHref,
   versionLabel,
   type BenchmarkRun,
   type Environment,
@@ -81,6 +82,7 @@ const objectStore = environment.object_store === 's3'
   : environment.object_store === 'tigris'
     ? 'Tigris'
     : environment.object_store;
+const transferCapacityProviders = new Set(['s3', 'tigris']);
 const warpBuildDocs = (() => {
   const runner = environment.runner_type.toLowerCase();
   if (!runner.startsWith('warp-')) return undefined;
@@ -149,7 +151,12 @@ const machineHref = warpBuildDocs
     </div>
     <div>
       <dt>Object store</dt>
-      <dd>{objectStore}</dd>
+      <dd>
+        {transferCapacityProviders.has(environment.object_store)
+          ? <a href={transferCapacityHref(environment.object_store)}>{objectStore}</a>
+          : objectStore}
+        {environment.region && <span> · {environment.region}</span>}
+      </dd>
     </div>
     <div>
       <dt>Machine</dt>
@@ -157,6 +164,7 @@ const machineHref = warpBuildDocs
         {machineHref
           ? <a href={machineHref} target="_blank" rel="noreferrer">{environment.runner_type}<span aria-hidden="true">&nbsp;↗</span></a>
           : environment.runner_type}
+        {environment.runner_region && <span> · {environment.runner_region}</span>}
       </dd>
     </div>
     <div>

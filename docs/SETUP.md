@@ -327,6 +327,9 @@ $ gh workflow run transfer-capacity.yml \
     -f scale=0.01
 ```
 
+Successful probes publish a summarized result and rebuild the website. Raw
+Warp request data remains available only in the workflow artifact.
+
 ## Troubleshooting
 
 ### `Not authorized to perform sts:AssumeRoleWithWebIdentity`

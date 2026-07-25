@@ -15,9 +15,16 @@ bucket=${SLATEDB_BENCH_BUCKET:?SLATEDB_BENCH_BUCKET is required}
 root_prefix=${SLATEDB_BENCH_PREFIX:-benchmark}
 region=${SLATEDB_BENCH_REGION:-$aws_region}
 runner_type=${SLATEDB_BENCH_RUNNER_TYPE:-unknown}
+runner_region=${SLATEDB_BENCH_RUNNER_REGION:-unknown}
 object_store=${CLOUD_PROVIDER:-s3}
 warp_bin=${WARP_BIN:-warp}
 warp_version=${WARP_VERSION:-v1.5.0}
+if [[ -n ${GITHUB_RUN_ID:-} ]]; then
+  run_id="github-$GITHUB_RUN_ID"
+else
+  run_id="local-$(date -u +%Y%m%d%H%M%S)"
+fi
+actions_log_url=${BENCHMARK_ACTIONS_LOG_URL:-}
 if [[ -n $configured_endpoint ]]; then
   endpoint=$configured_endpoint
   warp_endpoint=$configured_endpoint
@@ -184,9 +191,12 @@ run_warp_benchmark \
 
 mkdir -p "$(dirname "$output")"
 jq -n \
+  --arg run_id "$run_id" \
   --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --arg actions_log_url "$actions_log_url" \
   --argjson scale "$scale" \
   --arg runner_type "$runner_type" \
+  --arg runner_region "$runner_region" \
   --arg object_store "$object_store" \
   --arg endpoint "$endpoint" \
   --arg region "$region" \
@@ -203,11 +213,14 @@ jq -n \
   --slurpfile small_get_latency "$artifact_dir/small-get.analysis.json" \
   --slurpfile small_list_latency "$artifact_dir/small-list.analysis.json" \
   '{
-    version: 3,
+    version: 4,
     status: "ok",
+    run_id: $run_id,
     timestamp: $timestamp,
+    actions_log_url: (if $actions_log_url == "" then null else $actions_log_url end),
     scale: $scale,
     runner_type: $runner_type,
+    runner_region: $runner_region,
     object_store: $object_store,
     endpoint: $endpoint,
     region: $region,
@@ -218,40 +231,47 @@ jq -n \
         object_size_bytes: $large_object_size,
         concurrency: $large_concurrency,
         duration_seconds: $large_duration,
-        latency_ms: $large_put_latency[0],
-        benchdata: "warp/large-put.csv.zst"
+        throughput: $large_put_latency[0].throughput,
+        request_latency_ms: $large_put_latency[0].request,
+        ttfb_ms: $large_put_latency[0].ttfb
       },
       {
         name: "large-get", operation: "GET",
         object_size_bytes: $large_object_size,
         concurrency: $large_concurrency,
         duration_seconds: $large_duration,
-        latency_ms: $large_get_latency[0],
-        benchdata: "warp/large-get.csv.zst"
+        throughput: $large_get_latency[0].throughput,
+        request_latency_ms: $large_get_latency[0].request,
+        ttfb_ms: $large_get_latency[0].ttfb
       },
       {
         name: "small-put", operation: "PUT",
         object_size_bytes: $small_object_size,
         concurrency: $small_concurrency,
         duration_seconds: $small_duration,
-        latency_ms: $small_put_latency[0],
-        benchdata: "warp/small-put.csv.zst"
+        throughput: $small_put_latency[0].throughput,
+        request_latency_ms: $small_put_latency[0].request,
+        ttfb_ms: $small_put_latency[0].ttfb
       },
       {
         name: "small-get", operation: "GET",
         object_size_bytes: $small_object_size,
         concurrency: $small_concurrency,
         duration_seconds: $small_duration,
-        latency_ms: $small_get_latency[0],
-        benchdata: "warp/small-get.csv.zst"
+        throughput: $small_get_latency[0].throughput,
+        request_latency_ms: $small_get_latency[0].request,
+        ttfb_ms: $small_get_latency[0].ttfb
       },
       {
         name: "small-list", operation: "LIST",
         object_size_bytes: $small_object_size,
         concurrency: $small_concurrency,
         duration_seconds: $small_duration,
-        latency_ms: $small_list_latency[0],
-        benchdata: "warp/small-list.csv.zst"
+        throughput: $small_list_latency[0].throughput,
+        request_latency_ms: $small_list_latency[0].request,
+        ttfb_ms: $small_list_latency[0].ttfb
       }
     ]
-  }' >"$output"
+  }
+  | if .actions_log_url == null then del(.actions_log_url) else . end
+  | .benchmarks |= map(if .ttfb_ms == null then del(.ttfb_ms) else . end)' >"$output"

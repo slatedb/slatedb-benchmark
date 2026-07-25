@@ -125,8 +125,17 @@ jobs:
             echo "::warning::ip command unavailable"
           fi
           echo "Public egress:"
-          curl --fail --location --silent --show-error --max-time 10 \
-            https://ipinfo.io/json || true
+          public_egress=$(curl --fail --location --silent --show-error --max-time 10 \
+            https://ipinfo.io/json || true)
+          printf '%s\n' "$public_egress"
+          runner_region=$(jq -r '
+            [.city, .region, .country]
+            | map(select(type == "string" and length > 0))
+            | join(", ")
+          ' <<< "$public_egress" 2>/dev/null || true)
+          if [[ -n "$runner_region" ]]; then
+            echo "SLATEDB_BENCH_RUNNER_REGION=$runner_region" >> "$GITHUB_ENV"
+          fi
           echo
           if [[ "$CLOUD_PROVIDER" == tigris ]]; then
             object_store_name=Tigris
@@ -167,12 +176,15 @@ jobs:
         shell: bash
         env:
           AWS_REGION: ${{ vars.AWS_REGION }}
+          BENCHMARK_ACTIONS_JOB_ID: ${{ job.check_run_id }}
           BENCHMARK_SCALE: ${{ inputs.scale }}
           CLOUD_PROVIDER: ${{ inputs.object_store }}
           SLATEDB_BENCH_BUCKET: ${{ vars.SLATEDB_BENCH_BUCKET }}
           SLATEDB_BENCH_REGION: ${{ vars.AWS_REGION }}
         run: |
           set -euo pipefail
+          export BENCHMARK_ACTIONS_LOG_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/job/$BENCHMARK_ACTIONS_JOB_ID"
+          unset BENCHMARK_ACTIONS_JOB_ID
           : "${SLATEDB_BENCH_BUCKET:?SLATEDB_BENCH_BUCKET is required}"
           export SLATEDB_BENCH_PREFIX=${SLATEDB_BENCH_PREFIX:-benchmark}
           export SLATEDB_BENCH_RUNNER_TYPE=${SLATEDB_BENCH_RUNNER_TYPE:-warp-ubuntu-latest-arm64-8x}
@@ -183,3 +195,72 @@ jobs:
           path: .runs/transfer-capacity
           if-no-files-found: error
           overwrite: true
+
+  publish:
+    needs: transfer-capacity
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: write
+    concurrency:
+      group: benchmark-publish
+      cancel-in-progress: false
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: transfer-capacity
+          path: .runs/transfer-capacity
+      - name: Check out current main for publication
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          path: publish
+      - name: Publish transfer-capacity result
+        id: publication
+        shell: bash
+        env:
+          OBJECT_STORE: ${{ inputs.object_store }}
+        run: |
+          set -euo pipefail
+          result=.runs/transfer-capacity/result.json
+          run_id=$(jq -er '.run_id' "$result")
+          [[ "$run_id" == "github-$GITHUB_RUN_ID" ]]
+          destination="publish/results/transfer-capacity/$OBJECT_STORE/$run_id"
+          mkdir -p "$destination"
+          cp "$result" "$destination/result.json"
+
+          git -C publish config user.name "slatedb-benchmark[bot]"
+          git -C publish config user.email "slatedb-benchmark[bot]@users.noreply.github.com"
+          git -C publish add "results/transfer-capacity/$OBJECT_STORE/$run_id/result.json"
+          if ! git -C publish diff --cached --quiet; then
+            git -C publish commit -m "Publish $OBJECT_STORE transfer capacity $run_id"
+            for attempt in {1..5}; do
+              git -C publish fetch origin main
+              git -C publish rebase origin/main
+              if git -C publish push origin HEAD:main; then
+                break
+              fi
+              if [[ "$attempt" == 5 ]]; then
+                echo "main advanced during all publication attempts" >&2
+                exit 1
+              fi
+            done
+          fi
+          echo "sha=$(git -C publish rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Deploy benchmark website
+        uses: actions/github-script@v7
+        env:
+          PUBLICATION_SHA: ${{ steps.publication.outputs.sha }}
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: "pages.yml",
+              ref: "main",
+              inputs: {
+                publication_sha: process.env.PUBLICATION_SHA,
+              },
+            });
