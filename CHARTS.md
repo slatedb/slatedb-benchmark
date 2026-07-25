@@ -116,7 +116,7 @@ The complete sidecar contains these series:
 | Application latency | Window statistics and aggregate HDR data by API |
 | Object store | Requests/s and combined body bytes/s by HTTP method |
 | Process | CPU cores and RSS bytes |
-| Machine | CPU percent, RSS bytes, network bytes/s, disk bytes/s, disk ops/s |
+| Machine | CPU percent, memory used bytes, network bytes/s, disk bytes/s, disk ops/s |
 
 Application rate and object-store arrays match `rate_elapsed_ns`. Application
 latency arrays match `latency_elapsed_ns`. Process and machine arrays match

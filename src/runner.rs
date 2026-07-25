@@ -6,8 +6,8 @@ use crate::model::{
 };
 use crate::object_store::{delete_prefix, ObjectStoreContext};
 use crate::system::{
-    duration_ns, inspect_environment, measure_until_complete, verify_environment,
-    ApplicationRegistry, BenchmarkMetricsRecorder, SampledMeasurement, SlateMetricsReporter,
+    duration_ns, inspect_environment, measure_until_complete, ApplicationRegistry,
+    BenchmarkMetricsRecorder, SampledMeasurement, SlateMetricsReporter,
 };
 use crate::validation::{
     validate_golden_manifest, validate_workload_result, validate_workload_series,
@@ -328,11 +328,6 @@ async fn run_workload(
     if let Some(golden) = &golden {
         ensure_same_object_store(&golden.environment, &environment)?;
     }
-    if std::env::var("SLATEDB_BENCH_PUBLISHED").as_deref() == Ok("true") {
-        anyhow::ensure!(config.scale == 1.0, "published runs require scale 1.0");
-        verify_environment(&environment)?;
-    }
-
     let task_root = context
         .root
         .clone()

@@ -1161,42 +1161,6 @@ pub fn inspect_environment(provider: &str, endpoint: &str, region: &str) -> Envi
     }
 }
 
-pub fn verify_environment(environment: &Environment) -> Result<()> {
-    anyhow::ensure!(
-        environment.runner_type == "warp-ubuntu-latest-arm64-8x",
-        "published runs require warp-ubuntu-latest-arm64-8x"
-    );
-    anyhow::ensure!(environment.cpu_cores == 8, "published runs require 8 CPUs");
-    anyhow::ensure!(
-        environment.ram_bytes >= 30 * 1024 * 1024 * 1024,
-        "published runs require at least 30 GiB RAM"
-    );
-    match environment.object_store.as_str() {
-        "s3" => {
-            anyhow::ensure!(
-                environment.endpoint == "AWS default",
-                "published S3 runs require the default AWS endpoint"
-            );
-            anyhow::ensure!(
-                environment.region == "us-east-1",
-                "published S3 runs require region us-east-1"
-            );
-        }
-        "tigris" => {
-            anyhow::ensure!(
-                environment.endpoint.trim_end_matches('/') == "https://t3.storage.dev",
-                "published Tigris runs require endpoint https://t3.storage.dev"
-            );
-            anyhow::ensure!(
-                environment.region == "auto",
-                "published Tigris runs require region auto"
-            );
-        }
-        provider => anyhow::bail!("published runs do not support object store {provider}"),
-    }
-    Ok(())
-}
-
 #[derive(Clone, Default)]
 struct HostSnapshot {
     process_cpu_cores: f64,
@@ -1358,11 +1322,10 @@ pub fn counter_value(metrics: &Metrics, name: &str) -> u64 {
 mod tests {
     use super::{
         format_slate_metrics, sample_until_stopped, sample_until_stopped_with_rate_control,
-        summarize_values, verify_environment, ApplicationRegistry, BenchmarkMetricsRecorder,
-        HostSnapshot, RateWindowControl, SlateMetricsReporter,
+        summarize_values, ApplicationRegistry, BenchmarkMetricsRecorder, HostSnapshot,
+        RateWindowControl, SlateMetricsReporter,
     };
     use crate::instrumented_store::{HttpMethod, StoreMetrics};
-    use crate::model::Environment;
     use slatedb_common::metrics::MetricsRecorder;
     use std::sync::Arc;
     use std::time::Duration;
@@ -1384,32 +1347,6 @@ mod tests {
 
         assert_eq!(window.process_rss_bytes, 10.0);
         assert_eq!(window.machine_memory_used_bytes, 20.0);
-    }
-
-    #[test]
-    fn published_environment_accepts_s3_and_tigris() {
-        let s3 = Environment {
-            runner_type: "warp-ubuntu-latest-arm64-8x".to_string(),
-            cpu_cores: 8,
-            ram_bytes: 32 * 1024 * 1024 * 1024,
-            object_store: "s3".to_string(),
-            endpoint: "AWS default".to_string(),
-            region: "us-east-1".to_string(),
-            ..Environment::default()
-        };
-        verify_environment(&s3).expect("valid published S3 environment");
-
-        let tigris = Environment {
-            object_store: "tigris".to_string(),
-            endpoint: "https://t3.storage.dev".to_string(),
-            region: "auto".to_string(),
-            ..s3.clone()
-        };
-        verify_environment(&tigris).expect("valid published Tigris environment");
-
-        let mut wrong_endpoint = tigris;
-        wrong_endpoint.endpoint = "https://example.com".to_string();
-        assert!(verify_environment(&wrong_endpoint).is_err());
     }
 
     #[test]

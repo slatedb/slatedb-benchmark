@@ -140,7 +140,7 @@ jobs:
           overwrite: true
 
   build:
-    runs-on: warp-ubuntu-latest-arm64-8x
+    runs-on: warp-ubuntu-latest-arm64-16x
     outputs:
       workloads: ${{ steps.catalog.outputs.workloads }}
     steps:
@@ -198,7 +198,7 @@ jobs:
 
   workloads:
     needs: [validate-golden, build]
-    runs-on: warp-ubuntu-latest-arm64-8x
+    runs-on: warp-ubuntu-latest-arm64-16x
     timeout-minutes: 1440
     environment: benchmark-${{ inputs.object_store }}
     strategy:
@@ -251,14 +251,13 @@ jobs:
           GOLDEN_ID: ${{ inputs.golden_id }}
           SLATEDB_BENCH_BUCKET: ${{ vars.SLATEDB_BENCH_BUCKET }}
           SLATEDB_BENCH_REGION: ${{ vars.AWS_REGION }}
-          SLATEDB_BENCH_PUBLISHED: ${{ inputs.publish }}
         run: |
           set -euo pipefail
           export BENCHMARK_ACTIONS_LOG_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/job/$BENCHMARK_ACTIONS_JOB_ID"
           unset BENCHMARK_ACTIONS_JOB_ID
           : "${SLATEDB_BENCH_BUCKET:?SLATEDB_BENCH_BUCKET is required}"
           export SLATEDB_BENCH_PREFIX=${SLATEDB_BENCH_PREFIX:-benchmark}
-          export SLATEDB_BENCH_RUNNER_TYPE=${SLATEDB_BENCH_RUNNER_TYPE:-warp-ubuntu-latest-arm64-8x}
+          export SLATEDB_BENCH_RUNNER_TYPE=${SLATEDB_BENCH_RUNNER_TYPE:-warp-ubuntu-latest-arm64-16x}
           bin/slatedb-benchmark run \
             --workload "$BENCHMARK_TASK" \
             --golden "$GOLDEN_ID" \
@@ -276,7 +275,7 @@ jobs:
 
   bundle:
     needs: [validate-golden, build, workloads]
-    runs-on: warp-ubuntu-latest-arm64-8x
+    runs-on: warp-ubuntu-latest-arm64-16x
     steps:
       - uses: actions/checkout@v4
         with:
@@ -315,7 +314,7 @@ jobs:
   publish:
     needs: bundle
     if: inputs.publish
-    runs-on: warp-ubuntu-latest-arm64-8x
+    runs-on: warp-ubuntu-latest-arm64-16x
     permissions:
       actions: write
       contents: write
@@ -372,7 +371,7 @@ jobs:
       always() &&
       needs.bundle.result == 'success' &&
       (needs.publish.result == 'success' || needs.publish.result == 'skipped')
-    runs-on: warp-ubuntu-latest-arm64-8x
+    runs-on: warp-ubuntu-latest-arm64-16x
     environment: benchmark-${{ inputs.object_store }}
     steps:
       - uses: actions/checkout@v4
