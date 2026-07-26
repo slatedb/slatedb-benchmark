@@ -174,7 +174,8 @@ results/<version>/<run-id>/
 | `series.json` | One-second rate samples, resource samples, and latency histograms |
 
 Use `run.json` to check the SlateDB commit, benchmark commit, golden ID, scale,
-object store, runner, resolved settings, and patches before comparing two runs.
+resolved settings, and patches before comparing two runs. Check `result.json`,
+or `golden.json` for dataset preparation, for object-store and runner details.
 A change to any of those inputs makes it a different experiment.
 
 Write API latency ends when SlateDB accepts an operation. The `durable` row
