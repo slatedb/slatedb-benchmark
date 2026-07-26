@@ -1,9 +1,9 @@
 diff --git a/rfcs/0032-cached-probing-sequenced-metadata.md b/rfcs/0032-cached-probing-sequenced-metadata.md
 new file mode 100644
-index 00000000..32f5d5f1
+index 00000000..acc0a07d
 --- /dev/null
 +++ b/rfcs/0032-cached-probing-sequenced-metadata.md
-@@ -0,0 +1,593 @@
+@@ -0,0 +1,595 @@
 +# Cached Probing for Sequenced Metadata
 +
 +Table of Contents:
@@ -365,10 +365,12 @@ index 00000000..32f5d5f1
 +Add counters for:
 +
 +- latest cache hits and cold misses;
-+- LIST fallbacks;
 +- successful and missing probe GETs;
 +- cache advances from reads and writes; and
 +- boundary-driven cache invalidations.
++
++Log probe-limit LIST fallbacks at debug level with the object directory, last
++seen ID, and probe count.
 +
 +Record a histogram of probes per latest read. Existing object-store metrics
 +continue to report request latency and failures.
@@ -598,7 +600,7 @@ index 00000000..32f5d5f1
 +- [RFC-0026: Garbage Collector Boundary Files for Sequenced Metadata](0026-garbage-collector-boundary.md)
 +- [slatedb/slatedb#1215: listed file missing before read](https://github.com/slatedb/slatedb/issues/1215)
 diff --git a/slatedb-txn-obj/src/object_store.rs b/slatedb-txn-obj/src/object_store.rs
-index d0abda30..8e114da5 100644
+index d0abda30..469bb9db 100644
 --- a/slatedb-txn-obj/src/object_store.rs
 +++ b/slatedb-txn-obj/src/object_store.rs
 @@ -3,6 +3,7 @@ use crate::{
@@ -701,7 +703,7 @@ index d0abda30..8e114da5 100644
                  PutOptions::from(PutMode::Create),
              )
              .await
-@@ -337,29 +381,53 @@ impl<T: Send + Sync> SequencedStorageProtocol<T> for ObjectStoreSequencedStorage
+@@ -337,29 +381,59 @@ impl<T: Send + Sync> SequencedStorageProtocol<T> for ObjectStoreSequencedStorage
                      TransactionalObjectError::from(err)
                  }
              })?;
@@ -733,6 +735,12 @@ index d0abda30..8e114da5 100644
 +                    }
 +                }
 +            }
++            debug!(
++                "latest read probe limit reached, falling back to list [directory={}, last_seen_id={}, probes={}]",
++                self.dir_path,
++                id.id(),
++                MAX_PROBES,
++            );
 +        }
 +
          loop {
@@ -762,7 +770,7 @@ index d0abda30..8e114da5 100644
                  }
              } else {
                  // No files found, so return None
-@@ -373,16 +441,9 @@ impl<T: Send + Sync> SequencedStorageProtocol<T> for ObjectStoreSequencedStorage
+@@ -373,16 +447,9 @@ impl<T: Send + Sync> SequencedStorageProtocol<T> for ObjectStoreSequencedStorage
          &self,
          id: MonotonicId,
      ) -> Result<Option<T>, TransactionalObjectError> {
@@ -782,7 +790,7 @@ index d0abda30..8e114da5 100644
          }
      }
  
-@@ -421,7 +482,9 @@ impl<T: Send + Sync> SequencedStorageProtocol<T> for ObjectStoreSequencedStorage
+@@ -421,7 +488,9 @@ impl<T: Send + Sync> SequencedStorageProtocol<T> for ObjectStoreSequencedStorage
          self.object_store
              .delete(&path)
              .await
@@ -793,7 +801,7 @@ index d0abda30..8e114da5 100644
      }
  }
  
-@@ -574,6 +637,7 @@ mod tests {
+@@ -574,6 +643,7 @@ mod tests {
          inner: InMemory,
          get_opts_calls: AtomicUsize,
          if_none_match_gets: AtomicUsize,
@@ -801,7 +809,7 @@ index d0abda30..8e114da5 100644
          blocking_not_found: StdMutex<Option<BlockingNotFoundGet>>,
      }
  
-@@ -583,6 +647,7 @@ mod tests {
+@@ -583,6 +653,7 @@ mod tests {
                  inner: InMemory::new(),
                  get_opts_calls: AtomicUsize::new(0),
                  if_none_match_gets: AtomicUsize::new(0),
@@ -809,7 +817,7 @@ index d0abda30..8e114da5 100644
                  blocking_not_found: StdMutex::new(None),
              }
          }
-@@ -655,6 +720,7 @@ mod tests {
+@@ -655,6 +726,7 @@ mod tests {
          }
  
          fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, ObjectStoreResult<ObjectMeta>> {
@@ -817,7 +825,7 @@ index d0abda30..8e114da5 100644
              self.inner.list(prefix)
          }
  
-@@ -675,6 +741,30 @@ mod tests {
+@@ -675,6 +747,30 @@ mod tests {
          }
      }
  
@@ -848,7 +856,7 @@ index d0abda30..8e114da5 100644
      #[tokio::test]
      async fn test_boundary_check_allows_missing_boundary() {
          let object_store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-@@ -928,6 +1018,126 @@ mod tests {
+@@ -928,6 +1024,126 @@ mod tests {
          assert!(missing.is_none());
      }
  
@@ -975,7 +983,7 @@ index d0abda30..8e114da5 100644
      /// Validate that try_read_latest retries when a listed file is missing on read.
      #[tokio::test]
      async fn test_try_read_latest_retries_missing_listed_file() {
-@@ -961,6 +1171,7 @@ mod tests {
+@@ -961,6 +1177,7 @@ mod tests {
                  flaky_store.clone(),
                  "test",
              )),
