@@ -231,27 +231,11 @@ $ cargo run --locked -- generate
 Add coverage for its operation mix and validation rules, then run the checks
 and local end-to-end test above.
 
-## Repository map
-
-| Path | Contents |
-| --- | --- |
-| `src/` | Rust runner, metrics, artifact validation, bundling, and publication |
-| `config/` | Default and workload-specific SlateDB settings |
-| `patches/slatedb/` | Patches applied before the runner builds |
-| `schema/` | JSON Schema generated from the Rust artifact types |
-| `results/` | Published benchmark and transfer-capacity artifacts |
-| `website/` | Astro site for browsing results |
-| `.github/workflows/` | CI, preparation, benchmark, publication, and Pages jobs |
-
 ## Documentation
 
-- [Benchmark contract](docs/BENCHMARKS.md) defines the dataset, workloads,
-  timing, durability rules, and metrics.
-- [Design](docs/DESIGN.md) describes runner boundaries, object-store state,
-  artifact recovery, workflows, and publication.
-- [Setup](docs/SETUP.md) covers WarpBuild, object-store credentials, GitHub
-  environments, and Pages.
-- [Charts](docs/CHARTS.md) documents the workload time-series contract and
-  website interaction.
+See the [documentation](docs/) for the benchmark contract, design, setup, and
+chart specifications.
 
-The crate declares the Apache-2.0 license.
+## License
+
+SlateDB Benchmark is licensed under the [Apache License 2.0](LICENSE).
