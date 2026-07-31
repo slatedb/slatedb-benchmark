@@ -243,10 +243,7 @@ async fn put(
     let key = key_for_id(id, config.dataset.key_bytes);
     let value = values.generate(config.dataset.value_bytes, rng);
     let logical_bytes = u64::try_from(key.len().saturating_add(value.len())).unwrap_or(u64::MAX);
-    let options = WriteOptions {
-        await_durable: false,
-        ..Default::default()
-    };
+    let options = WriteOptions::default();
     let started = Instant::now();
     match db
         .put_with_options(key, value, &PutOptions::default(), &options)
@@ -373,10 +370,7 @@ async fn transaction(
             }
         }
     }
-    let options = WriteOptions {
-        await_durable: false,
-        ..Default::default()
-    };
+    let options = WriteOptions::default();
     let started = Instant::now();
     match transaction.commit_with_options(&options).await {
         Ok(Some(handle)) => {
@@ -462,10 +456,7 @@ pub async fn populate_dataset(
         .unwrap_or(2)
         .clamp(2, 8);
     let (mut batch_receivers, producers) = spawn_dataset_producers(config, producer_count);
-    let options = WriteOptions {
-        await_durable: false,
-        ..Default::default()
-    };
+    let options = WriteOptions::default();
     let started = Instant::now();
     let mut last_report = started;
     let mut last_records = 0_u64;

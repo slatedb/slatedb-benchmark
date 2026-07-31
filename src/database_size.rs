@@ -24,7 +24,7 @@ pub(crate) fn live_database_size_bytes(manifest: &VersionedManifest) -> u64 {
         add(view);
     }
     for run in manifest.compacted() {
-        for view in &run.sst_views {
+        for view in run.sst_views() {
             add(view);
         }
     }
@@ -33,7 +33,7 @@ pub(crate) fn live_database_size_bytes(manifest: &VersionedManifest) -> u64 {
             add(view);
         }
         for run in segment.compacted() {
-            for view in &run.sst_views {
+            for view in run.sst_views() {
                 add(view);
             }
         }
