@@ -1,0 +1,40 @@
+name: Nightly SlateDB main build
+
+on:
+  schedule:
+    - cron: "0 8 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-slatedb-main-build
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: slatedb/slatedb
+          ref: main
+          path: .slatedb-source
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@1.89.0
+      - name: Apply SlateDB patches
+        run: bash scripts/apply-slatedb-patch.sh .slatedb-source
+      - name: Configure SlateDB main
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo add --quiet --path "$GITHUB_WORKSPACE/.slatedb-source/slatedb" \
+            --no-default-features --features aws,foyer,wal_disable,zstd
+          cargo add --quiet --path "$GITHUB_WORKSPACE/.slatedb-source/slatedb-common" \
+            --features serde
+      - name: Build runner
+        run: cargo build --release --locked
