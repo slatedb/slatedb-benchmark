@@ -20,11 +20,17 @@ does not vary clients, values, caches, machines, object stores, or SlateDB
 settings within a preparation phase or workload.
 
 The suite uses the SlateDB release defaults unless a preparation phase or
-workload says otherwise. It configures these caches:
+workload says otherwise. Measured workloads configure these caches:
 
 - 8 GiB block cache
 - 4 GiB metadata/index cache
-- no local object-store cache
+- a whole-file local object-store mirror, automatically warmed when each database opens
+
+Golden-data bulk loading and compaction use the remote object store directly;
+they do not use the local mirror.
+
+The compactor retains its pre-compaction checkpoint for one minute. This bounds
+the extra local disk needed for SSTs that remain protected after compaction.
 
 ## Dataset
 

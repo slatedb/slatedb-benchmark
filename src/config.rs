@@ -591,8 +591,8 @@ pub struct ResolvedConfig {
 ///
 /// A task-specific `settings.<task>.toml` is a complete replacement for the
 /// shared settings file. If neither file exists, SlateDB defaults are used.
-/// Local object-store cache paths and capacities are cleared because the
-/// benchmark runner configures only its explicit in-memory caches.
+/// Legacy part-based object-store cache settings are reset because the runner
+/// supplies SlateDB's whole-file mirror directly.
 pub fn load(task: Task, scale: BenchmarkScale, settings_path: &Path) -> Result<ResolvedConfig> {
     let mut settings = match settings_path_for_task(task, settings_path)? {
         Some(settings_path) => Settings::from_file(&settings_path).with_context(|| {
@@ -610,11 +610,7 @@ pub fn load(task: Task, scale: BenchmarkScale, settings_path: &Path) -> Result<R
         block_bytes: scaled_u64(BLOCK_CACHE_BYTES, MIN_BLOCK_CACHE_BYTES, scale),
         metadata_bytes: scaled_u64(METADATA_CACHE_BYTES, MIN_METADATA_CACHE_BYTES, scale),
     };
-    settings.object_store_cache_options.max_cache_size_bytes = None;
-    settings.object_store_cache_options.root_folder = None;
-    settings
-        .object_store_cache_options
-        .preload_disk_cache_on_startup = None;
+    settings.object_store_cache_options = Default::default();
     let task_config = task_config(task, scale, dataset.record_count);
     task_config
         .validate()

@@ -34,7 +34,7 @@ this repository. The workflows use these runner labels:
 | --- | --- |
 | `warp-ubuntu-latest-arm64-8x` | Golden data and transfer-capacity |
 | `warp-ubuntu-latest-arm64-16x` | Build, bundle, publish, and cleanup |
-| `warp-ubuntu-latest-arm64-32x` | Workload matrix |
+| `warp-custom-ubuntu-latest-arm64-32x-300gb` | Workload matrix |
 
 Confirm that all three labels appear in the WarpBuild dashboard. If this is a
 public repository, WarpBuild also requires the setup described in

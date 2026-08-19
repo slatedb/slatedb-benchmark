@@ -34,11 +34,12 @@ Most workloads run 64 closed-loop clients after a five-minute warmup and record
 
 | Setting | Value |
 | --- | --- |
-| Workload runner | `warp-ubuntu-latest-arm64-32x` |
+| Workload runner | `warp-custom-ubuntu-latest-arm64-32x-300gb` |
 | Amazon S3 region | `us-east-1` |
 | Block cache | 8 GiB |
 | Metadata and index cache | 4 GiB |
-| Local object-store cache | Disabled |
+| Local object-store mirror | Enabled (whole-file, automatically warmed) |
+| Compactor checkpoint lifetime | 1 minute |
 | Value compression target | 1.0 |
 
 The runner records the resolved configuration, source commits, applied patches,

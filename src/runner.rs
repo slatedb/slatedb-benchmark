@@ -30,6 +30,7 @@ use slatedb::db_cache::{
     foyer::{FoyerCache, FoyerCacheOptions},
     DbCache, SplitCache,
 };
+use slatedb::object_store_mirror::ObjectStoreMirror;
 use slatedb::{Db, VersionedManifest};
 use slatedb_common::metrics::MetricsRecorder;
 use std::fs;
@@ -88,7 +89,15 @@ pub async fn execute(args: ExecutionArgs) -> Result<()> {
     let result = match args.task {
         Task::BulkLoad => run_bulk_load(&args, &config, &object_store).await,
         Task::Compaction => run_compaction(&args, &config, &object_store).await,
-        _ => run_workload(&args, &config, &object_store).await,
+        _ => {
+            let mirror_dir = tempfile::Builder::new()
+                .prefix("slatedb-benchmark-object-store-mirror-")
+                .tempdir()
+                .context("creating local object-store mirror directory")?;
+            let mirrored_store =
+                mirrored_object_store(mirror_dir.path(), object_store.instrumented.clone()).await?;
+            run_workload(&args, &config, &object_store, mirrored_store).await
+        }
     };
     if let Err(error) = &result {
         tracing::error!(task = %args.task, "benchmark task failed; partial data remains for diagnosis");
@@ -333,6 +342,7 @@ async fn run_workload(
     args: &ExecutionArgs,
     config: &ResolvedConfig,
     context: &ObjectStoreContext,
+    database_store: Arc<dyn ObjectStore>,
 ) -> Result<()> {
     let session = args.session.as_deref().context("workload session")?;
     let golden = if args.task.uses_golden() {
@@ -400,7 +410,7 @@ async fn run_workload(
     let recorder = Arc::new(BenchmarkMetricsRecorder::new());
     let db = open_database(
         database_path.clone(),
-        context.instrumented.clone(),
+        database_store,
         config,
         &config.settings,
         Arc::clone(&recorder),
@@ -774,6 +784,17 @@ async fn open_database(
         .await
         .context("opening SlateDB")?;
     Ok(Arc::new(db))
+}
+
+async fn mirrored_object_store(
+    root: &FsPath,
+    store: Arc<dyn ObjectStore>,
+) -> Result<Arc<dyn ObjectStore>> {
+    let mirror = ObjectStoreMirror::builder(root, store)
+        .build()
+        .await
+        .context("opening local object-store mirror")?;
+    Ok(mirror)
 }
 
 fn cache_for(config: &ResolvedConfig) -> Arc<dyn DbCache> {

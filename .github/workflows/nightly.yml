@@ -1,4 +1,4 @@
-name: Nightly SlateDB main build
+name: Nightly SlateDB object mirroring build
 
 on:
   schedule:
@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: nightly-slatedb-main-build
+  group: nightly-slatedb-object-mirroring-build
   cancel-in-progress: true
 
 jobs:
@@ -22,13 +22,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: slatedb/slatedb
-          ref: main
+          ref: codex/implement-rfc-0033-local-object-mirroring
           path: .slatedb-source
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@1.89.0
       - name: Apply SlateDB patches
         run: bash scripts/apply-slatedb-patch.sh .slatedb-source
-      - name: Configure SlateDB main
+      - name: Configure SlateDB object mirroring branch
         shell: bash
         run: |
           set -euo pipefail

@@ -6,7 +6,7 @@ on:
       slatedb_ref:
         description: SlateDB tag, branch, or commit to benchmark
         required: true
-        default: main
+        default: codex/implement-rfc-0033-local-object-mirroring
         type: string
       golden_id:
         description: Existing golden data name
@@ -188,7 +188,7 @@ jobs:
 
   workloads:
     needs: [validate-golden, build]
-    runs-on: warp-ubuntu-latest-arm64-32x
+    runs-on: warp-custom-ubuntu-latest-arm64-32x-300gb
     timeout-minutes: 1440
     environment: benchmark-${{ inputs.object_store }}
     strategy:
@@ -247,7 +247,7 @@ jobs:
           unset BENCHMARK_ACTIONS_JOB_ID
           : "${SLATEDB_BENCH_BUCKET:?SLATEDB_BENCH_BUCKET is required}"
           export SLATEDB_BENCH_PREFIX=${SLATEDB_BENCH_PREFIX:-benchmark}
-          export SLATEDB_BENCH_RUNNER_TYPE=${SLATEDB_BENCH_RUNNER_TYPE:-warp-ubuntu-latest-arm64-32x}
+          export SLATEDB_BENCH_RUNNER_TYPE=${SLATEDB_BENCH_RUNNER_TYPE:-warp-custom-ubuntu-latest-arm64-32x-300gb}
           SLATEDB_BENCH_RUNNER_REGION=$(
             curl --fail --location --silent --show-error --max-time 10 https://ipinfo.io/json |
               jq -r '[.city, .region, .country] | map(select(length > 0)) | join(", ")' ||
