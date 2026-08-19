@@ -117,8 +117,8 @@ pub fn bundle(args: BundleArgs) -> Result<PathBuf> {
         }
     }
     ensure!(
-        golden.configuration.scale == scale,
-        "golden manifest used a different scale"
+        golden.configuration.scale >= scale,
+        "golden manifest scale is smaller than workload scale"
     );
 
     let destination = args.output.join(&source.slate_version).join(&first.session);

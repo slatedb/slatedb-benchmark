@@ -71,14 +71,15 @@ $ gh workflow run benchmark.yml \
     -f scale=1.0
 ```
 
-The two workflows must use the same golden ID, object store, and scale. They
-may use different SlateDB revisions when the benchmarked revision can read the
-golden checkpoint.
+The two workflows must use the same golden ID and object store. A benchmark may
+use a scale no larger than the golden dataset's scale. The workflows may use
+different SlateDB revisions when the benchmarked revision can read the golden
+checkpoint.
 
 `scale` is a decimal factor in the range `(0, 1]`. Use `1.0` for a published
 release run and a small value such as `0.00001` for an infrastructure smoke
-test. Changing the golden revision, scale, patches, or preparation settings
-requires a new golden ID.
+test. Changing the golden revision, patches, preparation settings, or the scale
+used to create the golden dataset requires a new golden ID.
 
 The transfer-capacity workflow measures the object store without running
 SlateDB:

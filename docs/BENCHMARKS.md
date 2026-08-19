@@ -325,7 +325,9 @@ The local end-to-end test runs the release suite with `--scale`; it does not
 use a separate mock catalog. Scale reduces records, durations, and cache
 capacities. It preserves operation mixes, clients, key and value sizes,
 durability, preparation and workload order, and initial state. Scaled and
-full-size runs use the same publication path.
+full-size runs use the same publication path. A workload run may use a scale no
+larger than its golden dataset's scale; its key domain is the corresponding
+prefix of the larger golden dataset.
 
 ## Out of scope
 

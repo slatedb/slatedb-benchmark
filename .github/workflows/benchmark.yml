@@ -117,7 +117,7 @@ jobs:
           jq -e --arg object_store "$OBJECT_STORE" \
             '.environment.object_store == $object_store' "$manifest" >/dev/null
           jq -e --argjson scale "$BENCHMARK_SCALE" \
-            '.configuration.scale == $scale' "$manifest" >/dev/null
+            '.configuration.scale >= $scale' "$manifest" >/dev/null
           started_at=$(gh api \
             "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             --jq .created_at)

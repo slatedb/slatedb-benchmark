@@ -19,12 +19,12 @@ runner="$root/target/debug/slatedb-benchmark"
 "$runner" prepare \
   --phase bulk-load \
   --golden e2e \
-  --scale 0.00001 \
+  --scale 0.00002 \
   --output "$temporary/bulk-load"
 "$runner" prepare \
   --phase compaction \
   --golden e2e \
-  --scale 0.00001 \
+  --scale 0.00002 \
   --compaction-quiet-ms 100 \
   --output "$temporary/compaction"
 "$runner" run \

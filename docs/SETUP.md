@@ -295,7 +295,8 @@ the GitHub Pages host. GitHub documents the workflow source in
 ## Run a smoke benchmark
 
 Run golden preparation first. The benchmark workflow requires a golden dataset
-with the same object store, ID, and scale.
+with the same object store and ID. Its scale must be at least the benchmark
+scale.
 
 ```console
 $ gh workflow run golden.yml \
@@ -316,8 +317,8 @@ $ gh workflow run benchmark.yml \
 ```
 
 Every successful benchmark run publishes its results and dispatches the Pages
-workflow, including scaled runs. Use a new golden ID after changing its scale,
-SlateDB source, patches, or preparation settings.
+workflow, including scaled runs. Use a new golden ID after changing the scale
+used for golden preparation, SlateDB source, patches, or preparation settings.
 
 The transfer-capacity probe is independent:
 
@@ -345,8 +346,8 @@ repositories** is enabled and that the requested 8x, 16x, or 32x label exists.
 
 ### `golden.json` is missing or rejected
 
-Run `golden.yml` first. Use the same environment, bucket, golden ID, and scale
-in both workflows.
+Run `golden.yml` first. Use the same environment, bucket, and golden ID in both
+workflows. The benchmark scale may be smaller than the golden scale.
 
 ### The publish job cannot push
 

@@ -350,7 +350,7 @@ async fn run_workload(
         let golden: GoldenManifest =
             load_required(Arc::clone(&context.control), &manifest_path).await?;
         validate_golden_manifest(&golden)?;
-        ensure_shared_configuration(&golden.configuration, config)?;
+        ensure_golden_supports_workload(&golden.configuration, config)?;
         verify_checkpoint_reference(Arc::clone(&context.control), &golden.checkpoint).await?;
         Some(golden)
     } else {
@@ -582,6 +582,36 @@ fn ensure_shared_configuration(
     );
     anyhow::ensure!(
         existing.enabled_features == current.enabled_features,
+        "golden SlateDB features do not match"
+    );
+    Ok(())
+}
+
+fn ensure_golden_supports_workload(
+    golden: &ResultConfiguration,
+    config: &ResolvedConfig,
+) -> Result<()> {
+    let workload = ResultConfiguration::from(config);
+    anyhow::ensure!(
+        golden.scale >= workload.scale,
+        "golden scale is smaller than workload scale"
+    );
+    anyhow::ensure!(
+        golden.dataset.record_count >= workload.dataset.record_count,
+        "golden dataset has fewer records than the workload requires"
+    );
+    anyhow::ensure!(
+        golden.dataset.key_bytes == workload.dataset.key_bytes
+            && golden.dataset.value_bytes == workload.dataset.value_bytes
+            && golden.dataset.value_compression_ratio == workload.dataset.value_compression_ratio,
+        "golden dataset shape does not match"
+    );
+    anyhow::ensure!(
+        golden.build_profile == workload.build_profile,
+        "golden build profile does not match"
+    );
+    anyhow::ensure!(
+        golden.enabled_features == workload.enabled_features,
         "golden SlateDB features do not match"
     );
     Ok(())
@@ -1016,8 +1046,9 @@ fn manifest_lsm_digest(manifest: &VersionedManifest) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        cleanup_workload_databases, create_bytes, ensure_shared_configuration, sha256_bytes,
-        validate_name, validate_series_digest, SETTINGS_PATH,
+        cleanup_workload_databases, create_bytes, ensure_golden_supports_workload,
+        ensure_shared_configuration, sha256_bytes, validate_name, validate_series_digest,
+        SETTINGS_PATH,
     };
     use crate::config::{self, BenchmarkScale, Task};
     use crate::model::{ResultConfiguration, SeriesReference};
@@ -1125,5 +1156,24 @@ mod tests {
         golden.caches.metadata_bytes = 1;
 
         ensure_shared_configuration(&golden, &config).expect("compatible golden data");
+    }
+
+    #[test]
+    fn larger_golden_dataset_supports_scaled_workload() {
+        let workload = config::load(
+            Task::Balanced,
+            "0.75".parse::<BenchmarkScale>().expect("scale"),
+            Path::new(SETTINGS_PATH),
+        )
+        .expect("resolved workload config");
+        let golden = config::load(
+            Task::Compaction,
+            BenchmarkScale::FULL,
+            Path::new(SETTINGS_PATH),
+        )
+        .expect("resolved golden config");
+
+        ensure_golden_supports_workload(&ResultConfiguration::from(&golden), &workload)
+            .expect("larger golden supports workload");
     }
 }
