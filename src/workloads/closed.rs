@@ -269,8 +269,9 @@ async fn scan(
     stats: &mut WorkerStats,
 ) {
     let key = key_for_id(start_id, config.dataset.key_bytes);
+    let end_key = key_for_id(config.dataset.record_count, config.dataset.key_bytes);
     let started = Instant::now();
-    let mut iterator = match db.scan(key..).await {
+    let mut iterator = match db.scan(key..end_key).await {
         Ok(iterator) => iterator,
         Err(error) => {
             record_error(stats, recorder, "scan", started.elapsed());
@@ -779,6 +780,53 @@ mod tests {
                 .expect("record bytes")
         );
         assert_eq!(application.latency["scan"].count, 1);
+    }
+
+    #[tokio::test]
+    async fn scan_stops_at_logical_dataset_boundary() {
+        let mut config = load(
+            Task::RangeScan,
+            BenchmarkScale::FULL,
+            Path::new("config/settings.toml"),
+        )
+        .expect("range-scan config");
+        config.dataset.record_count = 10;
+        let db = Arc::new(
+            Db::open("scan-boundary-test", Arc::new(InMemory::new()))
+                .await
+                .expect("open database"),
+        );
+        for id in 0..20 {
+            db.put(
+                key_for_id(id, config.dataset.key_bytes),
+                vec![0; config.dataset.value_bytes],
+            )
+            .await
+            .expect("write scan record");
+        }
+        let registry = Arc::new(ApplicationRegistry::default());
+        let recorder = registry.recorder();
+        let mut stats = WorkerStats::default();
+
+        let (_, measurement) = measure_until_complete(
+            Arc::clone(&registry),
+            Arc::new(StoreMetrics::default()),
+            async {
+                scan(&db, &config, 9, Some(&recorder), &mut stats).await;
+                Ok(())
+            },
+        )
+        .await
+        .expect("measure scan");
+        db.close().await.expect("close database");
+
+        assert_eq!(stats.errors, 0);
+        assert_eq!(measurement.application().operations["scan"].total, 1);
+        assert_eq!(
+            measurement.application().throughput["scan"].total_bytes,
+            u64::try_from(config.dataset.key_bytes + config.dataset.value_bytes)
+                .expect("record bytes")
+        );
     }
 
     #[test]
