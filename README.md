@@ -39,7 +39,7 @@ Most workloads run 64 closed-loop clients after a five-minute warmup and record
 | Block cache | 8 GiB |
 | Metadata and index cache | 4 GiB |
 | Local object-store mirror | Enabled (whole-file, automatically warmed) |
-| Compactor checkpoint lifetime | 1 minute |
+| Compactor checkpoint lifetime | 30 seconds |
 | Value compression target | 1.0 |
 
 The runner records the resolved configuration, source commits, applied patches,

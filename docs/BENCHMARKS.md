@@ -29,7 +29,7 @@ workload says otherwise. Measured workloads configure these caches:
 Golden-data bulk loading and compaction use the remote object store directly;
 they do not use the local mirror.
 
-The compactor retains its pre-compaction checkpoint for one minute. This bounds
+The compactor retains its pre-compaction checkpoint for 30 seconds. This bounds
 the extra local disk needed for SSTs that remain protected after compaction.
 
 ## Dataset
