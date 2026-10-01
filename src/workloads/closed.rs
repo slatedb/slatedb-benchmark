@@ -326,7 +326,7 @@ async fn transaction(
     stats: &mut WorkerStats,
 ) {
     stats.transaction_attempts = stats.transaction_attempts.saturating_add(1);
-    let transaction = match db.begin(IsolationLevel::SerializableSnapshot).await {
+    let transaction = match db.begin(IsolationLevel::SerializableSnapshot) {
         Ok(transaction) => transaction,
         Err(error) => {
             stats.errors = stats.errors.saturating_add(1);
