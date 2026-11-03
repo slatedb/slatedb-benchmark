@@ -27,7 +27,7 @@ concurrency:
 
 jobs:
   transfer-capacity:
-    runs-on: warp-ubuntu-latest-arm64-8x
+    runs-on: warp-ubuntu-latest-arm64-32x
     timeout-minutes: 60
     environment: benchmark-${{ inputs.object_store }}
     env:
@@ -187,7 +187,7 @@ jobs:
           unset BENCHMARK_ACTIONS_JOB_ID
           : "${SLATEDB_BENCH_BUCKET:?SLATEDB_BENCH_BUCKET is required}"
           export SLATEDB_BENCH_PREFIX=${SLATEDB_BENCH_PREFIX:-benchmark}
-          export SLATEDB_BENCH_RUNNER_TYPE=${SLATEDB_BENCH_RUNNER_TYPE:-warp-ubuntu-latest-arm64-8x}
+          export SLATEDB_BENCH_RUNNER_TYPE=${SLATEDB_BENCH_RUNNER_TYPE:-warp-ubuntu-latest-arm64-32x}
           ./scripts/transfer-capacity.sh .runs/transfer-capacity/result.json
       - uses: actions/upload-artifact@v4
         with:
