@@ -6,6 +6,26 @@ runs a fixed workload catalog against a selected SlateDB revision, records
 application and object-store behavior, and publishes the results at
 [benchmark.slatedb.io](https://benchmark.slatedb.io).
 
+This branch, `codex/slatedb-v0.16.0-compat`, targets SlateDB `v0.16.0` with the
+current benchmark workloads and infrastructure. Local dependencies and the
+manual workflow defaults select `v0.16.0`. To rerun all workloads against an
+existing compatible golden dataset, select this branch when dispatching:
+
+```console
+$ gh workflow run benchmark.yml --repo slatedb/slatedb-benchmark \
+    --ref codex/slatedb-v0.16.0-compat \
+    -f slatedb_ref=v0.16.0 -f golden_id=golden -f object_store=s3 -f scale=1.0
+```
+
+Repeat with `-f object_store=tigris` for Tigris. If preparing a new golden
+dataset, also select this branch and `slatedb_ref=v0.16.0` for `golden.yml`,
+using a new golden ID.
+
+If the Performance runner group uses the selected-workflow allowlist in
+[docs/SETUP.md](docs/SETUP.md), allow `benchmark.yml` and `golden.yml` at
+`@refs/heads/codex/slatedb-v0.16.0-compat` as well. The documented `main`-only
+entries do not grant this branch access to the runners.
+
 ## Workloads
 
 The canonical dataset contains 300 million records with 20-byte keys and

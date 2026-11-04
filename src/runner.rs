@@ -769,8 +769,7 @@ async fn open_database(
     let db = Db::builder(path, store)
         .with_settings(settings.clone())
         .with_metrics_recorder(metrics)
-        // Each open gets a dedicated cache, so its database ID can always be zero.
-        .with_db_cache(cache_for(config), 0)
+        .with_db_cache(cache_for(config))
         .build()
         .await
         .context("opening SlateDB")?;
