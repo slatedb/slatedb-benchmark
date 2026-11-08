@@ -1,0 +1,2340 @@
+{
+  "status": "ok",
+  "run_id": "github-42430438676",
+  "golden_id": "golden",
+  "started_at": "2026-11-08T00:35:28Z",
+  "finished_at": "2026-11-08T01:00:31.755323434+00:00",
+  "patches": [],
+  "source": {
+    "slate_version": "0.18.1",
+    "slate_commit": "7351512d73244c6254a0349b3d1a88e5a3420eb5",
+    "runner_version": "0.1.0",
+    "runner_commit": "256ccd96d828f53ac55c7dd34e2853a1d45d41f3",
+    "lockfile_sha256": "df70968cb3973d78cd21aea11eb589a4981fd63aed0b1d191d5cca71a2617eed"
+  },
+  "golden_runner_commit": "9742a55eebaa314974055af8cd8eb8cf4f319697",
+  "resolved_configuration": {
+    "balanced": {
+      "scale": 1.0,
+      "dataset": {
+        "record_count": 300000000,
+        "key_bytes": 20,
+        "value_bytes": 400,
+        "value_compression_ratio": 1.0
+      },
+      "caches": {
+        "block_bytes": 8589934592,
+        "metadata_bytes": 4294967296
+      },
+      "task": {
+        "task": "balanced",
+        "clients": 64,
+        "warmup_ms": 300000,
+        "measurement_ms": 900000,
+        "initial_state": "golden",
+        "key_selection": "scrambled-zipfian-0.99",
+        "operation_mix": {
+          "get": 0.5,
+          "put": 0.5
+        },
+        "scan_limit": null,
+        "transaction_hot_keys": null,
+        "transaction_reads": null,
+        "transaction_updates": null
+      },
+      "slate_settings": {
+        "flush_interval": "100ms",
+        "wal_enabled": true,
+        "manifest_poll_interval": "1s",
+        "manifest_update_timeout": "300s",
+        "min_filter_keys": 1000,
+        "l0_sst_size_bytes": 67108864,
+        "max_wal_flushes_before_l0_flush": 4096,
+        "l0_max_ssts": 32,
+        "l0_max_ssts_per_key": 32,
+        "l0_flush_parallelism": 4,
+        "max_unflushed_bytes": 2147483648,
+        "compactor_options": {
+          "poll_interval": "5s",
+          "manifest_update_timeout": "300s",
+          "max_concurrent_compactions": 4,
+          "enable_trivial_move": false,
+          "scheduler_options": {
+            "max_compaction_sources": "16"
+          },
+          "worker": {
+            "max_concurrent_compactions": 4,
+            "compactions_poll_interval": "5s",
+            "heartbeat_interval": "10s",
+            "max_sst_size": 268435456,
+            "max_fetch_tasks": 4,
+            "bytes_to_fetch": 2097152,
+            "max_subcompactions": 8,
+            "min_filter_keys": 1000,
+            "compression_codec": null,
+            "metric_level": null,
+            "object_store_max_retries": null
+          },
+          "metric_level": null,
+          "commit_compacted_interval": "1s",
+          "enable_experimental_incremental_compaction": false,
+          "checkpoint_lifetime": "900s",
+          "worker_heartbeat_timeout": "30s",
+          "object_store_max_retries": null
+        },
+        "compression_codec": null,
+        "object_store_cache_options": {
+          "root_folder": null,
+          "max_cache_size_bytes": null,
+          "part_size_bytes": 4194304,
+          "cache_on_flush": false,
+          "cache_on_compaction": false,
+          "preload_disk_cache_on_startup": null,
+          "scan_interval": "3600s",
+          "max_open_file_handles": 1000
+        },
+        "garbage_collector_options": {
+          "manifest_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "wal_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "wal_fence_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": true
+          },
+          "compacted_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "compactions_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "detach_options": {
+            "interval": "600s"
+          },
+          "metric_level": null,
+          "boundary_files_enabled": true,
+          "object_store_max_retries": null
+        },
+        "metric_level": "Info",
+        "default_ttl_millis": null,
+        "object_store_max_retries": null
+      },
+      "slate_default_settings": {
+        "flush_interval": "100ms",
+        "wal_enabled": true,
+        "manifest_poll_interval": "1s",
+        "manifest_update_timeout": "300s",
+        "min_filter_keys": 1000,
+        "l0_sst_size_bytes": 67108864,
+        "max_wal_flushes_before_l0_flush": 4096,
+        "l0_max_ssts": 8,
+        "l0_max_ssts_per_key": 8,
+        "l0_flush_parallelism": 4,
+        "max_unflushed_bytes": 1073741824,
+        "compactor_options": {
+          "poll_interval": "5s",
+          "manifest_update_timeout": "300s",
+          "max_concurrent_compactions": 4,
+          "enable_trivial_move": false,
+          "scheduler_options": {},
+          "worker": {
+            "max_concurrent_compactions": 4,
+            "compactions_poll_interval": "5s",
+            "heartbeat_interval": "10s",
+            "max_sst_size": 268435456,
+            "max_fetch_tasks": 4,
+            "bytes_to_fetch": 2097152,
+            "max_subcompactions": 4,
+            "min_filter_keys": 1000,
+            "compression_codec": null,
+            "metric_level": null,
+            "object_store_max_retries": null
+          },
+          "metric_level": null,
+          "commit_compacted_interval": "1s",
+          "enable_experimental_incremental_compaction": false,
+          "checkpoint_lifetime": "900s",
+          "worker_heartbeat_timeout": "30s",
+          "object_store_max_retries": null
+        },
+        "compression_codec": null,
+        "object_store_cache_options": {
+          "root_folder": null,
+          "max_cache_size_bytes": 17179869184,
+          "part_size_bytes": 4194304,
+          "cache_on_flush": false,
+          "cache_on_compaction": false,
+          "preload_disk_cache_on_startup": null,
+          "scan_interval": "3600s",
+          "max_open_file_handles": 1000
+        },
+        "garbage_collector_options": {
+          "manifest_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "wal_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "wal_fence_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": true
+          },
+          "compacted_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "compactions_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "detach_options": {
+            "interval": "600s"
+          },
+          "metric_level": null,
+          "boundary_files_enabled": true,
+          "object_store_max_retries": null
+        },
+        "metric_level": "Info",
+        "default_ttl_millis": null,
+        "object_store_max_retries": null
+      },
+      "build_profile": "release",
+      "enabled_features": [
+        "aws",
+        "foyer",
+        "wal_disable",
+        "zstd"
+      ]
+    },
+    "golden": {
+      "scale": 1.0,
+      "dataset": {
+        "record_count": 300000000,
+        "key_bytes": 20,
+        "value_bytes": 400,
+        "value_compression_ratio": 1.0
+      },
+      "caches": {
+        "block_bytes": 8589934592,
+        "metadata_bytes": 4294967296
+      },
+      "task": {
+        "task": "compaction",
+        "clients": 0,
+        "warmup_ms": 0,
+        "measurement_ms": 0,
+        "initial_state": "preparation",
+        "key_selection": "none",
+        "operation_mix": {},
+        "scan_limit": null,
+        "transaction_hot_keys": null,
+        "transaction_reads": null,
+        "transaction_updates": null
+      },
+      "slate_settings": {
+        "flush_interval": "100ms",
+        "wal_enabled": true,
+        "manifest_poll_interval": "1s",
+        "manifest_update_timeout": "300s",
+        "min_filter_keys": 1000,
+        "l0_sst_size_bytes": 67108864,
+        "max_wal_flushes_before_l0_flush": 4096,
+        "l0_max_ssts": 32,
+        "l0_max_ssts_per_key": 32,
+        "l0_flush_parallelism": 4,
+        "max_unflushed_bytes": 2147483648,
+        "compactor_options": {
+          "poll_interval": "5s",
+          "manifest_update_timeout": "300s",
+          "max_concurrent_compactions": 4,
+          "enable_trivial_move": false,
+          "scheduler_options": {
+            "max_compaction_sources": "16"
+          },
+          "worker": {
+            "max_concurrent_compactions": 4,
+            "compactions_poll_interval": "5s",
+            "heartbeat_interval": "10s",
+            "max_sst_size": 268435456,
+            "max_fetch_tasks": 4,
+            "bytes_to_fetch": 2097152,
+            "max_subcompactions": 8,
+            "min_filter_keys": 1000,
+            "compression_codec": null,
+            "metric_level": null,
+            "object_store_max_retries": null
+          },
+          "metric_level": null,
+          "commit_compacted_interval": "1s",
+          "enable_experimental_incremental_compaction": false,
+          "checkpoint_lifetime": "900s",
+          "worker_heartbeat_timeout": "30s",
+          "object_store_max_retries": null
+        },
+        "compression_codec": null,
+        "object_store_cache_options": {
+          "root_folder": null,
+          "max_cache_size_bytes": null,
+          "part_size_bytes": 4194304,
+          "cache_on_flush": false,
+          "cache_on_compaction": false,
+          "preload_disk_cache_on_startup": null,
+          "scan_interval": "3600s",
+          "max_open_file_handles": 1000
+        },
+        "garbage_collector_options": {
+          "manifest_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "wal_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "wal_fence_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": true
+          },
+          "compacted_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "compactions_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "detach_options": {
+            "interval": "600s"
+          },
+          "metric_level": null,
+          "boundary_files_enabled": true,
+          "object_store_max_retries": null
+        },
+        "metric_level": "Info",
+        "default_ttl_millis": null,
+        "object_store_max_retries": null
+      },
+      "slate_default_settings": {
+        "flush_interval": "100ms",
+        "wal_enabled": true,
+        "manifest_poll_interval": "1s",
+        "manifest_update_timeout": "300s",
+        "min_filter_keys": 1000,
+        "l0_sst_size_bytes": 67108864,
+        "max_wal_flushes_before_l0_flush": 4096,
+        "l0_max_ssts": 8,
+        "l0_max_ssts_per_key": 8,
+        "l0_flush_parallelism": 4,
+        "max_unflushed_bytes": 1073741824,
+        "compactor_options": {
+          "poll_interval": "5s",
+          "manifest_update_timeout": "300s",
+          "max_concurrent_compactions": 4,
+          "enable_trivial_move": false,
+          "scheduler_options": {},
+          "worker": {
+            "max_concurrent_compactions": 4,
+            "compactions_poll_interval": "5s",
+            "heartbeat_interval": "10s",
+            "max_sst_size": 268435456,
+            "max_fetch_tasks": 4,
+            "bytes_to_fetch": 2097152,
+            "max_subcompactions": 4,
+            "min_filter_keys": 1000,
+            "compression_codec": null,
+            "metric_level": null,
+            "object_store_max_retries": null
+          },
+          "metric_level": null,
+          "commit_compacted_interval": "1s",
+          "enable_experimental_incremental_compaction": false,
+          "checkpoint_lifetime": "900s",
+          "worker_heartbeat_timeout": "30s",
+          "object_store_max_retries": null
+        },
+        "compression_codec": null,
+        "object_store_cache_options": {
+          "root_folder": null,
+          "max_cache_size_bytes": 17179869184,
+          "part_size_bytes": 4194304,
+          "cache_on_flush": false,
+          "cache_on_compaction": false,
+          "preload_disk_cache_on_startup": null,
+          "scan_interval": "3600s",
+          "max_open_file_handles": 1000
+        },
+        "garbage_collector_options": {
+          "manifest_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "wal_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "wal_fence_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": true
+          },
+          "compacted_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "compactions_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "detach_options": {
+            "interval": "600s"
+          },
+          "metric_level": null,
+          "boundary_files_enabled": true,
+          "object_store_max_retries": null
+        },
+        "metric_level": "Info",
+        "default_ttl_millis": null,
+        "object_store_max_retries": null
+      },
+      "build_profile": "release",
+      "enabled_features": [
+        "aws",
+        "foyer",
+        "wal_disable",
+        "zstd"
+      ]
+    },
+    "idle": {
+      "scale": 1.0,
+      "dataset": {
+        "record_count": 300000000,
+        "key_bytes": 20,
+        "value_bytes": 400,
+        "value_compression_ratio": 1.0
+      },
+      "caches": {
+        "block_bytes": 8589934592,
+        "metadata_bytes": 4294967296
+      },
+      "task": {
+        "task": "idle",
+        "clients": 0,
+        "warmup_ms": 0,
+        "measurement_ms": 300000,
+        "initial_state": "golden",
+        "key_selection": "none",
+        "operation_mix": {},
+        "scan_limit": null,
+        "transaction_hot_keys": null,
+        "transaction_reads": null,
+        "transaction_updates": null
+      },
+      "slate_settings": {
+        "flush_interval": "100ms",
+        "wal_enabled": true,
+        "manifest_poll_interval": "1s",
+        "manifest_update_timeout": "300s",
+        "min_filter_keys": 1000,
+        "l0_sst_size_bytes": 67108864,
+        "max_wal_flushes_before_l0_flush": 4096,
+        "l0_max_ssts": 32,
+        "l0_max_ssts_per_key": 32,
+        "l0_flush_parallelism": 4,
+        "max_unflushed_bytes": 2147483648,
+        "compactor_options": {
+          "poll_interval": "5s",
+          "manifest_update_timeout": "300s",
+          "max_concurrent_compactions": 4,
+          "enable_trivial_move": false,
+          "scheduler_options": {
+            "max_compaction_sources": "16"
+          },
+          "worker": {
+            "max_concurrent_compactions": 4,
+            "compactions_poll_interval": "5s",
+            "heartbeat_interval": "10s",
+            "max_sst_size": 268435456,
+            "max_fetch_tasks": 4,
+            "bytes_to_fetch": 2097152,
+            "max_subcompactions": 8,
+            "min_filter_keys": 1000,
+            "compression_codec": null,
+            "metric_level": null,
+            "object_store_max_retries": null
+          },
+          "metric_level": null,
+          "commit_compacted_interval": "1s",
+          "enable_experimental_incremental_compaction": false,
+          "checkpoint_lifetime": "900s",
+          "worker_heartbeat_timeout": "30s",
+          "object_store_max_retries": null
+        },
+        "compression_codec": null,
+        "object_store_cache_options": {
+          "root_folder": null,
+          "max_cache_size_bytes": null,
+          "part_size_bytes": 4194304,
+          "cache_on_flush": false,
+          "cache_on_compaction": false,
+          "preload_disk_cache_on_startup": null,
+          "scan_interval": "3600s",
+          "max_open_file_handles": 1000
+        },
+        "garbage_collector_options": {
+          "manifest_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "wal_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "wal_fence_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": true
+          },
+          "compacted_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "compactions_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "detach_options": {
+            "interval": "600s"
+          },
+          "metric_level": null,
+          "boundary_files_enabled": true,
+          "object_store_max_retries": null
+        },
+        "metric_level": "Info",
+        "default_ttl_millis": null,
+        "object_store_max_retries": null
+      },
+      "slate_default_settings": {
+        "flush_interval": "100ms",
+        "wal_enabled": true,
+        "manifest_poll_interval": "1s",
+        "manifest_update_timeout": "300s",
+        "min_filter_keys": 1000,
+        "l0_sst_size_bytes": 67108864,
+        "max_wal_flushes_before_l0_flush": 4096,
+        "l0_max_ssts": 8,
+        "l0_max_ssts_per_key": 8,
+        "l0_flush_parallelism": 4,
+        "max_unflushed_bytes": 1073741824,
+        "compactor_options": {
+          "poll_interval": "5s",
+          "manifest_update_timeout": "300s",
+          "max_concurrent_compactions": 4,
+          "enable_trivial_move": false,
+          "scheduler_options": {},
+          "worker": {
+            "max_concurrent_compactions": 4,
+            "compactions_poll_interval": "5s",
+            "heartbeat_interval": "10s",
+            "max_sst_size": 268435456,
+            "max_fetch_tasks": 4,
+            "bytes_to_fetch": 2097152,
+            "max_subcompactions": 4,
+            "min_filter_keys": 1000,
+            "compression_codec": null,
+            "metric_level": null,
+            "object_store_max_retries": null
+          },
+          "metric_level": null,
+          "commit_compacted_interval": "1s",
+          "enable_experimental_incremental_compaction": false,
+          "checkpoint_lifetime": "900s",
+          "worker_heartbeat_timeout": "30s",
+          "object_store_max_retries": null
+        },
+        "compression_codec": null,
+        "object_store_cache_options": {
+          "root_folder": null,
+          "max_cache_size_bytes": 17179869184,
+          "part_size_bytes": 4194304,
+          "cache_on_flush": false,
+          "cache_on_compaction": false,
+          "preload_disk_cache_on_startup": null,
+          "scan_interval": "3600s",
+          "max_open_file_handles": 1000
+        },
+        "garbage_collector_options": {
+          "manifest_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "wal_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "wal_fence_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": true
+          },
+          "compacted_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "compactions_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "detach_options": {
+            "interval": "600s"
+          },
+          "metric_level": null,
+          "boundary_files_enabled": true,
+          "object_store_max_retries": null
+        },
+        "metric_level": "Info",
+        "default_ttl_millis": null,
+        "object_store_max_retries": null
+      },
+      "build_profile": "release",
+      "enabled_features": [
+        "aws",
+        "foyer",
+        "wal_disable",
+        "zstd"
+      ]
+    },
+    "point-read-missing": {
+      "scale": 1.0,
+      "dataset": {
+        "record_count": 300000000,
+        "key_bytes": 20,
+        "value_bytes": 400,
+        "value_compression_ratio": 1.0
+      },
+      "caches": {
+        "block_bytes": 8589934592,
+        "metadata_bytes": 4294967296
+      },
+      "task": {
+        "task": "point-read-missing",
+        "clients": 64,
+        "warmup_ms": 300000,
+        "measurement_ms": 900000,
+        "initial_state": "golden",
+        "key_selection": "uniform-absent",
+        "operation_mix": {
+          "get": 1.0
+        },
+        "scan_limit": null,
+        "transaction_hot_keys": null,
+        "transaction_reads": null,
+        "transaction_updates": null
+      },
+      "slate_settings": {
+        "flush_interval": "100ms",
+        "wal_enabled": true,
+        "manifest_poll_interval": "1s",
+        "manifest_update_timeout": "300s",
+        "min_filter_keys": 1000,
+        "l0_sst_size_bytes": 67108864,
+        "max_wal_flushes_before_l0_flush": 4096,
+        "l0_max_ssts": 32,
+        "l0_max_ssts_per_key": 32,
+        "l0_flush_parallelism": 4,
+        "max_unflushed_bytes": 2147483648,
+        "compactor_options": {
+          "poll_interval": "5s",
+          "manifest_update_timeout": "300s",
+          "max_concurrent_compactions": 4,
+          "enable_trivial_move": false,
+          "scheduler_options": {
+            "max_compaction_sources": "16"
+          },
+          "worker": {
+            "max_concurrent_compactions": 4,
+            "compactions_poll_interval": "5s",
+            "heartbeat_interval": "10s",
+            "max_sst_size": 268435456,
+            "max_fetch_tasks": 4,
+            "bytes_to_fetch": 2097152,
+            "max_subcompactions": 8,
+            "min_filter_keys": 1000,
+            "compression_codec": null,
+            "metric_level": null,
+            "object_store_max_retries": null
+          },
+          "metric_level": null,
+          "commit_compacted_interval": "1s",
+          "enable_experimental_incremental_compaction": false,
+          "checkpoint_lifetime": "900s",
+          "worker_heartbeat_timeout": "30s",
+          "object_store_max_retries": null
+        },
+        "compression_codec": null,
+        "object_store_cache_options": {
+          "root_folder": null,
+          "max_cache_size_bytes": null,
+          "part_size_bytes": 4194304,
+          "cache_on_flush": false,
+          "cache_on_compaction": false,
+          "preload_disk_cache_on_startup": null,
+          "scan_interval": "3600s",
+          "max_open_file_handles": 1000
+        },
+        "garbage_collector_options": {
+          "manifest_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "wal_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "wal_fence_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": true
+          },
+          "compacted_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "compactions_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "detach_options": {
+            "interval": "600s"
+          },
+          "metric_level": null,
+          "boundary_files_enabled": true,
+          "object_store_max_retries": null
+        },
+        "metric_level": "Info",
+        "default_ttl_millis": null,
+        "object_store_max_retries": null
+      },
+      "slate_default_settings": {
+        "flush_interval": "100ms",
+        "wal_enabled": true,
+        "manifest_poll_interval": "1s",
+        "manifest_update_timeout": "300s",
+        "min_filter_keys": 1000,
+        "l0_sst_size_bytes": 67108864,
+        "max_wal_flushes_before_l0_flush": 4096,
+        "l0_max_ssts": 8,
+        "l0_max_ssts_per_key": 8,
+        "l0_flush_parallelism": 4,
+        "max_unflushed_bytes": 1073741824,
+        "compactor_options": {
+          "poll_interval": "5s",
+          "manifest_update_timeout": "300s",
+          "max_concurrent_compactions": 4,
+          "enable_trivial_move": false,
+          "scheduler_options": {},
+          "worker": {
+            "max_concurrent_compactions": 4,
+            "compactions_poll_interval": "5s",
+            "heartbeat_interval": "10s",
+            "max_sst_size": 268435456,
+            "max_fetch_tasks": 4,
+            "bytes_to_fetch": 2097152,
+            "max_subcompactions": 4,
+            "min_filter_keys": 1000,
+            "compression_codec": null,
+            "metric_level": null,
+            "object_store_max_retries": null
+          },
+          "metric_level": null,
+          "commit_compacted_interval": "1s",
+          "enable_experimental_incremental_compaction": false,
+          "checkpoint_lifetime": "900s",
+          "worker_heartbeat_timeout": "30s",
+          "object_store_max_retries": null
+        },
+        "compression_codec": null,
+        "object_store_cache_options": {
+          "root_folder": null,
+          "max_cache_size_bytes": 17179869184,
+          "part_size_bytes": 4194304,
+          "cache_on_flush": false,
+          "cache_on_compaction": false,
+          "preload_disk_cache_on_startup": null,
+          "scan_interval": "3600s",
+          "max_open_file_handles": 1000
+        },
+        "garbage_collector_options": {
+          "manifest_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "wal_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "wal_fence_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": true
+          },
+          "compacted_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "compactions_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "detach_options": {
+            "interval": "600s"
+          },
+          "metric_level": null,
+          "boundary_files_enabled": true,
+          "object_store_max_retries": null
+        },
+        "metric_level": "Info",
+        "default_ttl_millis": null,
+        "object_store_max_retries": null
+      },
+      "build_profile": "release",
+      "enabled_features": [
+        "aws",
+        "foyer",
+        "wal_disable",
+        "zstd"
+      ]
+    },
+    "point-read-skewed": {
+      "scale": 1.0,
+      "dataset": {
+        "record_count": 300000000,
+        "key_bytes": 20,
+        "value_bytes": 400,
+        "value_compression_ratio": 1.0
+      },
+      "caches": {
+        "block_bytes": 8589934592,
+        "metadata_bytes": 4294967296
+      },
+      "task": {
+        "task": "point-read-skewed",
+        "clients": 64,
+        "warmup_ms": 300000,
+        "measurement_ms": 900000,
+        "initial_state": "golden",
+        "key_selection": "scrambled-zipfian-0.99",
+        "operation_mix": {
+          "get": 1.0
+        },
+        "scan_limit": null,
+        "transaction_hot_keys": null,
+        "transaction_reads": null,
+        "transaction_updates": null
+      },
+      "slate_settings": {
+        "flush_interval": "100ms",
+        "wal_enabled": true,
+        "manifest_poll_interval": "1s",
+        "manifest_update_timeout": "300s",
+        "min_filter_keys": 1000,
+        "l0_sst_size_bytes": 67108864,
+        "max_wal_flushes_before_l0_flush": 4096,
+        "l0_max_ssts": 32,
+        "l0_max_ssts_per_key": 32,
+        "l0_flush_parallelism": 4,
+        "max_unflushed_bytes": 2147483648,
+        "compactor_options": {
+          "poll_interval": "5s",
+          "manifest_update_timeout": "300s",
+          "max_concurrent_compactions": 4,
+          "enable_trivial_move": false,
+          "scheduler_options": {
+            "max_compaction_sources": "16"
+          },
+          "worker": {
+            "max_concurrent_compactions": 4,
+            "compactions_poll_interval": "5s",
+            "heartbeat_interval": "10s",
+            "max_sst_size": 268435456,
+            "max_fetch_tasks": 4,
+            "bytes_to_fetch": 2097152,
+            "max_subcompactions": 8,
+            "min_filter_keys": 1000,
+            "compression_codec": null,
+            "metric_level": null,
+            "object_store_max_retries": null
+          },
+          "metric_level": null,
+          "commit_compacted_interval": "1s",
+          "enable_experimental_incremental_compaction": false,
+          "checkpoint_lifetime": "900s",
+          "worker_heartbeat_timeout": "30s",
+          "object_store_max_retries": null
+        },
+        "compression_codec": null,
+        "object_store_cache_options": {
+          "root_folder": null,
+          "max_cache_size_bytes": null,
+          "part_size_bytes": 4194304,
+          "cache_on_flush": false,
+          "cache_on_compaction": false,
+          "preload_disk_cache_on_startup": null,
+          "scan_interval": "3600s",
+          "max_open_file_handles": 1000
+        },
+        "garbage_collector_options": {
+          "manifest_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "wal_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "wal_fence_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": true
+          },
+          "compacted_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "compactions_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "detach_options": {
+            "interval": "600s"
+          },
+          "metric_level": null,
+          "boundary_files_enabled": true,
+          "object_store_max_retries": null
+        },
+        "metric_level": "Info",
+        "default_ttl_millis": null,
+        "object_store_max_retries": null
+      },
+      "slate_default_settings": {
+        "flush_interval": "100ms",
+        "wal_enabled": true,
+        "manifest_poll_interval": "1s",
+        "manifest_update_timeout": "300s",
+        "min_filter_keys": 1000,
+        "l0_sst_size_bytes": 67108864,
+        "max_wal_flushes_before_l0_flush": 4096,
+        "l0_max_ssts": 8,
+        "l0_max_ssts_per_key": 8,
+        "l0_flush_parallelism": 4,
+        "max_unflushed_bytes": 1073741824,
+        "compactor_options": {
+          "poll_interval": "5s",
+          "manifest_update_timeout": "300s",
+          "max_concurrent_compactions": 4,
+          "enable_trivial_move": false,
+          "scheduler_options": {},
+          "worker": {
+            "max_concurrent_compactions": 4,
+            "compactions_poll_interval": "5s",
+            "heartbeat_interval": "10s",
+            "max_sst_size": 268435456,
+            "max_fetch_tasks": 4,
+            "bytes_to_fetch": 2097152,
+            "max_subcompactions": 4,
+            "min_filter_keys": 1000,
+            "compression_codec": null,
+            "metric_level": null,
+            "object_store_max_retries": null
+          },
+          "metric_level": null,
+          "commit_compacted_interval": "1s",
+          "enable_experimental_incremental_compaction": false,
+          "checkpoint_lifetime": "900s",
+          "worker_heartbeat_timeout": "30s",
+          "object_store_max_retries": null
+        },
+        "compression_codec": null,
+        "object_store_cache_options": {
+          "root_folder": null,
+          "max_cache_size_bytes": 17179869184,
+          "part_size_bytes": 4194304,
+          "cache_on_flush": false,
+          "cache_on_compaction": false,
+          "preload_disk_cache_on_startup": null,
+          "scan_interval": "3600s",
+          "max_open_file_handles": 1000
+        },
+        "garbage_collector_options": {
+          "manifest_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "wal_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "wal_fence_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": true
+          },
+          "compacted_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "compactions_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "detach_options": {
+            "interval": "600s"
+          },
+          "metric_level": null,
+          "boundary_files_enabled": true,
+          "object_store_max_retries": null
+        },
+        "metric_level": "Info",
+        "default_ttl_millis": null,
+        "object_store_max_retries": null
+      },
+      "build_profile": "release",
+      "enabled_features": [
+        "aws",
+        "foyer",
+        "wal_disable",
+        "zstd"
+      ]
+    },
+    "point-read-uniform": {
+      "scale": 1.0,
+      "dataset": {
+        "record_count": 300000000,
+        "key_bytes": 20,
+        "value_bytes": 400,
+        "value_compression_ratio": 1.0
+      },
+      "caches": {
+        "block_bytes": 8589934592,
+        "metadata_bytes": 4294967296
+      },
+      "task": {
+        "task": "point-read-uniform",
+        "clients": 64,
+        "warmup_ms": 300000,
+        "measurement_ms": 900000,
+        "initial_state": "golden",
+        "key_selection": "uniform",
+        "operation_mix": {
+          "get": 1.0
+        },
+        "scan_limit": null,
+        "transaction_hot_keys": null,
+        "transaction_reads": null,
+        "transaction_updates": null
+      },
+      "slate_settings": {
+        "flush_interval": "100ms",
+        "wal_enabled": true,
+        "manifest_poll_interval": "1s",
+        "manifest_update_timeout": "300s",
+        "min_filter_keys": 1000,
+        "l0_sst_size_bytes": 67108864,
+        "max_wal_flushes_before_l0_flush": 4096,
+        "l0_max_ssts": 32,
+        "l0_max_ssts_per_key": 32,
+        "l0_flush_parallelism": 4,
+        "max_unflushed_bytes": 2147483648,
+        "compactor_options": {
+          "poll_interval": "5s",
+          "manifest_update_timeout": "300s",
+          "max_concurrent_compactions": 4,
+          "enable_trivial_move": false,
+          "scheduler_options": {
+            "max_compaction_sources": "16"
+          },
+          "worker": {
+            "max_concurrent_compactions": 4,
+            "compactions_poll_interval": "5s",
+            "heartbeat_interval": "10s",
+            "max_sst_size": 268435456,
+            "max_fetch_tasks": 4,
+            "bytes_to_fetch": 2097152,
+            "max_subcompactions": 8,
+            "min_filter_keys": 1000,
+            "compression_codec": null,
+            "metric_level": null,
+            "object_store_max_retries": null
+          },
+          "metric_level": null,
+          "commit_compacted_interval": "1s",
+          "enable_experimental_incremental_compaction": false,
+          "checkpoint_lifetime": "900s",
+          "worker_heartbeat_timeout": "30s",
+          "object_store_max_retries": null
+        },
+        "compression_codec": null,
+        "object_store_cache_options": {
+          "root_folder": null,
+          "max_cache_size_bytes": null,
+          "part_size_bytes": 4194304,
+          "cache_on_flush": false,
+          "cache_on_compaction": false,
+          "preload_disk_cache_on_startup": null,
+          "scan_interval": "3600s",
+          "max_open_file_handles": 1000
+        },
+        "garbage_collector_options": {
+          "manifest_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "wal_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "wal_fence_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": true
+          },
+          "compacted_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "compactions_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "detach_options": {
+            "interval": "600s"
+          },
+          "metric_level": null,
+          "boundary_files_enabled": true,
+          "object_store_max_retries": null
+        },
+        "metric_level": "Info",
+        "default_ttl_millis": null,
+        "object_store_max_retries": null
+      },
+      "slate_default_settings": {
+        "flush_interval": "100ms",
+        "wal_enabled": true,
+        "manifest_poll_interval": "1s",
+        "manifest_update_timeout": "300s",
+        "min_filter_keys": 1000,
+        "l0_sst_size_bytes": 67108864,
+        "max_wal_flushes_before_l0_flush": 4096,
+        "l0_max_ssts": 8,
+        "l0_max_ssts_per_key": 8,
+        "l0_flush_parallelism": 4,
+        "max_unflushed_bytes": 1073741824,
+        "compactor_options": {
+          "poll_interval": "5s",
+          "manifest_update_timeout": "300s",
+          "max_concurrent_compactions": 4,
+          "enable_trivial_move": false,
+          "scheduler_options": {},
+          "worker": {
+            "max_concurrent_compactions": 4,
+            "compactions_poll_interval": "5s",
+            "heartbeat_interval": "10s",
+            "max_sst_size": 268435456,
+            "max_fetch_tasks": 4,
+            "bytes_to_fetch": 2097152,
+            "max_subcompactions": 4,
+            "min_filter_keys": 1000,
+            "compression_codec": null,
+            "metric_level": null,
+            "object_store_max_retries": null
+          },
+          "metric_level": null,
+          "commit_compacted_interval": "1s",
+          "enable_experimental_incremental_compaction": false,
+          "checkpoint_lifetime": "900s",
+          "worker_heartbeat_timeout": "30s",
+          "object_store_max_retries": null
+        },
+        "compression_codec": null,
+        "object_store_cache_options": {
+          "root_folder": null,
+          "max_cache_size_bytes": 17179869184,
+          "part_size_bytes": 4194304,
+          "cache_on_flush": false,
+          "cache_on_compaction": false,
+          "preload_disk_cache_on_startup": null,
+          "scan_interval": "3600s",
+          "max_open_file_handles": 1000
+        },
+        "garbage_collector_options": {
+          "manifest_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "wal_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "wal_fence_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": true
+          },
+          "compacted_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "compactions_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "detach_options": {
+            "interval": "600s"
+          },
+          "metric_level": null,
+          "boundary_files_enabled": true,
+          "object_store_max_retries": null
+        },
+        "metric_level": "Info",
+        "default_ttl_millis": null,
+        "object_store_max_retries": null
+      },
+      "build_profile": "release",
+      "enabled_features": [
+        "aws",
+        "foyer",
+        "wal_disable",
+        "zstd"
+      ]
+    },
+    "range-scan": {
+      "scale": 1.0,
+      "dataset": {
+        "record_count": 300000000,
+        "key_bytes": 20,
+        "value_bytes": 400,
+        "value_compression_ratio": 1.0
+      },
+      "caches": {
+        "block_bytes": 8589934592,
+        "metadata_bytes": 4294967296
+      },
+      "task": {
+        "task": "range-scan",
+        "clients": 64,
+        "warmup_ms": 300000,
+        "measurement_ms": 900000,
+        "initial_state": "golden",
+        "key_selection": "uniform",
+        "operation_mix": {
+          "scan": 1.0
+        },
+        "scan_limit": 10,
+        "transaction_hot_keys": null,
+        "transaction_reads": null,
+        "transaction_updates": null
+      },
+      "slate_settings": {
+        "flush_interval": "100ms",
+        "wal_enabled": true,
+        "manifest_poll_interval": "1s",
+        "manifest_update_timeout": "300s",
+        "min_filter_keys": 1000,
+        "l0_sst_size_bytes": 67108864,
+        "max_wal_flushes_before_l0_flush": 4096,
+        "l0_max_ssts": 32,
+        "l0_max_ssts_per_key": 32,
+        "l0_flush_parallelism": 4,
+        "max_unflushed_bytes": 2147483648,
+        "compactor_options": {
+          "poll_interval": "5s",
+          "manifest_update_timeout": "300s",
+          "max_concurrent_compactions": 4,
+          "enable_trivial_move": false,
+          "scheduler_options": {
+            "max_compaction_sources": "16"
+          },
+          "worker": {
+            "max_concurrent_compactions": 4,
+            "compactions_poll_interval": "5s",
+            "heartbeat_interval": "10s",
+            "max_sst_size": 268435456,
+            "max_fetch_tasks": 4,
+            "bytes_to_fetch": 2097152,
+            "max_subcompactions": 8,
+            "min_filter_keys": 1000,
+            "compression_codec": null,
+            "metric_level": null,
+            "object_store_max_retries": null
+          },
+          "metric_level": null,
+          "commit_compacted_interval": "1s",
+          "enable_experimental_incremental_compaction": false,
+          "checkpoint_lifetime": "900s",
+          "worker_heartbeat_timeout": "30s",
+          "object_store_max_retries": null
+        },
+        "compression_codec": null,
+        "object_store_cache_options": {
+          "root_folder": null,
+          "max_cache_size_bytes": null,
+          "part_size_bytes": 4194304,
+          "cache_on_flush": false,
+          "cache_on_compaction": false,
+          "preload_disk_cache_on_startup": null,
+          "scan_interval": "3600s",
+          "max_open_file_handles": 1000
+        },
+        "garbage_collector_options": {
+          "manifest_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "wal_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "wal_fence_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": true
+          },
+          "compacted_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "compactions_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "detach_options": {
+            "interval": "600s"
+          },
+          "metric_level": null,
+          "boundary_files_enabled": true,
+          "object_store_max_retries": null
+        },
+        "metric_level": "Info",
+        "default_ttl_millis": null,
+        "object_store_max_retries": null
+      },
+      "slate_default_settings": {
+        "flush_interval": "100ms",
+        "wal_enabled": true,
+        "manifest_poll_interval": "1s",
+        "manifest_update_timeout": "300s",
+        "min_filter_keys": 1000,
+        "l0_sst_size_bytes": 67108864,
+        "max_wal_flushes_before_l0_flush": 4096,
+        "l0_max_ssts": 8,
+        "l0_max_ssts_per_key": 8,
+        "l0_flush_parallelism": 4,
+        "max_unflushed_bytes": 1073741824,
+        "compactor_options": {
+          "poll_interval": "5s",
+          "manifest_update_timeout": "300s",
+          "max_concurrent_compactions": 4,
+          "enable_trivial_move": false,
+          "scheduler_options": {},
+          "worker": {
+            "max_concurrent_compactions": 4,
+            "compactions_poll_interval": "5s",
+            "heartbeat_interval": "10s",
+            "max_sst_size": 268435456,
+            "max_fetch_tasks": 4,
+            "bytes_to_fetch": 2097152,
+            "max_subcompactions": 4,
+            "min_filter_keys": 1000,
+            "compression_codec": null,
+            "metric_level": null,
+            "object_store_max_retries": null
+          },
+          "metric_level": null,
+          "commit_compacted_interval": "1s",
+          "enable_experimental_incremental_compaction": false,
+          "checkpoint_lifetime": "900s",
+          "worker_heartbeat_timeout": "30s",
+          "object_store_max_retries": null
+        },
+        "compression_codec": null,
+        "object_store_cache_options": {
+          "root_folder": null,
+          "max_cache_size_bytes": 17179869184,
+          "part_size_bytes": 4194304,
+          "cache_on_flush": false,
+          "cache_on_compaction": false,
+          "preload_disk_cache_on_startup": null,
+          "scan_interval": "3600s",
+          "max_open_file_handles": 1000
+        },
+        "garbage_collector_options": {
+          "manifest_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "wal_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "wal_fence_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": true
+          },
+          "compacted_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "compactions_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "detach_options": {
+            "interval": "600s"
+          },
+          "metric_level": null,
+          "boundary_files_enabled": true,
+          "object_store_max_retries": null
+        },
+        "metric_level": "Info",
+        "default_ttl_millis": null,
+        "object_store_max_retries": null
+      },
+      "build_profile": "release",
+      "enabled_features": [
+        "aws",
+        "foyer",
+        "wal_disable",
+        "zstd"
+      ]
+    },
+    "read-heavy": {
+      "scale": 1.0,
+      "dataset": {
+        "record_count": 300000000,
+        "key_bytes": 20,
+        "value_bytes": 400,
+        "value_compression_ratio": 1.0
+      },
+      "caches": {
+        "block_bytes": 8589934592,
+        "metadata_bytes": 4294967296
+      },
+      "task": {
+        "task": "read-heavy",
+        "clients": 64,
+        "warmup_ms": 300000,
+        "measurement_ms": 900000,
+        "initial_state": "golden",
+        "key_selection": "scrambled-zipfian-0.99",
+        "operation_mix": {
+          "get": 0.95,
+          "put": 0.05
+        },
+        "scan_limit": null,
+        "transaction_hot_keys": null,
+        "transaction_reads": null,
+        "transaction_updates": null
+      },
+      "slate_settings": {
+        "flush_interval": "100ms",
+        "wal_enabled": true,
+        "manifest_poll_interval": "1s",
+        "manifest_update_timeout": "300s",
+        "min_filter_keys": 1000,
+        "l0_sst_size_bytes": 67108864,
+        "max_wal_flushes_before_l0_flush": 4096,
+        "l0_max_ssts": 32,
+        "l0_max_ssts_per_key": 32,
+        "l0_flush_parallelism": 4,
+        "max_unflushed_bytes": 2147483648,
+        "compactor_options": {
+          "poll_interval": "5s",
+          "manifest_update_timeout": "300s",
+          "max_concurrent_compactions": 4,
+          "enable_trivial_move": false,
+          "scheduler_options": {
+            "max_compaction_sources": "16"
+          },
+          "worker": {
+            "max_concurrent_compactions": 4,
+            "compactions_poll_interval": "5s",
+            "heartbeat_interval": "10s",
+            "max_sst_size": 268435456,
+            "max_fetch_tasks": 4,
+            "bytes_to_fetch": 2097152,
+            "max_subcompactions": 8,
+            "min_filter_keys": 1000,
+            "compression_codec": null,
+            "metric_level": null,
+            "object_store_max_retries": null
+          },
+          "metric_level": null,
+          "commit_compacted_interval": "1s",
+          "enable_experimental_incremental_compaction": false,
+          "checkpoint_lifetime": "900s",
+          "worker_heartbeat_timeout": "30s",
+          "object_store_max_retries": null
+        },
+        "compression_codec": null,
+        "object_store_cache_options": {
+          "root_folder": null,
+          "max_cache_size_bytes": null,
+          "part_size_bytes": 4194304,
+          "cache_on_flush": false,
+          "cache_on_compaction": false,
+          "preload_disk_cache_on_startup": null,
+          "scan_interval": "3600s",
+          "max_open_file_handles": 1000
+        },
+        "garbage_collector_options": {
+          "manifest_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "wal_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "wal_fence_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": true
+          },
+          "compacted_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "compactions_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "detach_options": {
+            "interval": "600s"
+          },
+          "metric_level": null,
+          "boundary_files_enabled": true,
+          "object_store_max_retries": null
+        },
+        "metric_level": "Info",
+        "default_ttl_millis": null,
+        "object_store_max_retries": null
+      },
+      "slate_default_settings": {
+        "flush_interval": "100ms",
+        "wal_enabled": true,
+        "manifest_poll_interval": "1s",
+        "manifest_update_timeout": "300s",
+        "min_filter_keys": 1000,
+        "l0_sst_size_bytes": 67108864,
+        "max_wal_flushes_before_l0_flush": 4096,
+        "l0_max_ssts": 8,
+        "l0_max_ssts_per_key": 8,
+        "l0_flush_parallelism": 4,
+        "max_unflushed_bytes": 1073741824,
+        "compactor_options": {
+          "poll_interval": "5s",
+          "manifest_update_timeout": "300s",
+          "max_concurrent_compactions": 4,
+          "enable_trivial_move": false,
+          "scheduler_options": {},
+          "worker": {
+            "max_concurrent_compactions": 4,
+            "compactions_poll_interval": "5s",
+            "heartbeat_interval": "10s",
+            "max_sst_size": 268435456,
+            "max_fetch_tasks": 4,
+            "bytes_to_fetch": 2097152,
+            "max_subcompactions": 4,
+            "min_filter_keys": 1000,
+            "compression_codec": null,
+            "metric_level": null,
+            "object_store_max_retries": null
+          },
+          "metric_level": null,
+          "commit_compacted_interval": "1s",
+          "enable_experimental_incremental_compaction": false,
+          "checkpoint_lifetime": "900s",
+          "worker_heartbeat_timeout": "30s",
+          "object_store_max_retries": null
+        },
+        "compression_codec": null,
+        "object_store_cache_options": {
+          "root_folder": null,
+          "max_cache_size_bytes": 17179869184,
+          "part_size_bytes": 4194304,
+          "cache_on_flush": false,
+          "cache_on_compaction": false,
+          "preload_disk_cache_on_startup": null,
+          "scan_interval": "3600s",
+          "max_open_file_handles": 1000
+        },
+        "garbage_collector_options": {
+          "manifest_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "wal_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "wal_fence_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": true
+          },
+          "compacted_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "compactions_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "detach_options": {
+            "interval": "600s"
+          },
+          "metric_level": null,
+          "boundary_files_enabled": true,
+          "object_store_max_retries": null
+        },
+        "metric_level": "Info",
+        "default_ttl_millis": null,
+        "object_store_max_retries": null
+      },
+      "build_profile": "release",
+      "enabled_features": [
+        "aws",
+        "foyer",
+        "wal_disable",
+        "zstd"
+      ]
+    },
+    "sustained-ingest": {
+      "scale": 1.0,
+      "dataset": {
+        "record_count": 300000000,
+        "key_bytes": 20,
+        "value_bytes": 400,
+        "value_compression_ratio": 1.0
+      },
+      "caches": {
+        "block_bytes": 8589934592,
+        "metadata_bytes": 4294967296
+      },
+      "task": {
+        "task": "sustained-ingest",
+        "clients": 64,
+        "warmup_ms": 0,
+        "measurement_ms": 1200000,
+        "initial_state": "empty",
+        "key_selection": "unique-sequential",
+        "operation_mix": {
+          "put": 1.0
+        },
+        "scan_limit": null,
+        "transaction_hot_keys": null,
+        "transaction_reads": null,
+        "transaction_updates": null
+      },
+      "slate_settings": {
+        "flush_interval": "100ms",
+        "wal_enabled": false,
+        "manifest_poll_interval": "1s",
+        "manifest_update_timeout": "300s",
+        "min_filter_keys": 1000,
+        "l0_sst_size_bytes": 67108864,
+        "max_wal_flushes_before_l0_flush": 4096,
+        "l0_max_ssts": 32,
+        "l0_max_ssts_per_key": 32,
+        "l0_flush_parallelism": 4,
+        "max_unflushed_bytes": 2147483648,
+        "compactor_options": {
+          "poll_interval": "5s",
+          "manifest_update_timeout": "300s",
+          "max_concurrent_compactions": 4,
+          "enable_trivial_move": false,
+          "scheduler_options": {
+            "max_compaction_sources": "16"
+          },
+          "worker": {
+            "max_concurrent_compactions": 4,
+            "compactions_poll_interval": "5s",
+            "heartbeat_interval": "10s",
+            "max_sst_size": 268435456,
+            "max_fetch_tasks": 4,
+            "bytes_to_fetch": 2097152,
+            "max_subcompactions": 8,
+            "min_filter_keys": 1000,
+            "compression_codec": null,
+            "metric_level": null,
+            "object_store_max_retries": null
+          },
+          "metric_level": null,
+          "commit_compacted_interval": "1s",
+          "enable_experimental_incremental_compaction": false,
+          "checkpoint_lifetime": "900s",
+          "worker_heartbeat_timeout": "30s",
+          "object_store_max_retries": null
+        },
+        "compression_codec": null,
+        "object_store_cache_options": {
+          "root_folder": null,
+          "max_cache_size_bytes": null,
+          "part_size_bytes": 4194304,
+          "cache_on_flush": false,
+          "cache_on_compaction": false,
+          "preload_disk_cache_on_startup": null,
+          "scan_interval": "3600s",
+          "max_open_file_handles": 1000
+        },
+        "garbage_collector_options": {
+          "manifest_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "wal_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "wal_fence_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": true
+          },
+          "compacted_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "compactions_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "detach_options": {
+            "interval": "600s"
+          },
+          "metric_level": null,
+          "boundary_files_enabled": true,
+          "object_store_max_retries": null
+        },
+        "metric_level": "Info",
+        "default_ttl_millis": null,
+        "object_store_max_retries": null
+      },
+      "slate_default_settings": {
+        "flush_interval": "100ms",
+        "wal_enabled": true,
+        "manifest_poll_interval": "1s",
+        "manifest_update_timeout": "300s",
+        "min_filter_keys": 1000,
+        "l0_sst_size_bytes": 67108864,
+        "max_wal_flushes_before_l0_flush": 4096,
+        "l0_max_ssts": 8,
+        "l0_max_ssts_per_key": 8,
+        "l0_flush_parallelism": 4,
+        "max_unflushed_bytes": 1073741824,
+        "compactor_options": {
+          "poll_interval": "5s",
+          "manifest_update_timeout": "300s",
+          "max_concurrent_compactions": 4,
+          "enable_trivial_move": false,
+          "scheduler_options": {},
+          "worker": {
+            "max_concurrent_compactions": 4,
+            "compactions_poll_interval": "5s",
+            "heartbeat_interval": "10s",
+            "max_sst_size": 268435456,
+            "max_fetch_tasks": 4,
+            "bytes_to_fetch": 2097152,
+            "max_subcompactions": 4,
+            "min_filter_keys": 1000,
+            "compression_codec": null,
+            "metric_level": null,
+            "object_store_max_retries": null
+          },
+          "metric_level": null,
+          "commit_compacted_interval": "1s",
+          "enable_experimental_incremental_compaction": false,
+          "checkpoint_lifetime": "900s",
+          "worker_heartbeat_timeout": "30s",
+          "object_store_max_retries": null
+        },
+        "compression_codec": null,
+        "object_store_cache_options": {
+          "root_folder": null,
+          "max_cache_size_bytes": 17179869184,
+          "part_size_bytes": 4194304,
+          "cache_on_flush": false,
+          "cache_on_compaction": false,
+          "preload_disk_cache_on_startup": null,
+          "scan_interval": "3600s",
+          "max_open_file_handles": 1000
+        },
+        "garbage_collector_options": {
+          "manifest_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "wal_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "wal_fence_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": true
+          },
+          "compacted_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "compactions_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "detach_options": {
+            "interval": "600s"
+          },
+          "metric_level": null,
+          "boundary_files_enabled": true,
+          "object_store_max_retries": null
+        },
+        "metric_level": "Info",
+        "default_ttl_millis": null,
+        "object_store_max_retries": null
+      },
+      "build_profile": "release",
+      "enabled_features": [
+        "aws",
+        "foyer",
+        "wal_disable",
+        "zstd"
+      ]
+    },
+    "transaction-contention": {
+      "scale": 1.0,
+      "dataset": {
+        "record_count": 300000000,
+        "key_bytes": 20,
+        "value_bytes": 400,
+        "value_compression_ratio": 1.0
+      },
+      "caches": {
+        "block_bytes": 8589934592,
+        "metadata_bytes": 4294967296
+      },
+      "task": {
+        "task": "transaction-contention",
+        "clients": 64,
+        "warmup_ms": 300000,
+        "measurement_ms": 900000,
+        "initial_state": "golden",
+        "key_selection": "uniform-hot-set",
+        "operation_mix": {
+          "transaction": 1.0
+        },
+        "scan_limit": null,
+        "transaction_hot_keys": 10000,
+        "transaction_reads": 5,
+        "transaction_updates": 5
+      },
+      "slate_settings": {
+        "flush_interval": "100ms",
+        "wal_enabled": true,
+        "manifest_poll_interval": "1s",
+        "manifest_update_timeout": "300s",
+        "min_filter_keys": 1000,
+        "l0_sst_size_bytes": 67108864,
+        "max_wal_flushes_before_l0_flush": 4096,
+        "l0_max_ssts": 32,
+        "l0_max_ssts_per_key": 32,
+        "l0_flush_parallelism": 4,
+        "max_unflushed_bytes": 2147483648,
+        "compactor_options": {
+          "poll_interval": "5s",
+          "manifest_update_timeout": "300s",
+          "max_concurrent_compactions": 4,
+          "enable_trivial_move": false,
+          "scheduler_options": {
+            "max_compaction_sources": "16"
+          },
+          "worker": {
+            "max_concurrent_compactions": 4,
+            "compactions_poll_interval": "5s",
+            "heartbeat_interval": "10s",
+            "max_sst_size": 268435456,
+            "max_fetch_tasks": 4,
+            "bytes_to_fetch": 2097152,
+            "max_subcompactions": 8,
+            "min_filter_keys": 1000,
+            "compression_codec": null,
+            "metric_level": null,
+            "object_store_max_retries": null
+          },
+          "metric_level": null,
+          "commit_compacted_interval": "1s",
+          "enable_experimental_incremental_compaction": false,
+          "checkpoint_lifetime": "900s",
+          "worker_heartbeat_timeout": "30s",
+          "object_store_max_retries": null
+        },
+        "compression_codec": null,
+        "object_store_cache_options": {
+          "root_folder": null,
+          "max_cache_size_bytes": null,
+          "part_size_bytes": 4194304,
+          "cache_on_flush": false,
+          "cache_on_compaction": false,
+          "preload_disk_cache_on_startup": null,
+          "scan_interval": "3600s",
+          "max_open_file_handles": 1000
+        },
+        "garbage_collector_options": {
+          "manifest_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "wal_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "wal_fence_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": true
+          },
+          "compacted_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "compactions_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "detach_options": {
+            "interval": "600s"
+          },
+          "metric_level": null,
+          "boundary_files_enabled": true,
+          "object_store_max_retries": null
+        },
+        "metric_level": "Info",
+        "default_ttl_millis": null,
+        "object_store_max_retries": null
+      },
+      "slate_default_settings": {
+        "flush_interval": "100ms",
+        "wal_enabled": true,
+        "manifest_poll_interval": "1s",
+        "manifest_update_timeout": "300s",
+        "min_filter_keys": 1000,
+        "l0_sst_size_bytes": 67108864,
+        "max_wal_flushes_before_l0_flush": 4096,
+        "l0_max_ssts": 8,
+        "l0_max_ssts_per_key": 8,
+        "l0_flush_parallelism": 4,
+        "max_unflushed_bytes": 1073741824,
+        "compactor_options": {
+          "poll_interval": "5s",
+          "manifest_update_timeout": "300s",
+          "max_concurrent_compactions": 4,
+          "enable_trivial_move": false,
+          "scheduler_options": {},
+          "worker": {
+            "max_concurrent_compactions": 4,
+            "compactions_poll_interval": "5s",
+            "heartbeat_interval": "10s",
+            "max_sst_size": 268435456,
+            "max_fetch_tasks": 4,
+            "bytes_to_fetch": 2097152,
+            "max_subcompactions": 4,
+            "min_filter_keys": 1000,
+            "compression_codec": null,
+            "metric_level": null,
+            "object_store_max_retries": null
+          },
+          "metric_level": null,
+          "commit_compacted_interval": "1s",
+          "enable_experimental_incremental_compaction": false,
+          "checkpoint_lifetime": "900s",
+          "worker_heartbeat_timeout": "30s",
+          "object_store_max_retries": null
+        },
+        "compression_codec": null,
+        "object_store_cache_options": {
+          "root_folder": null,
+          "max_cache_size_bytes": 17179869184,
+          "part_size_bytes": 4194304,
+          "cache_on_flush": false,
+          "cache_on_compaction": false,
+          "preload_disk_cache_on_startup": null,
+          "scan_interval": "3600s",
+          "max_open_file_handles": 1000
+        },
+        "garbage_collector_options": {
+          "manifest_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "wal_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "wal_fence_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": true
+          },
+          "compacted_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "compactions_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "detach_options": {
+            "interval": "600s"
+          },
+          "metric_level": null,
+          "boundary_files_enabled": true,
+          "object_store_max_retries": null
+        },
+        "metric_level": "Info",
+        "default_ttl_millis": null,
+        "object_store_max_retries": null
+      },
+      "build_profile": "release",
+      "enabled_features": [
+        "aws",
+        "foyer",
+        "wal_disable",
+        "zstd"
+      ]
+    },
+    "update-heavy": {
+      "scale": 1.0,
+      "dataset": {
+        "record_count": 300000000,
+        "key_bytes": 20,
+        "value_bytes": 400,
+        "value_compression_ratio": 1.0
+      },
+      "caches": {
+        "block_bytes": 8589934592,
+        "metadata_bytes": 4294967296
+      },
+      "task": {
+        "task": "update-heavy",
+        "clients": 64,
+        "warmup_ms": 300000,
+        "measurement_ms": 900000,
+        "initial_state": "golden",
+        "key_selection": "scrambled-zipfian-0.99",
+        "operation_mix": {
+          "get": 0.05,
+          "put": 0.95
+        },
+        "scan_limit": null,
+        "transaction_hot_keys": null,
+        "transaction_reads": null,
+        "transaction_updates": null
+      },
+      "slate_settings": {
+        "flush_interval": "100ms",
+        "wal_enabled": true,
+        "manifest_poll_interval": "1s",
+        "manifest_update_timeout": "300s",
+        "min_filter_keys": 1000,
+        "l0_sst_size_bytes": 67108864,
+        "max_wal_flushes_before_l0_flush": 4096,
+        "l0_max_ssts": 32,
+        "l0_max_ssts_per_key": 32,
+        "l0_flush_parallelism": 4,
+        "max_unflushed_bytes": 2147483648,
+        "compactor_options": {
+          "poll_interval": "5s",
+          "manifest_update_timeout": "300s",
+          "max_concurrent_compactions": 4,
+          "enable_trivial_move": false,
+          "scheduler_options": {
+            "max_compaction_sources": "16"
+          },
+          "worker": {
+            "max_concurrent_compactions": 4,
+            "compactions_poll_interval": "5s",
+            "heartbeat_interval": "10s",
+            "max_sst_size": 268435456,
+            "max_fetch_tasks": 4,
+            "bytes_to_fetch": 2097152,
+            "max_subcompactions": 8,
+            "min_filter_keys": 1000,
+            "compression_codec": null,
+            "metric_level": null,
+            "object_store_max_retries": null
+          },
+          "metric_level": null,
+          "commit_compacted_interval": "1s",
+          "enable_experimental_incremental_compaction": false,
+          "checkpoint_lifetime": "900s",
+          "worker_heartbeat_timeout": "30s",
+          "object_store_max_retries": null
+        },
+        "compression_codec": null,
+        "object_store_cache_options": {
+          "root_folder": null,
+          "max_cache_size_bytes": null,
+          "part_size_bytes": 4194304,
+          "cache_on_flush": false,
+          "cache_on_compaction": false,
+          "preload_disk_cache_on_startup": null,
+          "scan_interval": "3600s",
+          "max_open_file_handles": 1000
+        },
+        "garbage_collector_options": {
+          "manifest_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "wal_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "wal_fence_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": true
+          },
+          "compacted_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "compactions_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "detach_options": {
+            "interval": "600s"
+          },
+          "metric_level": null,
+          "boundary_files_enabled": true,
+          "object_store_max_retries": null
+        },
+        "metric_level": "Info",
+        "default_ttl_millis": null,
+        "object_store_max_retries": null
+      },
+      "slate_default_settings": {
+        "flush_interval": "100ms",
+        "wal_enabled": true,
+        "manifest_poll_interval": "1s",
+        "manifest_update_timeout": "300s",
+        "min_filter_keys": 1000,
+        "l0_sst_size_bytes": 67108864,
+        "max_wal_flushes_before_l0_flush": 4096,
+        "l0_max_ssts": 8,
+        "l0_max_ssts_per_key": 8,
+        "l0_flush_parallelism": 4,
+        "max_unflushed_bytes": 1073741824,
+        "compactor_options": {
+          "poll_interval": "5s",
+          "manifest_update_timeout": "300s",
+          "max_concurrent_compactions": 4,
+          "enable_trivial_move": false,
+          "scheduler_options": {},
+          "worker": {
+            "max_concurrent_compactions": 4,
+            "compactions_poll_interval": "5s",
+            "heartbeat_interval": "10s",
+            "max_sst_size": 268435456,
+            "max_fetch_tasks": 4,
+            "bytes_to_fetch": 2097152,
+            "max_subcompactions": 4,
+            "min_filter_keys": 1000,
+            "compression_codec": null,
+            "metric_level": null,
+            "object_store_max_retries": null
+          },
+          "metric_level": null,
+          "commit_compacted_interval": "1s",
+          "enable_experimental_incremental_compaction": false,
+          "checkpoint_lifetime": "900s",
+          "worker_heartbeat_timeout": "30s",
+          "object_store_max_retries": null
+        },
+        "compression_codec": null,
+        "object_store_cache_options": {
+          "root_folder": null,
+          "max_cache_size_bytes": 17179869184,
+          "part_size_bytes": 4194304,
+          "cache_on_flush": false,
+          "cache_on_compaction": false,
+          "preload_disk_cache_on_startup": null,
+          "scan_interval": "3600s",
+          "max_open_file_handles": 1000
+        },
+        "garbage_collector_options": {
+          "manifest_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "wal_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "wal_fence_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": true
+          },
+          "compacted_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "compactions_options": {
+            "interval": "600s",
+            "min_age": "300s",
+            "dry_run": false
+          },
+          "detach_options": {
+            "interval": "600s"
+          },
+          "metric_level": null,
+          "boundary_files_enabled": true,
+          "object_store_max_retries": null
+        },
+        "metric_level": "Info",
+        "default_ttl_millis": null,
+        "object_store_max_retries": null
+      },
+      "build_profile": "release",
+      "enabled_features": [
+        "aws",
+        "foyer",
+        "wal_disable",
+        "zstd"
+      ]
+    }
+  },
+  "max_parallel": 10,
+  "results": {
+    "golden.json": "58d1a8da7b97a7e9c875554f76d783da5527f645c70d0f9f00b049c9d9090190",
+    "workload/balanced/result.json": "8e0f9c7868e33a8c8117186eef650ca9a08c5b49166a049e2bf2c50e32f7275e",
+    "workload/balanced/series.json": "8f1529666853182241ea11a4ac48222ef9e1c4c662070e5294765a47a80d0a0d",
+    "workload/idle/result.json": "0592cd6342acb38116122d623b7355600f7b8247f3947063c16b11ac93a00007",
+    "workload/idle/series.json": "1ae38188004207e578a93adeff8f6bbe35514bc90b8e07cd5f4a5194cd11c392",
+    "workload/point-read-missing/result.json": "985326469fce0e7891c593af2de941c6fd71764483e5a3f43fa6de9926ead758",
+    "workload/point-read-missing/series.json": "933bf83a3c2cc656d1c97a5dbaed599129eda29d705f912220655465c24975db",
+    "workload/point-read-skewed/result.json": "43aca8c03779d34473b742916ffaf6a7acbe248afc4955c7b66f87cb8abd9e7d",
+    "workload/point-read-skewed/series.json": "1359550be6bda8491c4c8d36d24b0343807a560e27e5ab025e6863bbc130fbf8",
+    "workload/point-read-uniform/result.json": "cfc6d40a2a05ff7c57d1fd4f8df02d9d89d60708eb57d3de8e53e26f218f48bb",
+    "workload/point-read-uniform/series.json": "5e07d7d7c3bb582026f3218b92651044ced5e89737333bf30c3d1ced223d4618",
+    "workload/range-scan/result.json": "8223efa2ee7a94249b74e299b6d35e723fdefee802fa625732f7a808f73f27f4",
+    "workload/range-scan/series.json": "822d03498a62d651cbb51976f0deee77915579a0f6d942963532eabe8da33091",
+    "workload/read-heavy/result.json": "dac53fee943bc084dc57b1cc93f2cae78064f651bd36593c4c0145796c0f986d",
+    "workload/read-heavy/series.json": "5d2211b0b234e982dbd361550a4a96d2c0f80d2a2dad661e6219f80122282ea4",
+    "workload/sustained-ingest/result.json": "894b89207aab129d7e39ede5f7e542e0e10a50de6791e83947c269d789d5bd69",
+    "workload/sustained-ingest/series.json": "75c59c5637f252459c526577d2d3efdf570b0549aa7097a370cca97bb4c1bc6a",
+    "workload/transaction-contention/result.json": "cfe67b9ef10e21ebec2c4426028fe65177c114e8f8758d936eeeb61379248de8",
+    "workload/transaction-contention/series.json": "b5e1a635e04c0ac4c8b540ce050eeed46c294ba58d43ff7781952ebff6e50283",
+    "workload/update-heavy/result.json": "19f49eb14e29a38dfeba1ef1528694ae1666a9718b3e1096525f52b371c5c3b2",
+    "workload/update-heavy/series.json": "8c3c539286788caf576f3a4e3849439c084f3c8500b77956b659ebc20c5ad319"
+  }
+}
