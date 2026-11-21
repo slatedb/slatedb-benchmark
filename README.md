@@ -48,17 +48,16 @@ object store, and runner location with each result.
 
 ## Run the GitHub workflows
 
-The release path runs on GitHub Actions against Amazon S3 or Tigris. A
-configured repository needs the object-store environment and ephemeral EC2
-runners described in [docs/SETUP.md](docs/SETUP.md).
+The release path runs on GitHub Actions against Amazon S3. A configured
+repository needs the S3 environment and ephemeral EC2 runners described in
+[docs/SETUP.md](docs/SETUP.md).
 
 Prepare a golden dataset first:
 
 ```console
 $ gh workflow run golden.yml \
-    -f slatedb_ref=v0.14.1 \
-    -f golden_id=slatedb-v0.14.1-001 \
-    -f object_store=s3 \
+    -f slatedb_ref=v0.18.1 \
+    -f golden_id=golden-150m-v0.18.1 \
     -f scale=1.0
 ```
 
@@ -67,12 +66,11 @@ After both preparation jobs finish, run the workload matrix:
 ```console
 $ gh workflow run benchmark.yml \
     -f slatedb_ref=main \
-    -f golden_id=slatedb-v0.14.1-001 \
-    -f object_store=s3 \
+    -f golden_id=golden-150m-v0.18.1 \
     -f scale=1.0
 ```
 
-The two workflows must use the same golden ID, object store, and scale. They
+The two workflows must use the same golden ID and scale. They
 may use different SlateDB revisions when the benchmarked revision can read the
 golden checkpoint.
 
@@ -81,12 +79,10 @@ release run and a small value such as `0.00001` for an infrastructure smoke
 test. Changing the golden revision, scale, patches, or preparation settings
 requires a new golden ID.
 
-The transfer-capacity workflow measures the object store without running
-SlateDB:
+The transfer-capacity workflow measures S3 without running SlateDB:
 
 ```console
 $ gh workflow run transfer-capacity.yml \
-    -f object_store=s3 \
     -f scale=0.01
 ```
 

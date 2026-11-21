@@ -3,7 +3,7 @@
 The benchmark workflows need three external pieces:
 
 1. Ephemeral AWS EC2 runners in `us-east-1` via `machulav/ec2-github-runner`.
-2. An object-store environment named `benchmark-s3` or `benchmark-tigris`.
+2. An Amazon S3 environment named `benchmark-s3`.
 3. GitHub Pages for the published website.
 
 The examples below target `slatedb/slatedb-benchmark`. Replace the repository,
@@ -209,39 +209,6 @@ $ gh variable set AWS_ROLE_ARN \
     --body arn:aws:iam::YOUR_ACCOUNT_ID:role/slatedb-benchmark-ci
 $ gh variable set SLATEDB_BENCH_BUCKET \
     --env benchmark-s3 --body YOUR_BUCKET
-```
-
-### Optional Tigris environment
-
-To run the same workflows against Tigris, create `benchmark-tigris`.
-
-Add these variables:
-
-| Variable | Value |
-| --- | --- |
-| `AWS_ENDPOINT_URL_S3` | `https://t3.storage.dev` |
-| `AWS_REGION` | `auto` |
-| `SLATEDB_BENCH_BUCKET` | Tigris bucket name |
-
-Add these environment secrets:
-
-```text
-TIGRIS_ACCESS_KEY_ID
-TIGRIS_SECRET_ACCESS_KEY
-```
-
-The CLI prompts for each secret without printing it:
-
-```console
-$ gh api --method PUT repos/slatedb/slatedb-benchmark/environments/benchmark-tigris
-$ gh variable set AWS_ENDPOINT_URL_S3 \
-    --env benchmark-tigris --body https://t3.storage.dev
-$ gh variable set AWS_REGION \
-    --env benchmark-tigris --body auto
-$ gh variable set SLATEDB_BENCH_BUCKET \
-    --env benchmark-tigris --body YOUR_TIGRIS_BUCKET
-$ gh secret set TIGRIS_ACCESS_KEY_ID --env benchmark-tigris
-$ gh secret set TIGRIS_SECRET_ACCESS_KEY --env benchmark-tigris
 ```
 
 ## Enable GitHub Actions publication

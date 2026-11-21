@@ -39,15 +39,12 @@ impl ObjectStoreContext {
         let metrics = Arc::new(StoreMetrics::default());
         let (raw, control, endpoint): (Arc<dyn ObjectStore>, Arc<dyn ObjectStore>, String) =
             match provider.as_str() {
-                "s3" | "tigris" => {
+                "s3" => {
                     let bucket = env::var("SLATEDB_BENCH_BUCKET")
                         .or_else(|_| env::var("AWS_BUCKET_NAME"))
                         .context("SLATEDB_BENCH_BUCKET is required")?;
                     let builder = AmazonS3Builder::from_env().with_bucket_name(bucket);
                     let configured_endpoint = configured_s3_endpoint(&builder);
-                    if provider == "tigris" && configured_endpoint.is_none() {
-                        bail!("AWS_ENDPOINT_URL_S3 is required for Tigris");
-                    }
                     let raw: Arc<dyn ObjectStore> = Arc::new(
                         builder
                             .clone()
@@ -59,7 +56,7 @@ impl ObjectStoreContext {
                             .context("building S3-compatible object store")?,
                     );
                     let control: Arc<dyn ObjectStore> = Arc::new(
-                        control_store_builder(builder, &provider)
+                        builder
                             .build()
                             .context("building S3-compatible control store")?,
                     );
@@ -80,9 +77,7 @@ impl ObjectStoreContext {
                     (Arc::clone(&store), store, path)
                 }
                 other => {
-                    bail!(
-                        "unsupported CLOUD_PROVIDER {other}; expected s3, tigris, memory, or local"
-                    )
+                    bail!("unsupported CLOUD_PROVIDER {other}; expected s3, memory, or local")
                 }
             };
         let prefix = env::var("SLATEDB_BENCH_PREFIX").unwrap_or_else(|_| "manual".to_string());
@@ -107,18 +102,7 @@ fn configured_s3_endpoint(builder: &AmazonS3Builder) -> Option<String> {
         .or_else(|| builder.get_config_value(&AmazonS3ConfigKey::Endpoint))
 }
 
-fn control_store_builder(builder: AmazonS3Builder, provider: &str) -> AmazonS3Builder {
-    if provider == "tigris" {
-        builder.with_disable_bulk_delete(true)
-    } else {
-        builder
-    }
-}
-
 /// Deletes every object below `prefix`.
-///
-/// Tigris contexts disable bulk deletion when constructing the control store,
-/// so this stream transparently falls back to individual delete requests.
 pub async fn delete_prefix(store: Arc<dyn ObjectStore>, prefix: &Path) -> Result<()> {
     let locations: BoxStream<'static, object_store::Result<Path>> = store
         .list(Some(prefix))
@@ -134,7 +118,7 @@ pub async fn delete_prefix(store: Arc<dyn ObjectStore>, prefix: &Path) -> Result
 
 #[cfg(test)]
 mod tests {
-    use super::{configured_s3_endpoint, control_store_builder};
+    use super::configured_s3_endpoint;
     use object_store::aws::{AmazonS3Builder, AmazonS3ConfigKey};
 
     #[test]
@@ -147,24 +131,6 @@ mod tests {
         assert_eq!(
             configured_s3_endpoint(&builder).as_deref(),
             Some("https://s3-specific.example")
-        );
-    }
-
-    #[test]
-    fn tigris_control_store_uses_single_object_deletes() {
-        let tigris = control_store_builder(AmazonS3Builder::new(), "tigris");
-        assert_eq!(
-            tigris
-                .get_config_value(&AmazonS3ConfigKey::DisableBulkDelete)
-                .as_deref(),
-            Some("true")
-        );
-
-        let s3 = control_store_builder(AmazonS3Builder::new(), "s3");
-        assert_eq!(
-            s3.get_config_value(&AmazonS3ConfigKey::DisableBulkDelete)
-                .as_deref(),
-            Some("false")
         );
     }
 }

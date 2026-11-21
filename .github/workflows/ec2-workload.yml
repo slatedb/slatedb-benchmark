@@ -9,9 +9,6 @@ on:
       golden_id:
         required: true
         type: string
-      object_store:
-        required: true
-        type: string
       scale:
         required: true
         type: string
@@ -31,7 +28,7 @@ jobs:
   start:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    environment: benchmark-${{ inputs.object_store }}
+    environment: benchmark-s3
     outputs:
       label: ${{ steps.start-runner.outputs.label }}
       ec2-instance-id: ${{ steps.start-runner.outputs.ec2-instance-id }}
@@ -76,7 +73,7 @@ jobs:
     needs: start
     runs-on: ${{ needs.start.outputs.label }}
     timeout-minutes: 180
-    environment: benchmark-${{ inputs.object_store }}
+    environment: benchmark-s3
     concurrency:
       group: session-${{ github.run_id }}-${{ inputs.task }}
       cancel-in-progress: false
@@ -90,27 +87,10 @@ jobs:
           path: bin
       - run: chmod +x bin/slatedb-benchmark
       - name: Configure S3 credentials
-        if: ${{ inputs.object_store == 's3' }}
         uses: aws-actions/configure-aws-credentials@v5
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
-      - name: Configure Tigris credentials
-        if: ${{ inputs.object_store == 'tigris' }}
-        shell: bash
-        env:
-          AWS_ENDPOINT_URL_S3: ${{ vars.AWS_ENDPOINT_URL_S3 }}
-          TIGRIS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
-          TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
-        run: |
-          set -euo pipefail
-          : "${TIGRIS_ACCESS_KEY_ID:?Tigris access key ID is required}"
-          : "${TIGRIS_SECRET_ACCESS_KEY:?Tigris secret access key is required}"
-          {
-            echo "AWS_ACCESS_KEY_ID=$TIGRIS_ACCESS_KEY_ID"
-            echo "AWS_SECRET_ACCESS_KEY=$TIGRIS_SECRET_ACCESS_KEY"
-            echo "AWS_ENDPOINT_URL_S3=${AWS_ENDPOINT_URL_S3:-https://t3.storage.dev}"
-          } >> "$GITHUB_ENV"
       - name: Run ${{ inputs.task }}
         shell: bash
         env:
@@ -119,7 +99,7 @@ jobs:
           BENCHMARK_SCALE: ${{ inputs.scale }}
           BENCHMARK_SESSION: ${{ inputs.session }}
           BENCHMARK_TASK: ${{ inputs.task }}
-          CLOUD_PROVIDER: ${{ inputs.object_store }}
+          CLOUD_PROVIDER: s3
           GOLDEN_ID: ${{ inputs.golden_id }}
           SLATEDB_BENCH_BUCKET: ${{ vars.SLATEDB_BENCH_BUCKET }}
           SLATEDB_BENCH_REGION: ${{ vars.AWS_REGION }}
@@ -163,7 +143,7 @@ jobs:
     if: ${{ always() && needs.start.outputs.ec2-instance-id != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    environment: benchmark-${{ inputs.object_store }}
+    environment: benchmark-s3
     steps:
       - name: Configure EC2 launcher credentials
         uses: aws-actions/configure-aws-credentials@v5
