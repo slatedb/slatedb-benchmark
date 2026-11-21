@@ -30,13 +30,15 @@ use slatedb::db_cache::{
     foyer::{FoyerCache, FoyerCacheOptions},
     DbCache, SplitCache,
 };
-use slatedb::{Db, VersionedManifest};
+use slatedb::{Db, SlateDbMirrorPolicy, VersionedManifest};
 use slatedb_common::metrics::MetricsRecorder;
+use slatedb_mirror::ObjectStoreMirror;
 use std::fs;
 use std::path::Path as FsPath;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tempfile::TempDir;
 use uuid::Uuid;
 
 const SETTINGS_PATH: &str = "config/settings.toml";
@@ -397,10 +399,33 @@ async fn run_workload(
             lsm_digest_sha256: String::new(),
         }
     };
+    let (_mirror_dir, db_store): (Option<TempDir>, Arc<dyn ObjectStore>) =
+        if args.task.uses_mirror() {
+            let mirror_dir = create_mirror_dir()?;
+            tracing::info!(
+                task = %args.task,
+                mirror_dir = %mirror_dir.path().display(),
+                "enabling local object-store mirror"
+            );
+            let mirror = ObjectStoreMirror::builder(
+                mirror_dir.path(),
+                Arc::clone(&context.instrumented) as Arc<dyn ObjectStore>,
+                SlateDbMirrorPolicy::builder().build(),
+            )
+            .build()
+            .await
+            .context("building local object-store mirror")?;
+            (Some(mirror_dir), mirror)
+        } else {
+            (
+                None,
+                Arc::clone(&context.instrumented) as Arc<dyn ObjectStore>,
+            )
+        };
     let recorder = Arc::new(BenchmarkMetricsRecorder::new());
     let db = open_database(
         database_path.clone(),
-        context.instrumented.clone(),
+        Arc::clone(&db_store),
         config,
         &config.settings,
         Arc::clone(&recorder),
@@ -429,6 +454,9 @@ async fn run_workload(
         workloads::execute(Arc::clone(&db), config, context.instrumented.metrics()).await;
     let close = db.close().await.context("closing workload database");
     metrics_reporter.stop().await;
+    drop(db);
+    drop(db_store);
+    drop(_mirror_dir);
     let compaction_check =
         ensure_no_failed_compactions(database_path, Arc::clone(&context.control)).await;
     let execution = execution?;
@@ -775,6 +803,26 @@ async fn open_database(
         .await
         .context("opening SlateDB")?;
     Ok(Arc::new(db))
+}
+
+fn create_mirror_dir() -> Result<TempDir> {
+    let mut builder = tempfile::Builder::new();
+    builder.prefix("slatedb-benchmark-mirror-");
+    match std::env::var_os("SLATEDB_BENCH_MIRROR_DIR").filter(|value| !value.is_empty()) {
+        Some(parent) => {
+            fs::create_dir_all(&parent)
+                .with_context(|| format!("creating {}", FsPath::new(&parent).display()))?;
+            builder.tempdir_in(&parent).with_context(|| {
+                format!(
+                    "creating mirror directory in {}",
+                    FsPath::new(&parent).display()
+                )
+            })
+        }
+        None => builder
+            .tempdir()
+            .context("creating temporary mirror directory"),
+    }
 }
 
 fn cache_for(config: &ResolvedConfig) -> Arc<dyn DbCache> {

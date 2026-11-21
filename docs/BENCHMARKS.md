@@ -13,8 +13,10 @@ results.
 
 ## Benchmark environment
 
-Release runs use the configured WarpBuild ARM runner. Amazon S3 runs in
-`us-east-1`. Each
+Release runs use the configured WarpBuild ARM runners (`warp-ubuntu-latest-arm64-32x`
+for standard workloads and `warp-ubuntu-latest-arm64-4x` for `*-mirror` workloads,
+whose 16 GiB RAM keeps the OS page cache bounded relative to the mirrored dataset).
+Amazon S3 runs in `us-east-1`. Each
 preparation phase and workload has one published configuration. The release
 does not vary clients, values, caches, machines, object stores, or SlateDB
 settings within a preparation phase or workload.
@@ -22,14 +24,15 @@ settings within a preparation phase or workload.
 The suite uses the SlateDB release defaults unless a preparation phase or
 workload says otherwise. It configures these caches:
 
-- 8 GiB block cache
-- 4 GiB metadata/index cache
-- no local object-store cache
+- 4 GiB block cache
+- 2 GiB metadata/index cache
+- no local object-store mirror by default (`*-mirror` workloads wrap the remote
+  object store in `slatedb-mirror` with `SlateDbMirrorPolicy`)
 
 ## Dataset
 
-The canonical dataset contains 300,000,000 records with 20-byte keys and
-400-byte values. This is about 117.3 GiB of logical key-value data. Generated
+The canonical dataset contains 150,000,000 records with 20-byte keys and
+400-byte values. This is about 58.7 GiB of logical key-value data. Generated
 values have a target compression ratio of 1.0.
 
 Keys contain an 8-byte big-endian unsigned record ID followed by 12 ASCII `0`
@@ -47,7 +50,7 @@ workloads. They write checkpoint metadata, not benchmark results.
 
 ### Bulk load
 
-The loader inserts all 300,000,000 records once. It prepares keys and values in
+The loader inserts all 150,000,000 records once. It prepares keys and values in
 parallel, submits ordered batches through SlateDB's write API, and does not
 wait for each batch to become durable. It disables background compaction for
 the load, flushes the database, and saves the uncompacted checkpoint.
@@ -99,16 +102,18 @@ drain. It does not wait for ordinary background compaction to become idle.
 | --- | --- | --- | --- |
 | `idle` | Golden | No client operations | None |
 | `point-read-uniform` | Golden | 100% point read | Uniform |
+| `point-read-uniform-mirror` | Golden | 100% point read (local mirror) | Uniform |
 | `point-read-skewed` | Golden | 100% point read | Zipfian |
 | `point-read-missing` | Golden | 100% point read | Uniform absent keys |
 | `read-heavy` | Golden | 95% read, 5% update | Zipfian |
 | `balanced` | Golden | 50% read, 50% update | Zipfian |
+| `balanced-mirror` | Golden | 50% read, 50% update (local mirror) | Zipfian |
 | `update-heavy` | Golden | 5% read, 95% update | Zipfian |
 | `range-scan` | Golden | 100% forward scan | Uniform start ID |
 | `sustained-ingest` | Empty | 100% insert | Unique IDs |
 | `transaction-contention` | Golden | Ten-operation transactions | Hot set |
 
-Zipfian workloads use an exponent of 0.99 over the fixed 300,000,000-record
+Zipfian workloads use an exponent of 0.99 over the fixed 150,000,000-record
 domain. Inserts never expand that domain, and completed operations never remap
 its ranks.
 

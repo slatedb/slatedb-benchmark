@@ -13,7 +13,7 @@ export LOCAL_PATH="$temporary/object-store"
 export SLATEDB_BENCH_PREFIX=benchmark
 export SLATEDB_BENCH_REGION=local
 export SLATEDB_BENCH_RUNNER_TYPE=local-e2e
-mkdir -p "$LOCAL_PATH" "$temporary/input/workload/balanced"
+mkdir -p "$LOCAL_PATH" "$temporary/input/workload/balanced" "$temporary/input/workload/balanced-mirror"
 
 runner="$root/target/debug/slatedb-benchmark"
 "$runner" prepare \
@@ -33,10 +33,18 @@ runner="$root/target/debug/slatedb-benchmark"
   --session local-e2e \
   --scale 0.00001 \
   --output "$temporary/balanced"
+"$runner" run \
+  --workload balanced-mirror \
+  --golden e2e \
+  --session local-e2e \
+  --scale 0.00001 \
+  --output "$temporary/balanced-mirror"
 
 cp "$temporary/compaction/golden.json" "$temporary/input/golden.json"
 cp "$temporary/balanced/result.json" "$temporary/input/workload/balanced/result.json"
 cp "$temporary/balanced/series.json" "$temporary/input/workload/balanced/series.json"
+cp "$temporary/balanced-mirror/result.json" "$temporary/input/workload/balanced-mirror/result.json"
+cp "$temporary/balanced-mirror/series.json" "$temporary/input/workload/balanced-mirror/series.json"
 "$runner" bundle \
   --input "$temporary/input" \
   --output "$temporary/results" \

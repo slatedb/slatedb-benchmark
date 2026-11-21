@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use ts_rs::TS;
 
-const RECORD_COUNT: u64 = 300_000_000;
+const RECORD_COUNT: u64 = 150_000_000;
 const KEY_BYTES: usize = 20;
 const VALUE_BYTES: usize = 400;
 const CLIENTS: usize = 64;
@@ -18,8 +18,8 @@ const WARMUP_MS: u64 = 5 * 60 * 1_000;
 const MEASUREMENT_MS: u64 = 15 * 60 * 1_000;
 const IDLE_MS: u64 = 5 * 60 * 1_000;
 const INGEST_MS: u64 = 20 * 60 * 1_000;
-const BLOCK_CACHE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
-const METADATA_CACHE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+const BLOCK_CACHE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+const METADATA_CACHE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MIN_DURATION_MS: u64 = 2_000;
 const MIN_BLOCK_CACHE_BYTES: u64 = 8 * 1024 * 1024;
 const MIN_METADATA_CACHE_BYTES: u64 = 2 * 1024 * 1024;
@@ -99,6 +99,7 @@ macro_rules! define_tasks {
                 transaction_reads: $transaction_reads:expr,
                 transaction_updates: $transaction_updates:expr,
                 may_write: $may_write:expr,
+                local_mirror: $local_mirror:expr,
             }
         ),+ $(,)?
     ) => {
@@ -144,6 +145,7 @@ macro_rules! define_tasks {
                     transaction_reads: $transaction_reads,
                     transaction_updates: $transaction_updates,
                     may_write: $may_write,
+                    local_mirror: $local_mirror,
                 }
             ),+
         ];
@@ -174,6 +176,11 @@ impl Task {
     /// Returns whether this task may modify the database.
     pub fn may_write(self) -> bool {
         self.definition().may_write
+    }
+
+    /// Returns whether this task mirrors compacted SSTs to local disk via `slatedb-mirror`.
+    pub fn uses_mirror(self) -> bool {
+        self.definition().local_mirror
     }
 
     /// Returns the stable kebab-case artifact and CLI name.
@@ -208,6 +215,7 @@ struct TaskDefinition {
     transaction_reads: Option<usize>,
     transaction_updates: Option<usize>,
     may_write: bool,
+    local_mirror: bool,
 }
 
 const NO_OPERATIONS: &[(&str, f64)] = &[];
@@ -234,6 +242,7 @@ define_tasks! {
         transaction_reads: None,
         transaction_updates: None,
         may_write: true,
+        local_mirror: false,
     },
     Compaction {
         name: "compaction",
@@ -249,6 +258,7 @@ define_tasks! {
         transaction_reads: None,
         transaction_updates: None,
         may_write: false,
+        local_mirror: false,
     },
     Idle {
         name: "idle",
@@ -264,6 +274,7 @@ define_tasks! {
         transaction_reads: None,
         transaction_updates: None,
         may_write: false,
+        local_mirror: false,
     },
     PointReadUniform {
         name: "point-read-uniform",
@@ -279,6 +290,23 @@ define_tasks! {
         transaction_reads: None,
         transaction_updates: None,
         may_write: false,
+        local_mirror: false,
+    },
+    PointReadUniformMirror {
+        name: "point-read-uniform-mirror",
+        preparation: false,
+        clients: CLIENTS,
+        warmup_ms: WARMUP_MS,
+        measurement_ms: MEASUREMENT_MS,
+        initial_state: "golden",
+        key_selection: "uniform",
+        operation_mix: GET_ONLY,
+        scan_limit: None,
+        transaction_hot_keys: None,
+        transaction_reads: None,
+        transaction_updates: None,
+        may_write: false,
+        local_mirror: true,
     },
     PointReadSkewed {
         name: "point-read-skewed",
@@ -294,6 +322,7 @@ define_tasks! {
         transaction_reads: None,
         transaction_updates: None,
         may_write: false,
+        local_mirror: false,
     },
     PointReadMissing {
         name: "point-read-missing",
@@ -309,6 +338,7 @@ define_tasks! {
         transaction_reads: None,
         transaction_updates: None,
         may_write: false,
+        local_mirror: false,
     },
     ReadHeavy {
         name: "read-heavy",
@@ -324,6 +354,7 @@ define_tasks! {
         transaction_reads: None,
         transaction_updates: None,
         may_write: true,
+        local_mirror: false,
     },
     Balanced {
         name: "balanced",
@@ -339,6 +370,23 @@ define_tasks! {
         transaction_reads: None,
         transaction_updates: None,
         may_write: true,
+        local_mirror: false,
+    },
+    BalancedMirror {
+        name: "balanced-mirror",
+        preparation: false,
+        clients: CLIENTS,
+        warmup_ms: WARMUP_MS,
+        measurement_ms: MEASUREMENT_MS,
+        initial_state: "golden",
+        key_selection: "scrambled-zipfian-0.99",
+        operation_mix: BALANCED,
+        scan_limit: None,
+        transaction_hot_keys: None,
+        transaction_reads: None,
+        transaction_updates: None,
+        may_write: true,
+        local_mirror: true,
     },
     UpdateHeavy {
         name: "update-heavy",
@@ -354,6 +402,7 @@ define_tasks! {
         transaction_reads: None,
         transaction_updates: None,
         may_write: true,
+        local_mirror: false,
     },
     RangeScan {
         name: "range-scan",
@@ -369,6 +418,7 @@ define_tasks! {
         transaction_reads: None,
         transaction_updates: None,
         may_write: false,
+        local_mirror: false,
     },
     SustainedIngest {
         name: "sustained-ingest",
@@ -384,6 +434,7 @@ define_tasks! {
         transaction_reads: None,
         transaction_updates: None,
         may_write: true,
+        local_mirror: false,
     },
     TransactionContention {
         name: "transaction-contention",
@@ -399,6 +450,7 @@ define_tasks! {
         transaction_reads: Some(5),
         transaction_updates: Some(5),
         may_write: true,
+        local_mirror: false,
     },
 }
 
@@ -461,12 +513,20 @@ pub struct TaskConfig {
     pub transaction_reads: Option<usize>,
     /// Updates performed by each transaction attempt.
     pub transaction_updates: Option<usize>,
+    /// Whether compacted SSTs are mirrored to local disk via `slatedb-mirror`.
+    #[serde(default)]
+    pub local_mirror: bool,
 }
 
 impl TaskConfig {
     /// Checks catalog invariants before a task is executed or published.
     pub(crate) fn validate(&self) -> Result<()> {
         let active = !self.task.is_preparation() && self.task != Task::Idle;
+        ensure!(
+            self.local_mirror == self.task.uses_mirror(),
+            "local mirror setting disagrees with task {}",
+            self.task
+        );
         ensure!(
             matches!(
                 self.key_selection.as_str(),
@@ -591,10 +651,10 @@ pub struct ResolvedConfig {
 ///
 /// A task-specific `settings.<task>.toml` is a complete replacement for the
 /// shared settings file. If neither file exists, SlateDB defaults are used.
-/// Local object-store cache paths and capacities are cleared because the
-/// benchmark runner configures only its explicit in-memory caches.
+/// Most tasks use only the runner's explicit in-memory caches; `*-mirror` tasks
+/// also wrap the remote object store in `slatedb-mirror`.
 pub fn load(task: Task, scale: BenchmarkScale, settings_path: &Path) -> Result<ResolvedConfig> {
-    let mut settings = match settings_path_for_task(task, settings_path)? {
+    let settings = match settings_path_for_task(task, settings_path)? {
         Some(settings_path) => Settings::from_file(&settings_path).with_context(|| {
             format!("loading SlateDB settings from {}", settings_path.display())
         })?,
@@ -610,11 +670,6 @@ pub fn load(task: Task, scale: BenchmarkScale, settings_path: &Path) -> Result<R
         block_bytes: scaled_u64(BLOCK_CACHE_BYTES, MIN_BLOCK_CACHE_BYTES, scale),
         metadata_bytes: scaled_u64(METADATA_CACHE_BYTES, MIN_METADATA_CACHE_BYTES, scale),
     };
-    settings.object_store_cache_options.max_cache_size_bytes = None;
-    settings.object_store_cache_options.root_folder = None;
-    settings
-        .object_store_cache_options
-        .preload_disk_cache_on_startup = None;
     let task_config = task_config(task, scale, dataset.record_count);
     task_config
         .validate()
@@ -682,6 +737,7 @@ fn task_config(task: Task, scale: BenchmarkScale, record_count: u64) -> TaskConf
             .map(|hot_keys| hot_keys.min(record_count)),
         transaction_reads: definition.transaction_reads,
         transaction_updates: definition.transaction_updates,
+        local_mirror: definition.local_mirror,
     }
 }
 
@@ -803,5 +859,32 @@ mod tests {
             load(Task::Balanced, BenchmarkScale::FULL, &shared_path).expect("workload settings");
 
         assert_eq!(config.settings.l0_max_ssts, 63);
+    }
+
+    #[test]
+    fn mirrored_workloads_enable_local_mirror_and_reject_mismatches() {
+        for task in [Task::PointReadUniformMirror, Task::BalancedMirror] {
+            let mut config = load(
+                task,
+                BenchmarkScale::FULL,
+                Path::new("config/settings.toml"),
+            )
+            .expect("mirrored workload config");
+            assert!(task.uses_mirror());
+            assert!(config.task.local_mirror);
+            config.task.local_mirror = false;
+            assert!(config.task.validate().is_err());
+        }
+
+        let mut plain = load(
+            Task::Balanced,
+            BenchmarkScale::FULL,
+            Path::new("config/settings.toml"),
+        )
+        .expect("unmirrored workload config");
+        assert!(!Task::Balanced.uses_mirror());
+        assert!(!plain.task.local_mirror);
+        plain.task.local_mirror = true;
+        assert!(plain.task.validate().is_err());
     }
 }

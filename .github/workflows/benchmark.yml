@@ -169,6 +169,7 @@ jobs:
             --no-default-features --features aws,foyer,wal_disable,zstd
           cargo add --quiet --path "$GITHUB_WORKSPACE/.slatedb-source/slatedb-common" \
             --features serde
+          cargo add --quiet --path "$GITHUB_WORKSPACE/.slatedb-source/slatedb-mirror"
       - name: Build runner
         env:
           SLATEDB_COMMIT: ${{ steps.source.outputs.commit }}
@@ -188,7 +189,7 @@ jobs:
 
   workloads:
     needs: [validate-golden, build]
-    runs-on: warp-ubuntu-latest-arm64-32x
+    runs-on: ${{ endsWith(matrix.task, '-mirror') && 'warp-ubuntu-latest-arm64-4x' || 'warp-ubuntu-latest-arm64-32x' }}
     timeout-minutes: 1440
     environment: benchmark-${{ inputs.object_store }}
     strategy:
@@ -241,13 +242,13 @@ jobs:
           GOLDEN_ID: ${{ inputs.golden_id }}
           SLATEDB_BENCH_BUCKET: ${{ vars.SLATEDB_BENCH_BUCKET }}
           SLATEDB_BENCH_REGION: ${{ vars.AWS_REGION }}
+          SLATEDB_BENCH_RUNNER_TYPE: ${{ endsWith(matrix.task, '-mirror') && 'warp-ubuntu-latest-arm64-4x' || 'warp-ubuntu-latest-arm64-32x' }}
         run: |
           set -euo pipefail
           export BENCHMARK_ACTIONS_LOG_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/job/$BENCHMARK_ACTIONS_JOB_ID"
           unset BENCHMARK_ACTIONS_JOB_ID
           : "${SLATEDB_BENCH_BUCKET:?SLATEDB_BENCH_BUCKET is required}"
           export SLATEDB_BENCH_PREFIX=${SLATEDB_BENCH_PREFIX:-benchmark}
-          export SLATEDB_BENCH_RUNNER_TYPE=${SLATEDB_BENCH_RUNNER_TYPE:-warp-ubuntu-latest-arm64-32x}
           SLATEDB_BENCH_RUNNER_REGION=$(
             curl --fail --location --silent --show-error --max-time 10 https://ipinfo.io/json |
               jq -r '[.city, .region, .country] | map(select(length > 0)) | join(", ")' ||

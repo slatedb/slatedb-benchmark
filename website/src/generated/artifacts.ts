@@ -2,7 +2,7 @@
 
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
-export type Task = "bulk-load" | "compaction" | "idle" | "point-read-uniform" | "point-read-skewed" | "point-read-missing" | "read-heavy" | "balanced" | "update-heavy" | "range-scan" | "sustained-ingest" | "transaction-contention";
+export type Task = "bulk-load" | "compaction" | "idle" | "point-read-uniform" | "point-read-uniform-mirror" | "point-read-skewed" | "point-read-missing" | "read-heavy" | "balanced" | "balanced-mirror" | "update-heavy" | "range-scan" | "sustained-ingest" | "transaction-contention";
 
 export type DatasetConfig = {
 /**
@@ -76,7 +76,11 @@ transaction_reads: number | null,
 /**
  * Updates performed by each transaction attempt.
  */
-transaction_updates: number | null, };
+transaction_updates: number | null,
+/**
+ * Whether compacted SSTs are mirrored to local disk via `slatedb-mirror`.
+ */
+local_mirror: boolean, };
 
 export type SourceIdentity = {
 /**
@@ -927,10 +931,12 @@ benchmarks: Array<TransferBenchmark>, };
 export const workloadNames = [
   'idle',
   'point-read-uniform',
+  'point-read-uniform-mirror',
   'point-read-skewed',
   'point-read-missing',
   'read-heavy',
   'balanced',
+  'balanced-mirror',
   'update-heavy',
   'range-scan',
   'sustained-ingest',

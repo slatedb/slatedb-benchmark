@@ -339,6 +339,7 @@ mod tests {
                 transaction_hot_keys: None,
                 transaction_reads: None,
                 transaction_updates: None,
+                local_mirror: task.uses_mirror(),
             },
             slate_settings: serde_json::json!({}),
             slate_default_settings: Some(serde_json::json!({})),

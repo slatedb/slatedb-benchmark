@@ -8,8 +8,8 @@ application and object-store behavior, and publishes the results at
 
 ## Workloads
 
-The canonical dataset contains 300 million records with 20-byte keys and
-400-byte values, or about 120 GiB of logical data. Golden preparation loads the
+The canonical dataset contains 150 million records with 20-byte keys and
+400-byte values, or about 59 GiB of logical data. Golden preparation loads the
 records without background compaction, then clones and compacts that database
 into the checkpoint used by steady-state workloads.
 
@@ -21,10 +21,12 @@ Most workloads run 64 closed-loop clients after a five-minute warmup and record
 | --- | --- | --- |
 | `idle` | No client operations | Golden checkpoint |
 | `point-read-uniform` | Uniform point reads | Golden checkpoint |
+| `point-read-uniform-mirror` | Uniform point reads with local `slatedb-mirror` | Golden checkpoint |
 | `point-read-skewed` | Zipfian point reads | Golden checkpoint |
 | `point-read-missing` | Reads of absent keys | Golden checkpoint |
 | `read-heavy` | 95% read, 5% update | Golden checkpoint |
 | `balanced` | 50% read, 50% update | Golden checkpoint |
+| `balanced-mirror` | 50% read, 50% update with local `slatedb-mirror` | Golden checkpoint |
 | `update-heavy` | 5% read, 95% update | Golden checkpoint |
 | `range-scan` | Forward scans of up to 10 records | Golden checkpoint |
 | `sustained-ingest` | Unique inserts | Empty database |
@@ -34,11 +36,11 @@ Most workloads run 64 closed-loop clients after a five-minute warmup and record
 
 | Setting | Value |
 | --- | --- |
-| Workload runner | `warp-ubuntu-latest-arm64-32x` |
+| Workload runner | `warp-ubuntu-latest-arm64-32x` (`warp-ubuntu-latest-arm64-4x` for `*-mirror`) |
 | Amazon S3 region | `us-east-1` |
-| Block cache | 8 GiB |
-| Metadata and index cache | 4 GiB |
-| Local object-store cache | Disabled |
+| Block cache | 4 GiB |
+| Metadata and index cache | 2 GiB |
+| Local object-store mirror | Disabled (enabled on `*-mirror` workloads via `slatedb-mirror`) |
 | Value compression target | 1.0 |
 
 The runner records the resolved configuration, source commits, applied patches,
