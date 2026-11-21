@@ -26,8 +26,42 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  start:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: benchmark-${{ inputs.object_store }}
+    outputs:
+      label: ${{ steps.start-runner.outputs.label }}
+      ec2-instance-id: ${{ steps.start-runner.outputs.ec2-instance-id }}
+      region: ${{ steps.start-runner.outputs.region }}
+    steps:
+      - name: Configure EC2 launcher credentials
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_EC2_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_EC2_REGION }}
+      - name: Start EC2 runner
+        id: start-runner
+        uses: machulav/ec2-github-runner@v2.6.1
+        with:
+          mode: start
+          github-token: ${{ secrets.EC2_RUNNER_GITHUB_TOKEN }}
+          use-jit: true
+          ec2-instance-type: c7gd.8xlarge
+          ec2-volume-size: 20
+          ec2-volume-type: gp3
+          availability-zones-config: ${{ vars.EC2_AVAILABILITY_ZONES_CONFIG }}
+          aws-resource-tags: '[{"Key":"Project","Value":"slatedb-benchmark"},{"Key":"Name","Value":"slatedb-benchmark-transfer-capacity"}]'
+          pre-runner-script: |
+            set -euo pipefail
+            shutdown -P +90 || true
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update -qq
+            apt-get install -y --no-install-recommends jq curl ca-certificates git traceroute mtr-tiny
+
   transfer-capacity:
-    runs-on: warp-ubuntu-latest-arm64-32x
+    needs: start
+    runs-on: ${{ needs.start.outputs.label }}
     timeout-minutes: 60
     environment: benchmark-${{ inputs.object_store }}
     env:
@@ -181,13 +215,13 @@ jobs:
           CLOUD_PROVIDER: ${{ inputs.object_store }}
           SLATEDB_BENCH_BUCKET: ${{ vars.SLATEDB_BENCH_BUCKET }}
           SLATEDB_BENCH_REGION: ${{ vars.AWS_REGION }}
+          SLATEDB_BENCH_RUNNER_TYPE: c7gd.8xlarge
         run: |
           set -euo pipefail
           export BENCHMARK_ACTIONS_LOG_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/job/$BENCHMARK_ACTIONS_JOB_ID"
           unset BENCHMARK_ACTIONS_JOB_ID
           : "${SLATEDB_BENCH_BUCKET:?SLATEDB_BENCH_BUCKET is required}"
           export SLATEDB_BENCH_PREFIX=${SLATEDB_BENCH_PREFIX:-benchmark}
-          export SLATEDB_BENCH_RUNNER_TYPE=${SLATEDB_BENCH_RUNNER_TYPE:-warp-ubuntu-latest-arm64-32x}
           ./scripts/transfer-capacity.sh .runs/transfer-capacity/result.json
       - uses: actions/upload-artifact@v4
         with:
@@ -195,6 +229,27 @@ jobs:
           path: .runs/transfer-capacity
           if-no-files-found: error
           overwrite: true
+
+  stop:
+    needs: [start, transfer-capacity]
+    if: ${{ always() && needs.start.outputs.ec2-instance-id != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: benchmark-${{ inputs.object_store }}
+    steps:
+      - name: Configure EC2 launcher credentials
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_EC2_ROLE_ARN }}
+          aws-region: ${{ needs.start.outputs.region || vars.AWS_EC2_REGION }}
+      - name: Stop EC2 runner
+        uses: machulav/ec2-github-runner@v2.6.1
+        with:
+          mode: stop
+          github-token: ${{ secrets.EC2_RUNNER_GITHUB_TOKEN }}
+          use-jit: true
+          label: ${{ needs.start.outputs.label }}
+          ec2-instance-id: ${{ needs.start.outputs.ec2-instance-id }}
 
   publish:
     needs: transfer-capacity

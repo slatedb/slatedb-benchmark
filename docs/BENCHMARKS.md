@@ -13,9 +13,9 @@ results.
 
 ## Benchmark environment
 
-Release runs use the configured WarpBuild ARM runners (`warp-ubuntu-latest-arm64-32x`
-for standard workloads and `warp-ubuntu-latest-arm64-4x` for `*-mirror` workloads,
-whose 16 GiB RAM keeps the OS page cache bounded relative to the mirrored dataset).
+Release runs use ephemeral AWS EC2 Graviton instances in `us-east-1` (`c7gd.8xlarge`
+for standard workloads and `c7gd.2xlarge` for `*-mirror` workloads, whose 16 GiB RAM
+keeps the OS page cache bounded relative to the mirrored dataset on local NVMe).
 Amazon S3 runs in `us-east-1`. Each
 preparation phase and workload has one published configuration. The release
 does not vary clients, values, caches, machines, object stores, or SlateDB

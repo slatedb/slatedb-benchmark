@@ -24,7 +24,7 @@ scripts/                         External tool adapters
 
 One worker process runs one preparation phase or workload. A worker owns the
 SlateDB instance, client tasks, recorders, and local caches. GitHub runs each
-workload on a separate WarpBuild machine. Only worker samples enter task
+workload on a separate ephemeral EC2 machine. Only worker samples enter task
 results.
 
 Each worker creates new block and metadata caches. Golden workloads open
@@ -246,8 +246,8 @@ ID after changing the SlateDB commit or preparation configuration.
 | `publish` | Commit results and deploy Pages |
 | `cleanup` | Delete workload database clones after outputs are collected |
 
-The workload matrix uses one WarpBuild machine per task and does not impose a
-parallelism cap. `run.json` records the number of workloads. Each workload writes to
+The workload matrix launches one ephemeral EC2 machine per task (`max-parallel: 6`).
+`run.json` records the number of workloads. Each workload writes to
 `sessions/<github.run_id>/<workload>/{series,result}.json`.
 
 The bundle discovers workload artifacts and accepts any nonempty subset of the

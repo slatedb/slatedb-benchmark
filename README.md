@@ -36,11 +36,11 @@ Most workloads run 64 closed-loop clients after a five-minute warmup and record
 
 | Setting | Value |
 | --- | --- |
-| Workload runner | `warp-ubuntu-latest-arm64-32x` (`warp-ubuntu-latest-arm64-4x` for `*-mirror`) |
+| Workload runner | `c7gd.8xlarge` (`c7gd.2xlarge` for `*-mirror`) |
 | Amazon S3 region | `us-east-1` |
 | Block cache | 4 GiB |
 | Metadata and index cache | 2 GiB |
-| Local object-store mirror | Disabled (enabled on `*-mirror` workloads via `slatedb-mirror`) |
+| Local object-store mirror | Disabled (enabled on `*-mirror` workloads via `slatedb-mirror` on local NVMe) |
 | Value compression target | 1.0 |
 
 The runner records the resolved configuration, source commits, applied patches,
@@ -49,8 +49,8 @@ object store, and runner location with each result.
 ## Run the GitHub workflows
 
 The release path runs on GitHub Actions against Amazon S3 or Tigris. A
-configured repository needs the object-store environment and WarpBuild runners
-described in [docs/SETUP.md](docs/SETUP.md).
+configured repository needs the object-store environment and ephemeral EC2
+runners described in [docs/SETUP.md](docs/SETUP.md).
 
 Prepare a golden dataset first:
 

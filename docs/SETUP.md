@@ -2,7 +2,7 @@
 
 The benchmark workflows need three external pieces:
 
-1. WarpBuild runners for the benchmark jobs.
+1. Ephemeral AWS EC2 runners in `us-east-1` via `machulav/ec2-github-runner`.
 2. An object-store environment named `benchmark-s3` or `benchmark-tigris`.
 3. GitHub Pages for the published website.
 
@@ -13,9 +13,9 @@ AWS account, region, bucket, and role names when setting up a fork.
 
 You need:
 
-- Admin access to the GitHub repository and, for WarpBuild, its organization.
-- Permission to create an S3 bucket, IAM identity provider, policy, and role.
-- A [WarpBuild account](https://www.warpbuild.com/docs/ci/quick-start).
+- Admin access to the GitHub repository.
+- Permission to create an S3 bucket, IAM identity provider, policies, roles,
+  VPC endpoint, and security group in AWS.
 - `gh` and the AWS CLI if you want to use the command-line examples.
 
 Authenticate the GitHub CLI and select the repository:
@@ -25,48 +25,30 @@ $ gh auth login
 $ gh repo set-default slatedb/slatedb-benchmark
 ```
 
-## Configure WarpBuild
+## Configure ephemeral EC2 runners
 
-Sign in to WarpBuild, install the WarpBuild GitHub app, and grant it access to
-this repository. The workflows use these runner labels:
+Build, bundle, publish, and cleanup jobs run on GitHub-hosted `ubuntu-24.04-arm`
+runners. Preparation, workload, and transfer-capacity jobs launch single-use JIT
+EC2 Graviton runners in `us-east-1` with `machulav/ec2-github-runner`:
 
-| Label | Jobs |
+| Instance type | Jobs |
 | --- | --- |
-| `warp-ubuntu-latest-arm64-4x` | `*-mirror` workloads |
-| `warp-ubuntu-latest-arm64-8x` | Golden data |
-| `warp-ubuntu-latest-arm64-16x` | Build, bundle, publish, and cleanup |
-| `warp-ubuntu-latest-arm64-32x` | Standard workload matrix and transfer-capacity |
+| `c7gd.2xlarge` | Golden data and `*-mirror` workloads (local NVMe mounted at `/mnt/nvme`) |
+| `c7gd.8xlarge` | Standard workload matrix and transfer-capacity |
 
-Confirm that all four labels appear in the WarpBuild dashboard. If this is a
-public repository, WarpBuild also requires the setup described in
-[Public GitHub Repos](https://www.warpbuild.com/docs/ci/public-repos).
+Set these repository-level GitHub Actions variables and secrets:
 
-Follow WarpBuild's
-[non-default runner group instructions](https://www.warpbuild.com/docs/ci/common-issues#default-runner-group)
-to configure the runners in the GitHub organization's **Performance** runner
-group:
-
-1. Open **Settings > Actions > Runner groups > Performance**.
-2. Set **Repository access** to **Selected repositories** and select
-   `slatedb/slatedb` and `slatedb/slatedb-benchmark`.
-3. Enable **Allow public repositories**.
-4. Set **Workflow access** to **Selected workflows**.
-5. Add these exact workflow references:
-
-   ```text
-   slatedb/slatedb/.github/workflows/nightly.yaml@refs/heads/main
-   slatedb/slatedb-benchmark/.github/workflows/benchmark.yml@refs/heads/main
-   slatedb/slatedb-benchmark/.github/workflows/golden.yml@refs/heads/main
-   slatedb/slatedb-benchmark/.github/workflows/transfer-capacity.yml@refs/heads/main
-   ```
-
-GitHub matches the complete repository, workflow path, and Git ref. A shortened
-name, the wrong `.yml` or `.yaml` extension, or a missing
-`@refs/heads/main` will not grant the workflow access to the runners.
-
-Jobs that wait indefinitely at “Waiting for a runner to pick up this job”
-usually indicate that WarpBuild cannot access the repository or that the
-requested runner label is unavailable.
+- `AWS_EC2_ROLE_ARN`: OIDC IAM role (`slatedb-benchmark-ec2-runner`) with
+  `ec2:RunInstances`, `ec2:TerminateInstances`, `ec2:DescribeInstances`,
+  `ec2:DescribeInstanceStatus`, `ec2:CreateTags`, and `ec2:GetConsoleOutput`
+  scoped to `Project=slatedb-benchmark` instances.
+- `AWS_EC2_REGION`: `us-east-1`.
+- `EC2_AVAILABILITY_ZONES_CONFIG`: JSON array of `{imageId, subnetId, securityGroupId}`
+  entries across `c7gd`-capable subnets in `us-east-1` using an Ubuntu 24.04 ARM64
+  AMI and an outbound-only security group (paired with a free S3 Gateway VPC
+  Endpoint on the VPC route table).
+- `EC2_RUNNER_GITHUB_TOKEN` (secret): fine-grained PAT scoped to this repository
+  with `Administration: Read and write` for JIT runner registration.
 
 ## Configure Amazon S3
 

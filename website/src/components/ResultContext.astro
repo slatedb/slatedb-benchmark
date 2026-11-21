@@ -92,9 +92,15 @@ const warpBuildDocs = (() => {
   if (runner.includes('windows')) return 'windows-x86-64';
   return undefined;
 })();
+const awsEc2Family = (() => {
+  const match = environment.runner_type.toLowerCase().match(/^([a-z][0-9]+[a-z]*)\./);
+  return match ? match[1].replace(/d$/, '') : undefined;
+})();
 const machineHref = warpBuildDocs
   ? `https://www.warpbuild.com/docs/ci/cloud-runners#${warpBuildDocs}`
-  : undefined;
+  : awsEc2Family
+    ? `https://aws.amazon.com/ec2/instance-types/${awsEc2Family}/`
+    : undefined;
 ---
 
 <aside class="result-context" aria-label="Benchmark context">

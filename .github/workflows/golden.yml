@@ -37,7 +37,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: warp-ubuntu-latest-arm64-8x
+    runs-on: ubuntu-24.04-arm
     outputs:
       slate_version: ${{ steps.source.outputs.version }}
       slate_commit: ${{ steps.source.outputs.commit }}
@@ -106,9 +106,43 @@ jobs:
           overwrite: true
           retention-days: 7
 
-  bulk-load:
+  start-bulk-load:
     needs: build
-    runs-on: warp-ubuntu-latest-arm64-8x
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: benchmark-${{ inputs.object_store }}
+    outputs:
+      label: ${{ steps.start-runner.outputs.label }}
+      ec2-instance-id: ${{ steps.start-runner.outputs.ec2-instance-id }}
+      region: ${{ steps.start-runner.outputs.region }}
+    steps:
+      - name: Configure EC2 launcher credentials
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_EC2_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_EC2_REGION }}
+      - name: Start EC2 runner
+        id: start-runner
+        uses: machulav/ec2-github-runner@v2.6.1
+        with:
+          mode: start
+          github-token: ${{ secrets.EC2_RUNNER_GITHUB_TOKEN }}
+          use-jit: true
+          ec2-instance-type: c7gd.2xlarge
+          ec2-volume-size: 20
+          ec2-volume-type: gp3
+          availability-zones-config: ${{ vars.EC2_AVAILABILITY_ZONES_CONFIG }}
+          aws-resource-tags: '[{"Key":"Project","Value":"slatedb-benchmark"},{"Key":"Name","Value":"slatedb-benchmark-golden-bulk-load"}]'
+          pre-runner-script: |
+            set -euo pipefail
+            shutdown -P +1440 || true
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update -qq
+            apt-get install -y --no-install-recommends jq curl ca-certificates git
+
+  bulk-load:
+    needs: [build, start-bulk-load]
+    runs-on: ${{ needs.start-bulk-load.outputs.label }}
     timeout-minutes: 1440
     environment: benchmark-${{ inputs.object_store }}
     concurrency:
@@ -154,11 +188,11 @@ jobs:
           GOLDEN_ID: ${{ inputs.golden_id }}
           SLATEDB_BENCH_BUCKET: ${{ vars.SLATEDB_BENCH_BUCKET }}
           SLATEDB_BENCH_REGION: ${{ vars.AWS_REGION }}
+          SLATEDB_BENCH_RUNNER_TYPE: c7gd.2xlarge
         run: |
           set -euo pipefail
           : "${SLATEDB_BENCH_BUCKET:?SLATEDB_BENCH_BUCKET is required}"
           export SLATEDB_BENCH_PREFIX=${SLATEDB_BENCH_PREFIX:-benchmark}
-          export SLATEDB_BENCH_RUNNER_TYPE=${SLATEDB_BENCH_RUNNER_TYPE:-warp-ubuntu-latest-arm64-8x}
 
           bin/slatedb-benchmark prepare \
             --phase bulk-load \
@@ -174,9 +208,64 @@ jobs:
           if-no-files-found: ignore
           overwrite: true
 
-  compaction:
+  stop-bulk-load:
+    needs: [start-bulk-load, bulk-load]
+    if: ${{ always() && needs.start-bulk-load.outputs.ec2-instance-id != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: benchmark-${{ inputs.object_store }}
+    steps:
+      - name: Configure EC2 launcher credentials
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_EC2_ROLE_ARN }}
+          aws-region: ${{ needs.start-bulk-load.outputs.region || vars.AWS_EC2_REGION }}
+      - name: Stop EC2 runner
+        uses: machulav/ec2-github-runner@v2.6.1
+        with:
+          mode: stop
+          github-token: ${{ secrets.EC2_RUNNER_GITHUB_TOKEN }}
+          use-jit: true
+          label: ${{ needs.start-bulk-load.outputs.label }}
+          ec2-instance-id: ${{ needs.start-bulk-load.outputs.ec2-instance-id }}
+
+  start-compaction:
     needs: [build, bulk-load]
-    runs-on: warp-ubuntu-latest-arm64-8x
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: benchmark-${{ inputs.object_store }}
+    outputs:
+      label: ${{ steps.start-runner.outputs.label }}
+      ec2-instance-id: ${{ steps.start-runner.outputs.ec2-instance-id }}
+      region: ${{ steps.start-runner.outputs.region }}
+    steps:
+      - name: Configure EC2 launcher credentials
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_EC2_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_EC2_REGION }}
+      - name: Start EC2 runner
+        id: start-runner
+        uses: machulav/ec2-github-runner@v2.6.1
+        with:
+          mode: start
+          github-token: ${{ secrets.EC2_RUNNER_GITHUB_TOKEN }}
+          use-jit: true
+          ec2-instance-type: c7gd.2xlarge
+          ec2-volume-size: 20
+          ec2-volume-type: gp3
+          availability-zones-config: ${{ vars.EC2_AVAILABILITY_ZONES_CONFIG }}
+          aws-resource-tags: '[{"Key":"Project","Value":"slatedb-benchmark"},{"Key":"Name","Value":"slatedb-benchmark-golden-compaction"}]'
+          pre-runner-script: |
+            set -euo pipefail
+            shutdown -P +1440 || true
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update -qq
+            apt-get install -y --no-install-recommends jq curl ca-certificates git
+
+  compaction:
+    needs: [build, bulk-load, start-compaction]
+    runs-on: ${{ needs.start-compaction.outputs.label }}
     timeout-minutes: 1440
     environment: benchmark-${{ inputs.object_store }}
     concurrency:
@@ -222,11 +311,11 @@ jobs:
           GOLDEN_ID: ${{ inputs.golden_id }}
           SLATEDB_BENCH_BUCKET: ${{ vars.SLATEDB_BENCH_BUCKET }}
           SLATEDB_BENCH_REGION: ${{ vars.AWS_REGION }}
+          SLATEDB_BENCH_RUNNER_TYPE: c7gd.2xlarge
         run: |
           set -euo pipefail
           : "${SLATEDB_BENCH_BUCKET:?SLATEDB_BENCH_BUCKET is required}"
           export SLATEDB_BENCH_PREFIX=${SLATEDB_BENCH_PREFIX:-benchmark}
-          export SLATEDB_BENCH_RUNNER_TYPE=${SLATEDB_BENCH_RUNNER_TYPE:-warp-ubuntu-latest-arm64-8x}
           SLATEDB_BENCH_RUNNER_REGION=$(
             curl --fail --location --silent --show-error --max-time 10 https://ipinfo.io/json |
               jq -r '[.city, .region, .country] | map(select(length > 0)) | join(", ")' ||
@@ -246,3 +335,24 @@ jobs:
           path: .runs/golden/final
           if-no-files-found: ignore
           overwrite: true
+
+  stop-compaction:
+    needs: [start-compaction, compaction]
+    if: ${{ always() && needs.start-compaction.outputs.ec2-instance-id != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: benchmark-${{ inputs.object_store }}
+    steps:
+      - name: Configure EC2 launcher credentials
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_EC2_ROLE_ARN }}
+          aws-region: ${{ needs.start-compaction.outputs.region || vars.AWS_EC2_REGION }}
+      - name: Stop EC2 runner
+        uses: machulav/ec2-github-runner@v2.6.1
+        with:
+          mode: stop
+          github-token: ${{ secrets.EC2_RUNNER_GITHUB_TOKEN }}
+          use-jit: true
+          label: ${{ needs.start-compaction.outputs.label }}
+          ec2-instance-id: ${{ needs.start-compaction.outputs.ec2-instance-id }}

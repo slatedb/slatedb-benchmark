@@ -130,7 +130,7 @@ jobs:
           overwrite: true
 
   build:
-    runs-on: warp-ubuntu-latest-arm64-16x
+    runs-on: ubuntu-24.04-arm
     outputs:
       workloads: ${{ steps.catalog.outputs.workloads }}
     steps:
@@ -189,90 +189,24 @@ jobs:
 
   workloads:
     needs: [validate-golden, build]
-    runs-on: ${{ endsWith(matrix.task, '-mirror') && 'warp-ubuntu-latest-arm64-4x' || 'warp-ubuntu-latest-arm64-32x' }}
-    timeout-minutes: 1440
-    environment: benchmark-${{ inputs.object_store }}
     strategy:
       fail-fast: false
+      max-parallel: 6
       matrix:
         task: ${{ fromJSON(needs.build.outputs.workloads) }}
-    concurrency:
-      group: session-${{ github.run_id }}-${{ matrix.task }}
-      cancel-in-progress: false
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: actions/download-artifact@v4
-        with:
-          name: benchmark-runner
-          path: bin
-      - run: chmod +x bin/slatedb-benchmark
-      - name: Configure S3 credentials
-        if: ${{ inputs.object_store == 's3' }}
-        uses: aws-actions/configure-aws-credentials@v5
-        with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION }}
-      - name: Configure Tigris credentials
-        if: ${{ inputs.object_store == 'tigris' }}
-        shell: bash
-        env:
-          AWS_ENDPOINT_URL_S3: ${{ vars.AWS_ENDPOINT_URL_S3 }}
-          TIGRIS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
-          TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
-        run: |
-          set -euo pipefail
-          : "${TIGRIS_ACCESS_KEY_ID:?Tigris access key ID is required}"
-          : "${TIGRIS_SECRET_ACCESS_KEY:?Tigris secret access key is required}"
-          {
-            echo "AWS_ACCESS_KEY_ID=$TIGRIS_ACCESS_KEY_ID"
-            echo "AWS_SECRET_ACCESS_KEY=$TIGRIS_SECRET_ACCESS_KEY"
-            echo "AWS_ENDPOINT_URL_S3=${AWS_ENDPOINT_URL_S3:-https://t3.storage.dev}"
-          } >> "$GITHUB_ENV"
-      - name: Run ${{ matrix.task }}
-        shell: bash
-        env:
-          AWS_REGION: ${{ vars.AWS_REGION }}
-          BENCHMARK_ACTIONS_JOB_ID: ${{ job.check_run_id }}
-          BENCHMARK_SCALE: ${{ inputs.scale }}
-          BENCHMARK_SESSION: github-${{ github.run_id }}
-          BENCHMARK_TASK: ${{ matrix.task }}
-          CLOUD_PROVIDER: ${{ inputs.object_store }}
-          GOLDEN_ID: ${{ inputs.golden_id }}
-          SLATEDB_BENCH_BUCKET: ${{ vars.SLATEDB_BENCH_BUCKET }}
-          SLATEDB_BENCH_REGION: ${{ vars.AWS_REGION }}
-          SLATEDB_BENCH_RUNNER_TYPE: ${{ endsWith(matrix.task, '-mirror') && 'warp-ubuntu-latest-arm64-4x' || 'warp-ubuntu-latest-arm64-32x' }}
-        run: |
-          set -euo pipefail
-          export BENCHMARK_ACTIONS_LOG_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/job/$BENCHMARK_ACTIONS_JOB_ID"
-          unset BENCHMARK_ACTIONS_JOB_ID
-          : "${SLATEDB_BENCH_BUCKET:?SLATEDB_BENCH_BUCKET is required}"
-          export SLATEDB_BENCH_PREFIX=${SLATEDB_BENCH_PREFIX:-benchmark}
-          SLATEDB_BENCH_RUNNER_REGION=$(
-            curl --fail --location --silent --show-error --max-time 10 https://ipinfo.io/json |
-              jq -r '[.city, .region, .country] | map(select(length > 0)) | join(", ")' ||
-              true
-          )
-          export SLATEDB_BENCH_RUNNER_REGION
-          bin/slatedb-benchmark run \
-            --workload "$BENCHMARK_TASK" \
-            --golden "$GOLDEN_ID" \
-            --session "$BENCHMARK_SESSION" \
-            --scale "$BENCHMARK_SCALE" \
-            --output ".runs/workload/$BENCHMARK_TASK"
-      - name: Preserve workload result
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: workload-${{ matrix.task }}
-          path: .runs/workload
-          if-no-files-found: ignore
-          overwrite: true
+    uses: ./.github/workflows/ec2-workload.yml
+    with:
+      task: ${{ matrix.task }}
+      golden_id: ${{ inputs.golden_id }}
+      object_store: ${{ inputs.object_store }}
+      scale: ${{ inputs.scale }}
+      session: github-${{ github.run_id }}
+      instance_type: ${{ endsWith(matrix.task, '-mirror') && 'c7gd.2xlarge' || 'c7gd.8xlarge' }}
+    secrets: inherit
 
   bundle:
     needs: [validate-golden, build, workloads]
-    runs-on: warp-ubuntu-latest-arm64-16x
+    runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
         with:
@@ -310,7 +244,7 @@ jobs:
 
   publish:
     needs: bundle
-    runs-on: warp-ubuntu-latest-arm64-16x
+    runs-on: ubuntu-24.04-arm
     permissions:
       actions: write
       contents: write
@@ -363,7 +297,7 @@ jobs:
 
   cleanup:
     needs: publish
-    runs-on: warp-ubuntu-latest-arm64-16x
+    runs-on: ubuntu-24.04-arm
     environment: benchmark-${{ inputs.object_store }}
     steps:
       - uses: actions/checkout@v4

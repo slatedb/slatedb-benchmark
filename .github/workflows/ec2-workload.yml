@@ -1,0 +1,179 @@
+name: Run workload on EC2
+
+on:
+  workflow_call:
+    inputs:
+      task:
+        required: true
+        type: string
+      golden_id:
+        required: true
+        type: string
+      object_store:
+        required: true
+        type: string
+      scale:
+        required: true
+        type: string
+      session:
+        required: true
+        type: string
+      instance_type:
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+  id-token: write
+
+jobs:
+  start:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: benchmark-${{ inputs.object_store }}
+    outputs:
+      label: ${{ steps.start-runner.outputs.label }}
+      ec2-instance-id: ${{ steps.start-runner.outputs.ec2-instance-id }}
+      region: ${{ steps.start-runner.outputs.region }}
+    steps:
+      - name: Configure EC2 launcher credentials
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_EC2_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_EC2_REGION }}
+      - name: Start EC2 runner
+        id: start-runner
+        uses: machulav/ec2-github-runner@v2.6.1
+        with:
+          mode: start
+          github-token: ${{ secrets.EC2_RUNNER_GITHUB_TOKEN }}
+          use-jit: true
+          ec2-instance-type: ${{ inputs.instance_type }}
+          ec2-volume-size: 20
+          ec2-volume-type: gp3
+          availability-zones-config: ${{ vars.EC2_AVAILABILITY_ZONES_CONFIG }}
+          aws-resource-tags: '[{"Key":"Project","Value":"slatedb-benchmark"},{"Key":"Name","Value":"slatedb-benchmark-workload"}]'
+          pre-runner-script: |
+            set -euo pipefail
+            shutdown -P +180 || true
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update -qq
+            apt-get install -y --no-install-recommends jq curl ca-certificates git
+            for dev in /dev/nvme*n1; do
+              [ -b "$dev" ] || continue
+              if ! lsblk -no MOUNTPOINT "$dev" | grep -q . && ! lsblk -no TYPE "$dev" | grep -q part; then
+                mkfs.ext4 -q -F "$dev"
+                mkdir -p /mnt/nvme
+                mount -o noatime "$dev" /mnt/nvme
+                chmod 1777 /mnt/nvme
+                break
+              fi
+            done
+
+  run:
+    needs: start
+    runs-on: ${{ needs.start.outputs.label }}
+    timeout-minutes: 180
+    environment: benchmark-${{ inputs.object_store }}
+    concurrency:
+      group: session-${{ github.run_id }}-${{ inputs.task }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: benchmark-runner
+          path: bin
+      - run: chmod +x bin/slatedb-benchmark
+      - name: Configure S3 credentials
+        if: ${{ inputs.object_store == 's3' }}
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Configure Tigris credentials
+        if: ${{ inputs.object_store == 'tigris' }}
+        shell: bash
+        env:
+          AWS_ENDPOINT_URL_S3: ${{ vars.AWS_ENDPOINT_URL_S3 }}
+          TIGRIS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
+          TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          : "${TIGRIS_ACCESS_KEY_ID:?Tigris access key ID is required}"
+          : "${TIGRIS_SECRET_ACCESS_KEY:?Tigris secret access key is required}"
+          {
+            echo "AWS_ACCESS_KEY_ID=$TIGRIS_ACCESS_KEY_ID"
+            echo "AWS_SECRET_ACCESS_KEY=$TIGRIS_SECRET_ACCESS_KEY"
+            echo "AWS_ENDPOINT_URL_S3=${AWS_ENDPOINT_URL_S3:-https://t3.storage.dev}"
+          } >> "$GITHUB_ENV"
+      - name: Run ${{ inputs.task }}
+        shell: bash
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          BENCHMARK_ACTIONS_JOB_ID: ${{ job.check_run_id }}
+          BENCHMARK_SCALE: ${{ inputs.scale }}
+          BENCHMARK_SESSION: ${{ inputs.session }}
+          BENCHMARK_TASK: ${{ inputs.task }}
+          CLOUD_PROVIDER: ${{ inputs.object_store }}
+          GOLDEN_ID: ${{ inputs.golden_id }}
+          SLATEDB_BENCH_BUCKET: ${{ vars.SLATEDB_BENCH_BUCKET }}
+          SLATEDB_BENCH_REGION: ${{ vars.AWS_REGION }}
+          SLATEDB_BENCH_RUNNER_TYPE: ${{ inputs.instance_type }}
+        run: |
+          set -euo pipefail
+          export BENCHMARK_ACTIONS_LOG_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/job/$BENCHMARK_ACTIONS_JOB_ID"
+          unset BENCHMARK_ACTIONS_JOB_ID
+          : "${SLATEDB_BENCH_BUCKET:?SLATEDB_BENCH_BUCKET is required}"
+          export SLATEDB_BENCH_PREFIX=${SLATEDB_BENCH_PREFIX:-benchmark}
+          if [[ "$BENCHMARK_TASK" == *-mirror ]]; then
+            if ! mountpoint -q /mnt/nvme; then
+              echo "expected local NVMe instance store mounted at /mnt/nvme" >&2
+              exit 1
+            fi
+            export SLATEDB_BENCH_MIRROR_DIR=/mnt/nvme/mirror
+          fi
+          SLATEDB_BENCH_RUNNER_REGION=$(
+            curl --fail --location --silent --show-error --max-time 10 https://ipinfo.io/json |
+              jq -r '[.city, .region, .country] | map(select(length > 0)) | join(", ")' ||
+              true
+          )
+          export SLATEDB_BENCH_RUNNER_REGION
+          bin/slatedb-benchmark run \
+            --workload "$BENCHMARK_TASK" \
+            --golden "$GOLDEN_ID" \
+            --session "$BENCHMARK_SESSION" \
+            --scale "$BENCHMARK_SCALE" \
+            --output ".runs/workload/$BENCHMARK_TASK"
+      - name: Preserve workload result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workload-${{ inputs.task }}
+          path: .runs/workload
+          if-no-files-found: ignore
+          overwrite: true
+
+  stop:
+    needs: [start, run]
+    if: ${{ always() && needs.start.outputs.ec2-instance-id != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: benchmark-${{ inputs.object_store }}
+    steps:
+      - name: Configure EC2 launcher credentials
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.AWS_EC2_ROLE_ARN }}
+          aws-region: ${{ needs.start.outputs.region || vars.AWS_EC2_REGION }}
+      - name: Stop EC2 runner
+        uses: machulav/ec2-github-runner@v2.6.1
+        with:
+          mode: stop
+          github-token: ${{ secrets.EC2_RUNNER_GITHUB_TOKEN }}
+          use-jit: true
+          label: ${{ needs.start.outputs.label }}
+          ec2-instance-id: ${{ needs.start.outputs.ec2-instance-id }}
