@@ -33,8 +33,9 @@ EC2 Graviton runners in `us-east-1` with `machulav/ec2-github-runner`:
 
 | Instance type | Jobs |
 | --- | --- |
-| `c7gd.2xlarge` | Golden data and `*-mirror` workloads (local NVMe mounted at `/mnt/nvme`) |
-| `c7gd.8xlarge` | Standard workload matrix and transfer-capacity |
+| `c7g.2xlarge` | Golden data |
+| `c7gd.2xlarge` | `*-mirror` workloads (local NVMe mounted at `/mnt/nvme`) |
+| `c7g.8xlarge` | Standard workload matrix and transfer-capacity |
 
 Set these repository-level GitHub Actions variables and secrets:
 

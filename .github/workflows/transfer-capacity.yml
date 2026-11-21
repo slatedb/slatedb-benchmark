@@ -47,7 +47,7 @@ jobs:
           mode: start
           github-token: ${{ secrets.EC2_RUNNER_GITHUB_TOKEN }}
           use-jit: true
-          ec2-instance-type: c7gd.8xlarge
+          ec2-instance-type: c7g.8xlarge
           ec2-volume-size: 20
           ec2-volume-type: gp3
           availability-zones-config: ${{ vars.EC2_AVAILABILITY_ZONES_CONFIG }}
@@ -217,7 +217,7 @@ jobs:
           CLOUD_PROVIDER: ${{ inputs.object_store }}
           SLATEDB_BENCH_BUCKET: ${{ vars.SLATEDB_BENCH_BUCKET }}
           SLATEDB_BENCH_REGION: ${{ vars.AWS_REGION }}
-          SLATEDB_BENCH_RUNNER_TYPE: c7gd.8xlarge
+          SLATEDB_BENCH_RUNNER_TYPE: c7g.8xlarge
         run: |
           set -euo pipefail
           export BENCHMARK_ACTIONS_LOG_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/job/$BENCHMARK_ACTIONS_JOB_ID"

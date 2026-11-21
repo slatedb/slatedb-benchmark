@@ -36,7 +36,7 @@ Most workloads run 64 closed-loop clients after a five-minute warmup and record
 
 | Setting | Value |
 | --- | --- |
-| Workload runner | `c7gd.8xlarge` (`c7gd.2xlarge` for `*-mirror`) |
+| Workload runner | `c7g.8xlarge` (`c7gd.2xlarge` for `*-mirror`) |
 | Amazon S3 region | `us-east-1` |
 | Block cache | 4 GiB |
 | Metadata and index cache | 2 GiB |

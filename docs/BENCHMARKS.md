@@ -13,7 +13,7 @@ results.
 
 ## Benchmark environment
 
-Release runs use ephemeral AWS EC2 Graviton instances in `us-east-1` (`c7gd.8xlarge`
+Release runs use ephemeral AWS EC2 Graviton instances in `us-east-1` (`c7g.8xlarge`
 for standard workloads and `c7gd.2xlarge` for `*-mirror` workloads, whose 16 GiB RAM
 keeps the OS page cache bounded relative to the mirrored dataset on local NVMe).
 Amazon S3 runs in `us-east-1`. Each
