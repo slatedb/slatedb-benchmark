@@ -54,6 +54,7 @@ jobs:
           aws-resource-tags: '[{"Key":"Project","Value":"slatedb-benchmark"},{"Key":"Name","Value":"slatedb-benchmark-transfer-capacity"}]'
           pre-runner-script: |
             set -euo pipefail
+            export HOME=/root
             shutdown -P +90 || true
             export DEBIAN_FRONTEND=noninteractive
             apt-get update -qq
@@ -80,7 +81,8 @@ jobs:
           set -euo pipefail
           warp_bin_dir="${RUNNER_TEMP:-/tmp}/warp-bin"
           mkdir -p "$warp_bin_dir"
-          GOBIN="$warp_bin_dir" go install "github.com/minio/warp@${WARP_VERSION}"
+          GOBIN="$warp_bin_dir" GOPATH="${RUNNER_TEMP:-/tmp}/go" GOCACHE="${RUNNER_TEMP:-/tmp}/go-build" \
+            go install "github.com/minio/warp@${WARP_VERSION}"
           echo "$warp_bin_dir" >> "$GITHUB_PATH"
           "$warp_bin_dir/warp" --version
       - name: Configure S3 credentials
