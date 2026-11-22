@@ -872,6 +872,14 @@ mod tests {
             .expect("mirrored workload config");
             assert!(task.uses_mirror());
             assert!(config.task.local_mirror);
+            assert!(
+                config
+                    .settings
+                    .compactor_options
+                    .as_ref()
+                    .expect("compactor options")
+                    .enable_experimental_incremental_compaction
+            );
             config.task.local_mirror = false;
             assert!(config.task.validate().is_err());
         }
@@ -884,6 +892,14 @@ mod tests {
         .expect("unmirrored workload config");
         assert!(!Task::Balanced.uses_mirror());
         assert!(!plain.task.local_mirror);
+        assert!(
+            !plain
+                .settings
+                .compactor_options
+                .as_ref()
+                .expect("compactor options")
+                .enable_experimental_incremental_compaction
+        );
         plain.task.local_mirror = true;
         assert!(plain.task.validate().is_err());
     }

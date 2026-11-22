@@ -7,9 +7,12 @@ use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use object_store::aws::{AmazonS3Builder, AmazonS3ConfigKey};
 use object_store::path::Path;
-use object_store::ObjectStore;
+use object_store::{BackoffConfig, ObjectStore, RetryConfig};
 use std::env;
 use std::sync::Arc;
+use std::time::Duration;
+
+const DELETE_BATCH_SIZE: usize = 1_000;
 
 /// Object stores and location metadata used during one runner invocation.
 ///
@@ -57,6 +60,7 @@ impl ObjectStoreContext {
                     );
                     let control: Arc<dyn ObjectStore> = Arc::new(
                         builder
+                            .with_retry(control_retry_config())
                             .build()
                             .context("building S3-compatible control store")?,
                     );
@@ -102,24 +106,53 @@ fn configured_s3_endpoint(builder: &AmazonS3Builder) -> Option<String> {
         .or_else(|| builder.get_config_value(&AmazonS3ConfigKey::Endpoint))
 }
 
+fn control_retry_config() -> RetryConfig {
+    RetryConfig {
+        backoff: BackoffConfig {
+            init_backoff: Duration::from_millis(500),
+            max_backoff: Duration::from_secs(15),
+            base: 2.0,
+        },
+        max_retries: 15,
+        retry_timeout: Duration::from_secs(3 * 60),
+    }
+}
+
 /// Deletes every object below `prefix`.
+///
+/// Chunks object keys into sequential 1,000-key batches so S3 bulk
+/// `DeleteObjects` calls stay within S3's 3,500 DELETE/s per-prefix limit
+/// instead of fanning out `object_store`'s default 20 concurrent batches.
 pub async fn delete_prefix(store: Arc<dyn ObjectStore>, prefix: &Path) -> Result<()> {
-    let locations: BoxStream<'static, object_store::Result<Path>> = store
+    let mut batches = store
         .list(Some(prefix))
         .map_ok(|meta| meta.location)
-        .boxed();
-    store
-        .delete_stream(locations)
-        .try_collect::<Vec<_>>()
-        .await
-        .context("deleting object-store prefix")?;
+        .try_chunks(DELETE_BATCH_SIZE);
+    while let Some(batch) = batches.next().await {
+        let batch = batch
+            .map_err(|error| error.1)
+            .context("listing object-store prefix for deletion")?;
+        let locations: BoxStream<'static, object_store::Result<Path>> =
+            futures::stream::iter(batch.into_iter().map(Ok)).boxed();
+        store
+            .delete_stream(locations)
+            .try_collect::<Vec<_>>()
+            .await
+            .context("deleting object-store prefix")?;
+    }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::configured_s3_endpoint;
+    use super::{configured_s3_endpoint, delete_prefix, DELETE_BATCH_SIZE};
+    use bytes::Bytes;
+    use futures::TryStreamExt;
     use object_store::aws::{AmazonS3Builder, AmazonS3ConfigKey};
+    use object_store::memory::InMemory;
+    use object_store::path::Path;
+    use object_store::{ObjectStore, ObjectStoreExt};
+    use std::sync::Arc;
 
     #[test]
     fn configured_endpoint_uses_builder_precedence_without_a_fabricated_default() {
@@ -132,5 +165,41 @@ mod tests {
             configured_s3_endpoint(&builder).as_deref(),
             Some("https://s3-specific.example")
         );
+    }
+
+    #[tokio::test]
+    async fn delete_prefix_deletes_multiple_batches_and_preserves_siblings() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let total = DELETE_BATCH_SIZE + 50;
+        for index in 0..total {
+            let path = Path::from(format!("session/db/obj-{index:04}"));
+            store
+                .put(&path, Bytes::from_static(b"x").into())
+                .await
+                .expect("seed target object");
+        }
+        let sibling = Path::from("session/keep/result.json");
+        store
+            .put(&sibling, Bytes::from_static(b"{}").into())
+            .await
+            .expect("seed sibling object");
+
+        delete_prefix(Arc::clone(&store), &Path::from("session/db"))
+            .await
+            .expect("delete target prefix");
+
+        let remaining_target: Vec<_> = store
+            .list(Some(&Path::from("session/db")))
+            .try_collect()
+            .await
+            .expect("list target prefix");
+        assert!(remaining_target.is_empty());
+
+        let remaining_sibling: Vec<_> = store
+            .list(Some(&Path::from("session/keep")))
+            .try_collect()
+            .await
+            .expect("list sibling prefix");
+        assert_eq!(remaining_sibling.len(), 1);
     }
 }
